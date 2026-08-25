@@ -1,0 +1,10 @@
+{
+  "name": "orderdesk",
+  "version": "1.4.2",
+  "private": true,
+  "description": "Order desk: carts, pricing, inventory and order notifications for the smithing catalogue",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "engines": { "node": ">=18" }
+}

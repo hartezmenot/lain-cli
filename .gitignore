@@ -1,0 +1,12 @@
+rust/lain-supervisor/target/
+
+# Project intelligence: fingerprints and symbol indexes, rebuilt from the
+# tree on demand. Machine state, never source. See src/projectindex.js.
+.lain/
+.lain-probe/
+
+# Local agent / IDE state, never source.
+.claude/
+
+# benchmark working copies and baselines (the pristine fixture is version-controlled; these are per-run outputs)
+bench/out/

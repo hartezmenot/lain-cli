@@ -1,0 +1,78 @@
+LAIN V1 — PRE-V2-REBUILD BACKUP REFERENCE
+=========================================
+
+ARCHIVE
+  path      C:\Users\Hartezmenot\Documents\lain-backups\LAIN-v1-pre-v2-rebuild-20260815-152302.zip
+  size      20.57 MB (26.8 MB uncompressed)
+  sha256    2E79D6B521C0330F0716B345FBF4B210AED3750CB7E9A50AE128AC13982508D3
+  created   2026-08-15 15:24:05
+  entries   509 files (exact match to staged source count)
+  root      LAIN-v1/
+
+SOURCE STATE CAPTURED
+  origin path   C:\Users\Hartezmenot\Documents\lain
+  git HEAD      b2872dd4df922f90266c5961616943fa28b12356
+  git branch    extract-orchestra-and-shell-fixes
+  tracked       183 files
+  working tree  116 uncommitted changes (78 untracked, 38 modified)
+
+  IMPORTANT: 72 of the untracked files are src/ and tests/ modules that exist
+  ONLY in the working tree. `git archive` would have lost every one of them, so
+  the archive was built by full filesystem copy, not from git.
+
+CONTENTS (verified by reading the archive)
+  src/*.js         96
+  src/core/**.js    9
+  tests/*.js      104
+  tools/*          25
+  .git/           256 entries (full history included)
+  plus: bin/, docs/, package.json, .gitignore, README.md, LAIN.md, AGENTS.md,
+        next-steps.md, azure.yaml, baseline.json, diagnose.js, diag-rel-dbg.js,
+        final-validation-run.cmd, .claude/, .commandcode/
+
+DELIBERATELY EXCLUDED (inspected before exclusion)
+  .lain/                    runtime state + session logs. The repo's own
+                            .gitignore states these logs quote source from
+                            whatever project LAIN was pointed at. Regenerable.
+  .azure/                   contains .env with AZURE_SUBSCRIPTION_ID
+                            (an account identifier) and .env.lock. Excluded
+                            as account-identifying deployment scaffolding.
+  tools/__pycache__/        Python bytecode cache (744 KB). NOTE: 12 of these
+                            .pyc files are tracked in git. Their blobs are
+                            still inside the archived .git, so they are fully
+                            recoverable with:
+                              git checkout -- tools/__pycache__
+  justvugg-colibri-*.txt    309 KB third-party reference dump; the repo's own
+                            .gitignore marks it "not part of Lain".
+  node_modules/             did not exist (V1 is zero-dependency).
+
+SECRET SCAN
+  Scanned the whole tree for sk-*, nvapi-*, ghp_*, AIza*, xox*-, PEM private
+  keys, access_token/refresh_token, and long Bearer tokens.
+  Three hits, all in tests/, all the same dummy fixture:
+      sk-00000000000000000000000000000dead
+  No live credentials are present in the archive.
+  User credentials live in ~/.lain/ (config.json, credentials/, oauth/), which
+  is OUTSIDE the repository and was never staged.
+
+VERIFICATION PERFORMED
+  [x] archive opens and enumerates
+  [x] 509 archive file entries == 509 staged files
+  [x] extracted to a scratch directory successfully
+  [x] SHA256 byte-identity confirmed against the live repo for
+      src/repl.js, src/core/turn.js, src/tools.js, package.json, bin/dotcli.js
+  [x] extracted .git is a valid repository:
+      git rev-parse HEAD -> b2872dd... , branch -> extract-orchestra-and-shell-fixes
+  [x] all four exclusion patterns confirmed absent from the archive
+  [x] live V1 repo re-checked after archiving: still 116 changes, HEAD unchanged
+
+  A first attempt using PowerShell Compress-Archive produced a 1.51 MB file that
+  SILENTLY DROPPED the entire .git directory (hidden attribute). It was detected
+  by content verification, discarded, and rebuilt with
+  System.IO.Compression.ZipFile::CreateFromDirectory. Do not use Compress-Archive
+  for trees containing hidden directories.
+
+RULES
+  Do not delete this archive.
+  Do not modify this archive.
+  V1 remains in place at C:\Users\Hartezmenot\Documents\lain and was not altered.
