@@ -941,13 +941,6 @@ Then `Send it` in the panel, or `/external send` where there is no panel.
 `/external` with no arguments still chooses WHO the external actor is, and
 `/external <model-name>` — one token, no spaces — still selects a model.
 
-### `/mcp probe`
-
-Asks once, for the session. A yes lasts exactly as long as that Probe
-connection and ends when it exits or on `/mcp revoke` — it is bound to the
-session rather than to a clock, so an investigation is never interrupted by the
-same question again, and a reconnected Probe inherits nothing.
-
 ## Tests, as LAIN sees them
 
 `discover_tests` reads the manifests, the CI config and the tree, spawns nothing
