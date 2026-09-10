@@ -7,7 +7,14 @@
  *   unit         one module in isolation          -> WIRED / UNIT VERIFIED
  *   integration  real modules wired together      -> INTEGRATION VERIFIED
  *   smoke        spawns bin/lain.js as a process  -> LIVE CLI VERIFIED
+ *   distribution installs into a temp directory   -> INSTALL VERIFIED
  *   live         contacts a REAL provider          -> LIVE PROVIDER VERIFIED
+ *
+ * THE `distribution` TIER NEVER TOUCHES THE DEVELOPER'S PATH. Every case
+ * installs into a temporary directory and drives PATH through an injected fake
+ * adapter (distribution/pathenv.js takes one) — a test that edited the real
+ * user environment would be damage outside the tree that no assertion sees,
+ * which is the same argument the config-home guard above makes at length.
  *
  * Only the `live` tier touches a real provider, and it SKIPS ITSELF when no
  * bridge is reachable. A green run of the first three tiers therefore never
@@ -153,8 +160,11 @@ for (const k of [
 }
 
 const helpers = require('./helpers');
+// Terminal fixtures opt into a capable terminal. A host TERM=dumb must not
+// silently suppress their OSC output; tests of dumb terminals set it explicitly.
+process.env.TERM = 'xterm-256color';
 
-const TIERS = ['unit', 'integration', 'smoke', 'live'];
+const TIERS = ['unit', 'integration', 'smoke', 'distribution', 'live'];
 
 /**
  * `adversarial` is DELIBERATELY NOT in the default run.
@@ -173,6 +183,16 @@ const TIERS = ['unit', 'integration', 'smoke', 'live'];
 const EXTRA_TIERS = ['adversarial'];
 
 async function main() {
+  const scope = await require('./supervisor-scope').open();
+  process.env.LAIN_SUPERVISOR_LEASE_PORT = String(scope.port);
+  try {
+  const supervisorBin = require('../src/supervisor').binary();
+  if (supervisorBin) {
+    const probe = require('child_process').spawnSync(supervisorBin, ['where'], { encoding: 'utf8', windowsHide: true, timeout: 3000 });
+    let facts = null;
+    try { facts = JSON.parse(probe.stdout); } catch { /* named below */ }
+    if (!facts || facts.lifetime !== 'lease-v1') throw new Error('The supervisor test binary predates scoped ownership. Rebuild rust/lain-supervisor or set LAIN_SUPERVISOR_BIN to the rebuilt binary before running tests.');
+  }
   const want = process.argv[2];
   const tiers = want ? [want] : TIERS;
   if (want && !TIERS.includes(want) && !EXTRA_TIERS.includes(want)) {
@@ -184,7 +204,7 @@ async function main() {
   for (const tier of tiers) {
     const dir = path.join(__dirname, tier);
     let files = [];
-    try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.test.js')).sort(); } catch { files = []; }
+    try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.test.js') && (!process.argv[3] || new RegExp(process.argv[3]).test(f))).sort(); } catch { files = []; }
     if (!files.length) continue;
     process.stdout.write(`\n${tier.toUpperCase()}\n`);
     for (const f of files) {
@@ -201,7 +221,14 @@ async function main() {
   if (failed) {
     process.stdout.write('\nFAILURES\n');
     for (const f of failures) process.stdout.write(`  ${f.file} :: ${f.name}\n    ${f.error && f.error.message}\n`);
-    process.exit(1);
+    process.exitCode = 1;
+  }
+  } finally {
+    try { await require('../src/supervisor').cleanupOwned(); }
+    finally {
+      try { await require('../src/harness/processes').cleanupOwned(); }
+      finally { await scope.close(); }
+    }
   }
 }
 

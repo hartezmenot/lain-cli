@@ -28,15 +28,49 @@ const SOFT = ESC + CR;
 
 const plain = (s) => String(s).replace(/\x1b\][0-9]+;[^\x07]*\x07/g, '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '\n');
 
-/** The input box as drawn in the first frame that shows `needle`. */
+/**
+ * THE INPUT REGION AS DRAWN, in the first frame that shows `needle`.
+ *
+ * ------------------------------------------------------------------------
+ * IT USED TO BE FOUND BY ITS BORDER — the rows between `┌─ INPUT` and `└`.
+ * The region has no border and no label now: it is a subtle grey fill across
+ * the full width, inset by the content frame's gutter and nothing else
+ * (ui/inputbox.js, ui/views.js `content`).
+ *
+ * So the region is found by the CARET, which is a better anchor than the border
+ * ever was: `draw()` ends every frame by parking the cursor on the row being
+ * edited. The rows from there to the end of the frame are the input region plus
+ * whatever panel is open under it, which is exactly the span the border used to
+ * enclose.
+ */
 function boxShowing(out, needle) {
-  const f = frames(out).find((x) => needle.test(x));
-  if (!f) return null;
-  const rows = rowsOf(f);
-  const at = rows.findIndex((l) => /^┌─ (INPUT|ANSWER)/.test(l));
-  if (at < 0) return null;
-  const end = rows.findIndex((l, i) => i > at && /^└/.test(l));
-  return rows.slice(at, (end < 0 ? at + 6 : end + 1)).join('\n');
+  const raw = String(out).split('\x1b[?25l').find((x) => needle.test(plain(x)));
+  if (!raw) return null;
+  const marks = [...raw.matchAll(/\x1b\[(\d+);(\d+)H/g)];
+  if (!marks.length) return null;
+  const caretRow = Number(marks[marks.length - 1][1]);
+  // Every row the frame addressed, in order, keyed by its terminal row.
+  const rows = {};
+  // ANY COLUMN: the content frame moved every region off column 1
+  // (ui/frame.js `contentBounds`).
+  const re = /\x1b\[(\d+);\d+H((?:[^\x1b]|\x1b\[(?!\d+;\d+H)[0-9;?]*[A-Za-z])*)/g;
+  let m;
+  // THE CARET PARK IS A CURSOR MOVE WITH NO TEXT, and it is the LAST address in
+  // every frame. Letting it win blanks whatever row the caret is on — which,
+  // now that the composer centres its text, is the row the text is ON.
+  while ((m = re.exec(raw))) {
+    const row = Number(m[1]);
+    const text = m[2].replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').trimEnd();
+    if (!text.trim() && rows[row] !== undefined) continue;
+    rows[row] = text;
+  }
+  // FROM THE CARET'S ROW DOWN — the text being edited and anything under it.
+  // The input grows DOWNWARD from its first row, so a multi-row prompt has its
+  // caret on the last row; two rows of lookback cover a three-line prompt.
+  const from = Math.max(1, caretRow - 6);
+  const out2 = [];
+  for (let r = from; r <= caretRow + 4; r++) if (rows[r] !== undefined) out2.push(rows[r]);
+  return out2.join('\n');
 }
 
 module.exports = async function () {
@@ -55,11 +89,18 @@ module.exports = async function () {
     // is the whole of "the input must represent multiple lines".
     const box = boxShowing(r.out, /line three/);
     assert.ok(box, 'the third line was never drawn');
-    assert.match(box, /> line one/, `the first line carries the prompt:\n${box}`);
-    // `│ ` is the box edge; the continuation lines are indented by the width of
-    // the `> ` prompt so the block reads as one thing.
-    assert.match(box, /│ {3}line two/, `continuation lines line up under the prompt:\n${box}`);
-    assert.match(box, /│ {3}line three/, 'and the third');
+    // ALL THREE LINES, ALIGNED. The `> ` prompt and the `│ ` edges are gone —
+    // the region is a grey fill and every row is indented by the SAME amount, so
+    // the block reads as one thing without either.
+    //
+    // `^ +`, NOT `^ `. The inset was one column; it is two now, the same inset
+    // the conversation uses so the prompt and the prose begin on one column
+    // (ui/views.js `content`). What this test is about is that the three rows
+    // AGREE with each other, which a matcher that hardcodes the number cannot
+    // express.
+    assert.match(box, /^ +line one$/m, `the first line is drawn:\n${box}`);
+    assert.match(box, /^ +line two$/m, `and lines up under it:\n${box}`);
+    assert.match(box, /^ +line three$/m, 'and the third');
     // NO `[3/3]` MARKER, and that is the change. It existed because the box was
     // one row tall and the marker was the only report of the real size. With
     // all three rows on screen it is a row counter for something the reader can
@@ -67,11 +108,23 @@ module.exports = async function () {
     // big-paste test below covers.
     assert.ok(!/\[\d+\/\d+\]/.test(box), `nothing is hidden, so nothing needs counting:\n${box}`);
 
-    // AND IT WAS ONE PROMPT. Three tasks would mean the newline submitted.
+    // ---- AND IT WAS ONE PROMPT -------------------------------------------
+    //
+    // It used to be checked against the flattened form — `line one line two
+    // line three` — because the pinned TASK banner had one row and ran the
+    // newlines together to fit it. There is no banner, and the conversation
+    // keeps the user's line breaks (ui/feed.js: the user's line breaks are the
+    // user's), so the flattened string correctly no longer exists anywhere.
+    //
+    // The claim is the same and is now read off the CONVERSATION: one message
+    // marker, three lines under it. Three markers would mean the soft break
+    // submitted.
     const out = plain(r.out);
-    assertIncludes(out, 'line one line two line three', 'the objective is the whole prompt');
-    const tasks = new Set((out.match(/^TASK {2}(.+)$/gm) || []).map((s) => s.trim()));
-    assert.strictEqual(tasks.size, 1, `it started ${tasks.size} tasks: ${[...tasks]}`);
+    assertIncludes(out, 'line one', 'the first line reached the conversation');
+    assertIncludes(out, 'line two', 'and the second');
+    assertIncludes(out, 'line three', 'and the third');
+    assert.ok(!/❯ line two/.test(out), 'no later line became a prompt of its own');
+    assert.ok(!/❯ line three/.test(out), 'nor the last');
   });
 
   await test('MULTILINE LIVE: a soft break does not submit — nothing runs until Enter', async () => {
@@ -102,11 +155,27 @@ module.exports = async function () {
     });
     const box = boxShowing(r.out, /beta/);
     assert.ok(box, 'the buffer was never drawn');
+    // ------------------------------------------------------------------
+    // THE SUMMARY ROW IS GONE ENTIRELY, which settles this case rather than
+    // satisfying it. It existed because the box drew the whole paste and a
+    // person could not tell how much of it there was; the composer collapses a
+    // big paste to `<pasted text>` instead, and the size rides beside the
+    // marker on the caret's own row. A region that is one region does not need
+    // a second row describing itself.
+    //
+    // What must still be true is the claim in the name: TYPED text is never
+    // described as pasted.
+    // ------------------------------------------------------------------
     assertNotIncludes(box, '⎘', `two visible lines need no summary describing them:\n${box}`);
+    assertNotIncludes(box, 'pasted text', `nothing typed may be called a paste:\n${box}`);
+    assert.match(box, /^ +alpha$/m, 'and both typed lines are shown in full');
+    assert.match(box, /^ +beta$/m);
   });
 
-  await test('MULTILINE LIVE: a big paste still gets its one summary row', async () => {
-    // The case the row was written for: more lines than the box can show.
+  await test('MULTILINE LIVE: a big paste is COLLAPSED to one marker in the composer', async () => {
+    // The case the summary row was written for — more lines than the region can
+    // show — answered by collapsing the paste instead of describing it. One row
+    // rather than a wall plus a row about the wall.
     const big = new Array(40).fill('padding line').join(LF);
     const r = await runCli([], {
       cwd: tmpdir('ml-'),
@@ -116,10 +185,15 @@ module.exports = async function () {
       script: [{ text: 'ok. FINISHED.' }],
       timeoutMs: 45000,
     });
-    const box = boxShowing(r.out, /padding line/);
+    const box = boxShowing(r.out, /pasted text/);
     assert.ok(box, 'the paste was never drawn');
-    assertIncludes(box, '⎘', `40 lines cannot all be shown, so they must be summarised:\n${box}`);
-    assertIncludes(box, '40 lines');
+    assertIncludes(box, '<pasted text>',
+      `40 lines cannot all be shown, so they are collapsed:\n${box}`);
+    // AND THE SIZE OF WHAT IS BEHIND IT, beside the marker — the one thing
+    // somebody wants before pressing Enter on a wall of text.
+    assert.match(box, /\d+(\.\d+)? ?(B|KB)/, `the size rides with the marker:\n${box}`);
+    // IT IS ONE ROW, not forty. That is the whole point.
+    assert.ok(!/padding line/.test(box), `the payload must not be drawn line by line:\n${box}`);
   });
 
   await test('WRAP LIVE: a long line WRAPS instead of scrolling its start off screen', async () => {
@@ -136,13 +210,17 @@ module.exports = async function () {
       script: [{ text: 'Got it. FINISHED.' }],
       timeoutMs: 45000,
     });
-    const box = boxShowing(r.out, /│ > the quick/);
+    const box = boxShowing(r.out, /the quick brown fox/);
     assert.ok(box, 'the long prompt was never drawn');
-    assert.match(box, /│ > the quick brown fox/,
+    assert.match(box, /^ +the quick brown fox/m,
       `the START of the line must still be visible:
 ${box}`);
-    assert.ok(box.split(String.fromCharCode(10)).filter((l) => /^│ /.test(l)).length >= 2,
-      `a line wider than the box must occupy more than one row:
+    // MORE THAN ONE ROW. The `│ ` edge used to identify the region's rows; with
+    // no border, the rows are the ones the wrapped prompt occupies, and they are
+    // what `boxShowing` hands back.
+    const occupied = box.split(String.fromCharCode(10)).filter((l) => /^ +\S/.test(l));
+    assert.ok(occupied.length >= 2,
+      `a line wider than the region must occupy more than one row:
 ${box}`);
     assert.ok(!box.includes('…'),
       `an ellipsis means it scrolled rather than wrapped:

@@ -21,7 +21,9 @@ const assert = require('assert');
 const { test } = require('../helpers');
 
 const { Renderer } = require('../../src/render');
-const { InteractionPanel, KIND } = require('../../src/ui/panel');
+const panelMod = require('../../src/ui/panel');
+const { InteractionPanel, KIND } = panelMod;
+const T = require('../../src/ui/text');
 const { outputAdapter } = require('../../src/ui/adapters');
 
 /** A Renderer wired to a panel, pretending to be on a TTY. */
@@ -100,7 +102,10 @@ module.exports = async function () {
     // AND A REDRAW MUST NOT HAUL IT BACK. `_clampScroll` follows the cursor,
     // which here is parked at 0 forever; following it would undo every scroll
     // on the very next frame.
-    panel.render(80, VIEW + 6);
+    // THE CHROME IS ASKED FOR, NOT COUNTED. It was six rows of box; it is a title,
+    // a blank row and a footer now (ui/panel.js `render`), and a test that knows
+    // the number is a test that breaks when the box goes.
+    panel.render(80, VIEW + 1 + panelMod.FOOTER_ROWS);
     assert.strictEqual(panel.scroll, 2, 'drawing the panel must not reset the scroll');
 
     for (let i = 0; i < 50; i++) panel.move(-1, VIEW);
@@ -206,9 +211,15 @@ module.exports = async function () {
     assert.ok(!/\b800-mes\b/.test(body), 'the number must not be cut in half');
     assert.match(body, /800-message limit/, 'the whole fact must survive somewhere');
     // EVERY WORD INTACT: reassembling the drawn rows must give the sentence back.
+    // ---- NO BORDER TO STRIP ANY MORE -----------------------------------
+    //
+    // The rows used to arrive as `| text |` and this peeled the edges off. The
+    // panel is a list now: the rows ARE the text, indented (ui/panel.js
+    // `render`). What the test is about is unchanged — reassembling the drawn
+    // rows must give the sentence back, with no word cut in half.
     const rebuilt = p.render(80, 16)
-      .filter((r) => r.startsWith('│') && !/^│ [─┌└├]/.test(r))
-      .map((r) => r.slice(1, -1).trim())
+      .map((r) => T.strip(r).trim())
+      .filter(Boolean)
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim();

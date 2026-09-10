@@ -158,77 +158,18 @@ function inputViewport(buffer, cursor, width) {
 }
 
 /**
- * WHAT DID LAIN ACTUALLY RECEIVE? — the summary line above a large paste.
+ * ------------------------------------------------------------------------
+ * `pasteSummary` STOOD HERE — the extra row under the input box reading
+ * `⎘ 1,200 lines · 41.2 KB · "Traceback (most recent call last):"`.
  *
- * A paste is one input, and the input box is one row tall, so a 1,200-line
- * paste showed a single line of it with `[1/1200]` beside it. That says how far
- * down the caret is; it does NOT say what arrived, and the user could not tell
- * a complete paste from a truncated one without arrowing through it.
- *
- * So a multi-line buffer gets ONE extra row stating the facts — how many lines,
- * how big, and how it starts — while the content itself stays exactly as it was
- * pasted, editable, and unsent until Enter. Deliberately one row: the fix for
- * "I cannot see what I pasted" must not become "the paste ate my screen".
- *
- * Pure, so the wording is testable without a terminal.
- *
- * @returns {string|null} null when the buffer needs no summary
+ * It existed because the box DREW THE WHOLE PASTE and a person could not tell
+ * how much of it there was, or how much was off screen. The composer collapses
+ * the paste instead (ui/composer.js), so there is no wall to describe: the
+ * marker says a block is there and the size rides beside it on the caret's own
+ * row. A region that is one region does not need a second row about itself,
+ * which is what §5 of the correction asks for.
+ * ------------------------------------------------------------------------
  */
-function pasteSummary(buffer, width = 80, shown = 1) {
-  const buf = String(buffer == null ? '' : buffer);
-  const lines = buf.split('\n');
-  if (lines.length <= 1 && !buf.trim()) return null;
-  // ONLY WHEN LINES ARE ACTUALLY HIDDEN.
-  //
-  // This row exists because the input box was one row tall: a multi-line buffer
-  // was invisible, so it had to be described. The box now grows to show the
-  // lines (see layout.geometry), and describing three lines the reader can
-  // already see is a row spent saying nothing — worse, it said "pasted" about
-  // text that had just been TYPED, now that typing a newline is possible.
-  //
-  // So it appears only for a buffer too big for the box, which is the case it
-  // was written for: a large paste, summarised in one row.
-  //
-  // ---- MEASURED IN THE ROWS IT OCCUPIES, NOT IN ITS NEWLINES --------------
-  //
-  // THE DEFECT, seen on screen: a pasted markdown prompt — five newlines, and
-  // eighty-one rows once wrapped — was compared as `5 <= 8` and declared small
-  // enough to show whole. So no summary was drawn and the box filled with raw
-  // text, which is precisely the case this row exists for.
-  //
-  // "How many lines does it contain" and "how much of the box does it need"
-  // are different questions, and only the second one is about whether the box
-  // can show it. A paragraph with no newlines at all can be enormous.
-  const occupies = wrapInput(buf, Math.max(4, width - 2)).length;
-  if (occupies <= Math.max(1, shown)) return null;
-
-  const bytes = Buffer.byteLength(buf, 'utf8');
-  const size = bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
-  const count = `${lines.length.toLocaleString('en-US')} lines`;
-  const facts = `⎘ ${count} · ${size}`;
-
-  // ---- THE SAME NAME THE FEED WILL GIVE IT --------------------------------
-  //
-  // The feed draws a paste as `[pasted text #1]` (ui/pasted.js). The input box
-  // described the identical bytes in an entirely different vocabulary, so the
-  // thing you were about to send and the thing that appeared when you sent it
-  // had no name in common — and the marker in the feed referred to something
-  // the user had never seen called that.
-  //
-  // The registry is keyed on the content, so this is the number the feed will
-  // use. Asking for it here does not consume one for text that is merely being
-  // typed: only a real paste gets a marker at all.
-  const pasted = require('./pasted');
-  const marker = pasted.isPaste(buf) ? `${pasted.label(buf)}  ` : '';
-
-  // The first line with something in it: a blank first line says nothing about
-  // what was pasted, and a paste very often begins with one.
-  const first = (lines.find((l) => l.trim()) || '').trim().replace(/\s+/g, ' ');
-  const room = Math.max(0, width - facts.length - marker.length - 6);
-  if (!first || room < 8) return marker + facts;
-  const preview = first.length > room ? first.slice(0, room - 1) + '…' : first;
-  return `${marker}${facts} · "${preview}"`;
-}
 
 /**
  * How many lines the buffer holds. One for an empty buffer, because the box
@@ -245,4 +186,4 @@ function lineCount(buffer) {
   return n;
 }
 
-module.exports = { inputViewport, pasteSummary, lineCount, wrapInput, caretRow };
+module.exports = { inputViewport, lineCount, wrapInput, caretRow };

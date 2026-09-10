@@ -42,7 +42,10 @@ const KIND = Object.freeze({
   ASK_USER: 'ASK_USER',
   CONFIRM: 'CONFIRM',
   FILE_PICKER: 'FILE_PICKER',
-  STEP_PICKER: 'STEP_PICKER',
+  // `STEP_PICKER` STOOD HERE — the "which plan step to expand" picker the PLAN
+  // pane opened on an empty Enter. There is no pane and `/plan` prints every
+  // step with its note and files, so nothing is being asked which. See
+  // ui/adapters.js where its adapter was.
   /**
    * WHAT A COMMAND SAID — `/status`, `/dash`, a compaction notice.
    *
@@ -376,28 +379,80 @@ class InteractionPanel {
    * Render to lines. `rows` is the height the layout allotted; the panel windows
    * its own content so a 2,000-row list can never push the terminal around.
    */
+  /**
+   * Render to lines. `rows` is the height the layout allotted; the panel windows
+   * its own content so a 2,000-row list can never push the terminal around.
+   *
+   * ------------------------------------------------------------------------
+   * THE BOX IS GONE, AND IT WAS THE WORST THING ON THE SCREEN.
+   *
+   * It used to be drawn like this, at the full width of the terminal:
+   *
+   *     +------------------------------------------------------------+
+   *     | COMMANDS                                                   |
+   *     +------------------------------------------------------------+
+   *     | > /exit        Save the session and leave                  |
+   *     | ...                                                        |
+   *     +------------------------------------------------------------+
+   *     | ^v select - Enter confirm - Esc cancel        (1-6 of 58)   |
+   *     +------------------------------------------------------------+
+   *
+   * Six rows of chrome, three of them heavy full-width rules, a boxed shouting
+   * title, and a selection highlight stretching to a wall two hundred columns
+   * away from the six characters it was about. That is an ncurses dialog, and it
+   * is what made a surface that is otherwise a quiet conversation read as a TUI
+   * dashboard.
+   *
+   * WHAT REPLACED IT, and every part of it is a subtraction:
+   *
+   *     Commands
+   *
+   *       > /exit      Save the session and leave
+   *         /status    Session, provider and tool state
+   *
+   *       ^v select - Tab complete - Enter run - Esc cancel   (1-6 of 58)
+   *
+   *   NO FRAME.            Whitespace and one indent separate it from the
+   *                        conversation. A list under the line you are filtering
+   *                        with does not need a border to be understood as a list.
+   *   A TITLE, NOT A BANNER. Sentence case, dim, on its own row.
+   *   NO RULES AT ALL.     The blank rows do the work the three rules did.
+   *   A CONTAINED SELECTION. The highlight is as wide as the menu's own content
+   *                        and no wider — see `menuWidth`.
+   *   THE SAME BOUNDED WINDOW. `(1-6 of 58)` is unchanged; it was the one part
+   *                        of the old footer that was pulling its weight.
+   */
   render(width = 80, rows = 12) {
     const f = this.frame;
     if (!f) return [];
-    const inner = Math.max(10, width - 4);
     const out = [];
-    const bar = '─'.repeat(inner);
-    out.push('┌─' + bar + '─┐');
-    out.push('│ ' + pad(f.title || '', inner) + ' │');
-    out.push('├─' + bar + '─┤');
+    // ---- THE MENU IS AS WIDE AS ITS CONTENTS, NOT AS WIDE AS THE TERMINAL ---
+    //
+    // On a 200-column terminal a command list needs about fifty of them. Letting
+    // it take the frame meant a highlight, a title rule and a footer rule all
+    // spanning the screen for the sake of `/exit  Save the session and leave`.
+    const inner = this.menuWidth(width);
+    const INDENT = '  ';
+    const title = String(f.title || '');
+    if (title) {
+      // SENTENCE CASE. `COMMANDS` in capitals inside a box was the loudest thing
+      // on a screen whose subject is a conversation.
+      out.push(P.meta(INDENT + title.charAt(0) + title.slice(1).toLowerCase()));
+      out.push('');
+    }
 
-    // Chrome is exactly six rows: top border, title, separator, separator,
-    // footer, bottom border. The body gets whatever is left, so the panel
-    // returns EXACTLY the height the layout allotted — off by one and it
-    // overdraws the region below it.
-    const bodyRows = Math.max(1, rows - 6);
+    // Chrome is the title, its blank row, a blank row and the footer — four,
+    // where the box spent six. The body gets the rest, so the panel returns
+    // EXACTLY the height the layout allotted.
+    const chrome = (title ? 2 : 0) + FOOTER_ROWS;
+    const bodyRows = Math.max(1, rows - chrome);
     // ---- WRAP, OR CLIP ------------------------------------------------------
     //
     // A LIST OF OPTIONS CLIPS: one row per choice is what makes it scannable,
     // and a model id that runs long is still recognisable from its start.
     //
     // TEXT WRAPS. Command output is prose and paths, and clipping it cut words
-    // in half — "Chat history exceeds the 800-mes…" told you a limit had been
+    // in half - "Chat history exceeds the 800-mes..." told you a limit had been
     // hit and then took away the number. A frame says which it is (see
     // `outputAdapter`), because only the frame knows whether its rows are
     // choices or sentences.
@@ -406,59 +461,120 @@ class InteractionPanel {
     const slice = shown.slice(this.scroll, this.scroll + bodyRows);
     for (let i = 0; i < bodyRows; i++) {
       const item = slice[i];
-      if (!item) { out.push('│ ' + pad('', inner) + ' │'); continue; }
+      if (!item) { out.push(''); continue; }
       const idx = this.scroll + i;
       const sel = idx === this.cursor && item.selectable !== false;
+      // `>` ONLY ON THE SELECTED ROW, and the others are not indented to make
+      // room for a marker they do not have - they are, because a list whose rows
+      // shift sideways as the cursor moves is a list that twitches.
       const marker = item.selectable === false ? '  ' : (sel ? '❯ ' : '  ');
       const text = marker + String(item.label == null ? '' : item.label);
       // ---- COLOUR IS APPLIED AFTER PADDING ---------------------------------
       //
       // `pad` and `clip` count characters, and an escape sequence is characters
-      // that occupy no columns — so painting the label first makes every
+      // that occupy no columns - so painting the label first makes every
       // coloured row short by the length of its own colour codes. Painting the
-      // finished, padded string keeps the arithmetic honest and the border
-      // straight.
+      // finished, padded string keeps the arithmetic honest.
       //
-      // A row says its own TONE (`ok`, `warn`, `bad`) rather than its colour,
-      // so the palette stays in one place and a route that is rate limited
-      // looks the same here as it does in the status strip.
+      // A row says its own TONE (`ok`, `warn`, `bad`) rather than its colour, so
+      // the palette stays in one place and a route that is rate limited looks
+      // the same here as it does in the live row.
       const body = pad(clip(text, inner), inner);
       const tint = item.tone && P[item.tone] ? P[item.tone] : null;
       // ---- THE ROW ENTER WILL CHOOSE, UNMISTAKABLY -------------------------
       //
-      // The marker alone was the whole of the selection, and a marker competes
-      // badly with everything else on the row: a list where some rows carry a
-      // TONE — a rate-limited route in yellow, an unavailable one in red — puts
-      // a coloured unselected row next to a plain selected one, and the
-      // brightest thing on screen is then not the thing Enter will take. That
-      // is the "two adjacent rows look nearly identical" complaint from the
-      // other side: the cue exists but loses to the noise.
+      // BOTH CUES, ALWAYS. The marker survives monochrome, a pipe and a captured
+      // log; the surface is what makes it win at a glance when colour is there.
+      // Neither alone was enough - a list where some rows carry a tone puts a
+      // coloured unselected row beside a plain selected one, and the brightest
+      // thing on screen is then not the thing Enter will take.
       //
-      // The whole row now sits on the reading surface, PADDED FIRST so the
-      // highlight runs to the panel edge rather than stopping at the text —
-      // a half-width highlight reads as a drawing artefact, not a selection.
+      // AND THE HIGHLIGHT STOPS AT THE MENU. It used to run to the terminal's
+      // edge, which on a wide screen is a grey bar pointing at nothing.
+      // ---- THE COMMAND IS THE ACCENT; ITS DESCRIPTION IS NOT ------------
       //
-      // BOTH CUES, ALWAYS. The `❯` stays, so selection survives monochrome, a
-      // pipe and a captured log; the surface is what makes it win at a glance
-      // when colour is available. Neither alone was enough.
-      const painted = tint ? tint(body) : body;
-      out.push('│ ' + (sel ? P.surface(painted) : painted) + ' │');
+      // A row reads `/status      Session, provider and tool state` — a token you
+      // are about to TYPE, and a sentence explaining it. At one weight the eye has
+      // to read the whole row to find the half it came for. The token wears the
+      // accent every command and path in LAIN wears (ui/paint.js `cmd`) and the
+      // description is dim, so a list of sixty is scannable down its left edge.
+      //
+      // SPLIT ON THE GAP, which is how the rows are BUILT (two or more spaces
+      // between the command and its description), not on a guess about lengths. A
+      // row with no gap is one thing and is painted as one.
+      //
+      // AFTER PADDING, ALWAYS — see the note above. And a row with a TONE keeps it
+      // whole: `rate limited` in yellow is about the entire row, not its first word.
+      const painted = tint ? tint(body) : accentRow(body);
+      out.push(INDENT + (sel ? P.surface(painted) : painted));
     }
     // THE REFUSAL, WHERE THE ANSWER WOULD HAVE GONE. Drawn in the last body row
     // rather than the footer: the footer says what the keys DO, and it must not
     // start flickering between instructions and complaints.
     if (this.error) {
-      out[out.length - 1] = '│ ' + pad(clip('  ✗ ' + this.error, inner), inner) + ' │';
+      out[out.length - 1] = INDENT + P.bad(pad(clip('✗ ' + this.error, inner), inner));
     }
     const more = this.items.length > bodyRows
       ? `  (${this.scroll + 1}-${Math.min(this.scroll + bodyRows, this.items.length)} of ${this.items.length})`
       : '';
-    out.push('├─' + bar + '─┤');
-    out.push('│ ' + pad(clip((f.footer || defaultFooter(this.stack.length)) + more, inner), inner) + ' │');
-    out.push('└─' + bar + '─┘');
+    out.push('');
+    out.push(P.meta(INDENT + clip((f.footer || defaultFooter(this.stack.length)) + more, inner)));
     return out;
   }
+
+  /**
+   * HOW WIDE THE MENU IS: what its contents need, bounded by the frame.
+   *
+   * A list of six commands does not become more readable by being stretched to
+   * two hundred columns, and the selection highlight is the part that makes that
+   * obvious. So the width is the longest row it will actually draw, plus the
+   * marker and a little air - and never more than the content frame it sits in,
+   * which the layout has already decided.
+   *
+   * A FLOOR, so a one-word list is not a sliver; a CEILING, so a pasted sentence
+   * in an item cannot drag the menu back out to the wall.
+   */
+  menuWidth(width) {
+    const frame = Math.max(10, Math.floor(Number(width) || 80) - 2);
+    let longest = 0;
+    for (const it of this.items) {
+      const n = String((it && it.label) || '').length;
+      if (n > longest) longest = n;
+    }
+    const footer = String((this.frame && this.frame.footer) || defaultFooter(this.stack.length)).length + 18;
+    const wanted = Math.max(longest + 2, footer, MENU_MIN);
+    return Math.max(MENU_MIN, Math.min(frame, Math.min(wanted, MENU_MAX)));
+  }
 }
+
+/**
+ * A ROW'S COMMAND TOKEN, ACCENTED; THE REST OF IT, DIM.
+ *
+ * The marker (`> ` or two spaces) is left alone - it is the selection cue and
+ * must survive monochrome. Everything up to the first two-space gap after it is
+ * the token; everything after is explanation.
+ *
+ * A ROW THAT IS NOT SHAPED LIKE THAT is returned untouched rather than guessed
+ * at: a model id, a file path, a sentence of command output, a blank row.
+ */
+function accentRow(body) {
+  const m = /^(  |❯ )(\S+)(\s{2,})([\s\S]*)$/.exec(body);
+  if (!m) return body;
+  return m[1] + P.cmd(m[2]) + P.meta(m[3] + m[4]);
+}
+
+/**
+ * HOW MANY ROWS ARE NOT CONTENT: a blank row and the footer.
+ *
+ * The box spent SIX — two borders, the title, two separators and the footer. Named
+ * so ui/geometry.js sizes the region from the same number, and so a test can ask
+ * rather than hardcode it.
+ */
+const FOOTER_ROWS = 2;
+
+/** A menu narrower than this is a sliver; wider than this is a wall. */
+const MENU_MIN = 32;
+const MENU_MAX = 84;
 
 function defaultFooter(depth) {
   return depth > 1
@@ -531,6 +647,7 @@ function clip(s, width) {
 }
 
 module.exports = {
+  FOOTER_ROWS,
   MODE, KIND, COMPLETION_KINDS, PASSIVE_KINDS, InteractionPanel,
   pad, clip,
 };

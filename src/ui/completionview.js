@@ -8,11 +8,17 @@
  * each distinct surface to the module that owns it (ui/story.js, ui/reports.js,
  * ui/menus.js, ui/waiting.js).
  *
- * THE CURSOR IS STATE, NOT A RE-DERIVATION. Up and Down move the highlight and
- * then ask for the report to be drawn again at the new position — the report is
- * never recomputed from anything else, so what the arrows moved and what the
- * screen shows cannot come apart. That is why the redraw is its own function
- * rather than something `showCompletion` does once.
+ * ------------------------------------------------------------------------
+ * THERE IS NO CURSOR ANY MORE, and that is the whole of what changed here.
+ *
+ * The report used to offer a CHOICE — `❯ diff` or `❯ keep working` — with Up and
+ * Down moving a highlight and Enter taking it. The first branch switched to the
+ * DIFF pane; with one surface there is nowhere to switch to, so both branches
+ * meant the same thing: put the report away.
+ *
+ * So the report names `/changes` instead — a command that exists, typed when you
+ * want it — and every key dismisses it (ui/keys.js). `render` stays a function
+ * of its own because `show` and a later redraw must produce the same report.
  *
  * WHAT IT CONTAINS is decided by ui/views.js `completion`, from task, evidence
  * and checkpoint state — never from narration, and never from anything the
@@ -21,14 +27,13 @@
 
 const views = require('./views');
 
-/** Open the overlay, with the highlight on the first choice. */
+/** Open the overlay. */
 function show(ui, verification = []) {
   ui.screen.completionVerification = verification;
-  ui.screen.completionCursor = 0;
   render(ui);
 }
 
-/** Redraw the report with the CURRENT cursor. */
+/** Compose the report and put it on the screen. */
 function render(ui) {
   ui.screen.completion = views.completion({
     session: ui.app.session,
@@ -36,7 +41,6 @@ function render(ui) {
     cwd: ui.app.session.cwd,
     verification: ui.screen.completionVerification || [],
     width: ui.screen.cols,
-    cursor: ui.screen.completionCursor || 0,
   });
   ui.refresh();
 }
@@ -44,7 +48,6 @@ function render(ui) {
 /** Take it away, and give the workspace its rows back. */
 function dismiss(ui) {
   ui.screen.completion = null;
-  ui.screen.completionCursor = 0;
   ui.refresh();
 }
 

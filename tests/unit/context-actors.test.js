@@ -40,7 +40,11 @@ module.exports = async function () {
         { kind: 'external', text: 'The evidence suggests the writer is failing silently.' },
         { kind: 'mcp', text: 'Window focused: Chrome' },
       ],
-      liveActions: [{ name: 'read_file', target: 'dashboard.py', ok: true }],
+      // AN EDIT, NOT A READ. A successful read is live state and is drawn in the
+      // one row above the caret rather than kept in the conversation (ui/feed.js
+      // `durable`). This test is about telling the five VOICES apart, so it needs
+      // a call that persists — and a change to the project is one.
+      liveActions: [{ name: 'edit_file', target: 'dashboard.py', ok: true }],
       width: 90,
     });
     const text = T.strip(lines.join('\n'));
@@ -50,8 +54,8 @@ module.exports = async function () {
     }
     // The two that no longer wear a word are told apart by SHAPE, which
     // survives monochrome: a tool call is quoted behind a gutter, prose is not.
-    assert.match(text, /│\s+✓ Read dashboard\.py/, `a tool call is quoted:\n${text}`);
-    assert.match(text, /^ {2}I found the writer\./m, `and prose sits at the margin:\n${text}`);
+    assert.match(text, /│\s+✓ edited · dashboard\.py/, `a tool call is quoted:\n${text}`);
+    assert.match(text, /^I found the writer\./m, `and prose sits at the margin:\n${text}`);
     assert.ok(!/^\s*LAIN$/m.test(text), 'the application does not name itself at the user');
     assert.ok(!/^\s*ACTIONS$/m.test(text), 'and actions do not announce that they are actions');
     assert.match(text, /fix the dashboard/);
@@ -102,11 +106,17 @@ module.exports = async function () {
     });
     for (const l of lines) assert.ok(!/\x1b\[/.test(l), 'no colour is emitted with NO_COLOR set');
     const text = lines.join('\n');
-    assert.match(text, /^\s{2}EXTERNAL$/m);
-    assert.match(text, /^\s{4}EXTERNAL speaking\./m, 'a labelled body is indented under its label');
-    // The model's own prose sits at the MARGIN, which is what tells it from a
-    // labelled voice when there is no colour available to help.
-    assert.match(text, /^\s{2}LAIN speaking\./m, 'and unlabelled prose is at the margin');
+    // ---- RELATIVE, NOT ABSOLUTE ----------------------------------------
+    //
+    // These asserted 2 and 4 columns, which was the feed's own base indent plus
+    // its relative offsets. The base is gone - the content frame owns the outer
+    // margin and the layout applies it (ui/frame.js `contentBounds`) - so what
+    // survives here is the only thing this test was ever about: a labelled body
+    // is indented UNDER its label, and unlabelled prose is not.
+    assert.match(text, /^EXTERNAL$/m, 'the label is at the margin');
+    const body = /^(\s*)EXTERNAL speaking\./m.exec(text);
+    assert.ok(body && body[1].length > 0, 'a labelled body is indented under its label');
+    assert.match(text, /^LAIN speaking\./m, 'and unlabelled prose is at the margin');
   });
 
   await test('CONTEXT: an external review SURVIVES the turn that acts on it', () => {
@@ -173,20 +183,28 @@ module.exports = async function () {
     assert.strictEqual(v.sameTask, false, 'there is no task to be the same as');
   });
 
-  await test('CONTEXT: the pane is NAMED context, and it is not the log', () => {
-    // CONTEXT is a named pane of its own — that is the property being held.
+  await test('SURFACE: the conversation is the surface — there is no pane to name', () => {
+    // ------------------------------------------------------------------
+    // THIS TEST HELD THAT `context` WAS A NAMED PANE OF ITS OWN, distinct from
+    // the log, and that ACTIVITY was the pane LAIN opened on. Both facts were
+    // about an arrangement of nine panes.
     //
-    // It is no longer the pane LAIN OPENS on. ACTIVITY leads, because a reply
-    // nobody can see is indistinguishable from an agent that did nothing, and
-    // CONTEXT keeps perfectly well one keypress away. Keeping CONTEXT in front
-    // meant drawing a second copy of the feed underneath its briefing, which
-    // made the landing pane a worse ACTIVITY and a worse CONTEXT at once.
-    const tabs = require('../../src/ui/tabs');
+    // The property underneath survived the arrangement: the account of what was
+    // said and done is on screen without anybody asking for it, because a reply
+    // nobody can see is indistinguishable from an agent that did nothing. That
+    // used to require choosing which pane led. Now it is simply what the screen
+    // IS.
+    // ------------------------------------------------------------------
     const { Screen } = require('../../src/ui/layout');
     const s = new Screen({ out: { columns: 90, rows: 30, isTTY: true, write() {}, on() {}, removeListener() {} } });
-    assert.ok(tabs.VIEWS.includes('context'), 'context is one of the panes');
-    assert.strictEqual(s.view, tabs.VIEWS[0], 'the screen opens on the first pane in the one list');
-    const line = T.strip(s.tabsLine(90));
-    assert.match(line, new RegExp(`\\b${tabs.numberOf('context')} context\\b`), 'context is numbered in the strip');
+    s.state = {
+      cwd: process.cwd(),
+      session: { cwd: process.cwd(), task: null, turns: [] },
+      transcript: [], liveActions: [], liveNarration: [], liveNotes: [],
+      liveUser: 'THE_THING_I_ASKED', extras: [],
+    };
+    const out = T.strip(s.workspaceLines(90, 20).join(String.fromCharCode(10)));
+    assert.ok(out.includes('THE_THING_I_ASKED'),
+      'the conversation must be on screen with nothing selected, because nothing can be selected');
   });
 };

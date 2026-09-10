@@ -76,7 +76,11 @@ module.exports = async function () {
     // genuinely exceeds the bound.
     const b = project.brief(path.join(__dirname, '..', '..'));
     assert.ok(b.length <= project.MAX_CHARS, `brief is ${b.length} chars, cap is ${project.MAX_CHARS}`);
-    for (const mod of ['numfmt.js', 'steerqueue.js', 'promptcache.js']) {
+    // (This originally asserted on `numfmt.js`, the module the story is told
+    // about — it was removed with the Probe integration in 2026-09 as a dead
+    // consumer of the deleted probe tool. The story and the lesson stand; the
+    // named modules are ones that exist.)
+    for (const mod of ['steerqueue.js', 'promptcache.js']) {
       assert.ok(b.includes(mod), `the brief must name ${mod} — otherwise the model cannot know it exists`);
     }
   });

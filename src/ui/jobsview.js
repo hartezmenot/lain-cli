@@ -85,10 +85,19 @@ function plan(state, room = 99, now = Date.now()) {
 /** How many rows the region wants. Zero when nothing is running. */
 function rows(state, room = 99, now = Date.now()) { return plan(state, room, now).rows; }
 
-function secs(ms) {
-  const s = Math.round((Number(ms) || 0) / 1000);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
-}
+/**
+ * HOW LONG THE JOB HAS BEEN AT IT — the one elapsed vocabulary in LAIN.
+ *
+ * THE THIRD COPY OF THIS FUNCTION, found by reading a real frame: the live row
+ * above the caret said `00:00:02`, `/bg` said `3m18s`, and this region said
+ * `0s` - three spellings of elapsed time on ONE screen, two of them needing a
+ * conversion before they could be compared with the third.
+ *
+ * `hhmmss` is imported rather than reimplemented, which is what stops them
+ * drifting again. See ui/workclock.js; the CLOCKS stay separate (a job owns its
+ * own `elapsedMs`), only the spelling is shared.
+ */
+const secs = (ms) => require('./workclock').hhmmss(ms);
 
 /** One job, as one row: what it is, what state, and what it is doing now. */
 function line(j, width) {
@@ -124,8 +133,17 @@ function draw(state, width = 80, height = 0, now = Date.now()) {
   const { shown, hidden } = plan(state, height, now);
   if (!shown) return new Array(height).fill(T.fit('', width));
   const items = itemsOf(state, now);
-  const label = ' BACKGROUND ';
-  const out = [T.fit(P.meta('─'.repeat(2) + label + '─'.repeat(Math.max(0, width - 2 - label.length))), width)];
+  // ---- A LABEL, NOT A SECOND FULL-WIDTH RULE ---------------------------
+  //
+  // It drew `── BACKGROUND ─────────…` across the whole frame, which put a second
+  // heavy horizontal line on a screen that has exactly one on purpose — the
+  // header's. Two rules of equal weight make the surface read as a dashboard
+  // divided into panes, which is the thing the one-surface design is not.
+  //
+  // The word alone does the same job. It is dim, sentence case, and there is a
+  // blank row above it because whitespace separates regions at least as well as a
+  // line does and costs the same row.
+  const out = [T.fit(P.meta('Background'), width)];
   // NEWEST LAST, so a job that has just started appears next to the input where
   // the eye already is, and the list does not reorder itself as jobs finish.
   for (const j of items.slice(-shown)) {

@@ -1,12 +1,30 @@
 'use strict';
 
 /**
- * THE SCREEN — one terminal UI with four regions.
+ * THE SCREEN — ONE SURFACE, four regions.
  *
- *     HEADER              fixed
- *     WORKSPACE           scrollable, bounded
- *     INPUT               fixed
- *     INTERACTION PANEL   hidden -> compact -> expanded
+ *     HEADER              two rows: who/where/what model/how much context
+ *     CONVERSATION        scrollable, bounded — the primary content
+ *     LIVE ACTIVITY       one row, directly above the input
+ *     INPUT               fixed, always on the floor
+ *
+ * Plus two regions that cost nothing when there is nothing to say: the pending
+ * steer (ui/pending.js) and background work (ui/jobsview.js), and the
+ * INTERACTION PANEL, which opens under the input and closes again.
+ *
+ * ------------------------------------------------------------------------
+ * THERE IS NO TAB BAR, NO PANE ORDER AND NO `view`.
+ *
+ * There used to be nine panes — activity, context, plan, diff, output, files,
+ * memory, detail, tokens — with a numbered strip, Alt+N bindings, a click
+ * hit-test, per-pane scroll state, per-pane report caches and per-pane crashes.
+ * Nine surfaces is nine places a person has to decide they are in the wrong
+ * one, and every one of them was reachable as a command anyway.
+ *
+ * So: ONE surface. `/changes`, `/plan`, `/token`, `/brief`, `/note`, `/jobs`,
+ * `/bg` and `/ps` are how the other eight are reached, and they open in the
+ * panel under the input rather than replacing the conversation. Nothing in this
+ * file switches anything; `workspaceLines` has one answer.
  *
  * Not four windows. One alternate-screen buffer, redrawn from state.
  *
@@ -28,12 +46,10 @@ const textselect = require('./textselect');
 // Every width in this file is a VISIBLE width. The regions are drawn by padding
 // content out to a frame, and `.length` counts colour escapes as cells.
 const T = require('./text');
+const { P } = require('./paint');
 
 const MIN_ROWS = 8;
 const MIN_COLS = 40;
-
-/** Panes that pin the task banner above their content. See `bannerLines`. */
-const BANNER_VIEWS = new Set(['activity', 'context']);
 
 const ALT_ON = '\x1b[?1049h';
 const ALT_OFF = '\x1b[?1049l';
@@ -53,23 +69,60 @@ const EOL = '\x1b[K';   // erase-to-end-of-line
 function L(s) { return s + EOL; }
 
 /**
- * A LABELLED BOX RULE — `┌─ ACTIVITY ─────┐`.
+ * THE ONE RULE ON THE SCREEN — the line under the header.
  *
- * The regions used to be bare text separated by blank rows, so the screen read
- * as a stack of paragraphs rather than an interface, and the input row was the
- * only thing with a visible edge. A rule costs ONE row per region and makes the
- * boundary between "what LAIN is doing" and "where I type" unmistakable.
+ * It is the boundary between metadata and content, and it is the only piece of
+ * chrome the surface keeps. It earns its row by carrying the scroll hint
+ * (`↓ 3 new · End`) on its right-hand end, which is the one thing the removed
+ * tab strip said that nothing else could.
  *
- * `edges` false draws a plain rule with no corners, for regions that are
- * separated rather than enclosed.
+ * Bare `─`, dim: no corners, no label, no box. A border round the conversation
+ * would say the conversation is a widget, and it is not — it is the page.
  */
-function rule(label, width, { left = '┌', right = '┐', fill = '─' } = {}) {
+function separator(width, right = '', left = '') {
   const w = Math.max(4, width);
-  if (!label) return left + fill.repeat(w - 2) + right;
-  const text = ' ' + String(label) + ' ';
-  const room = w - 3 - text.length;
-  if (room < 0) return left + fill.repeat(w - 2) + right;
-  return left + fill + text + fill.repeat(room) + right;
+  const tail = right ? ` ${right} ` : '';
+  // ---- AND THE SCROLL ANCHOR ON ITS LEFT-HAND END ----------------------
+  //
+  // `USER · fix the continuation bug…`, when the message that started the turn
+  // in hand has scrolled off the top. It is a place to click back to, not a
+  // heading — see ui/anchors.js `scrollAnchor` for why it rides here rather
+  // than taking a row of its own, and why it disappears the moment the real
+  // message is on screen.
+  //
+  // DROPPED BEFORE THE HINT IS, on a terminal too narrow for both: the hint is
+  // news about content you have not seen, and the anchor is a convenience for
+  // reaching content you have. Two dashes are kept either side so the rule
+  // still reads as a rule.
+  const room = w - T.width(tail) - 4;
+  const head = left && T.width(left) + 2 <= room ? ` ${left} ` : '';
+  const dashes = Math.max(0, w - T.width(tail));
+  // ---- THE ANCHOR IS A PINNED ONE-LINE PROMPT PREVIEW ------------------
+  //
+  // It went through two wrong shapes before this one. `USER DECISION · continue`
+  // in bold read as a SECOND HEADER. `↑ user` was quiet enough but said nothing —
+  // a person could not tell which turn it went back to, which on a long session is
+  // the only thing they need from it.
+  //
+  // What it is now: the real submitted text, one line, on its own subtle grey
+  // ground — the same ground a user message sits on in the conversation, because it
+  // IS one. `USER` keeps a little more weight than the preview after it, so the row
+  // reads as a label and a quotation rather than as a sentence.
+  //
+  // ON THE GROUND, NOT THE RULE. Where the anchor is drawn the rule stops: a line
+  // running through a filled row would be a line drawn over a label. The dashes
+  // pick up after it and carry on to the hint.
+  if (!head) return P.meta('─'.repeat(dashes) + tail);
+  // `USER · <preview>` arrives as one string (ui/anchors.js `mark`); the label and
+  // the quotation are painted apart so the row reads as a label and a quotation.
+  const cut = left.indexOf(' · ');
+  const who = cut < 0 ? left : left.slice(0, cut);
+  const said = cut < 0 ? '' : left.slice(cut + 3);
+  const shown = ` ${left} `;
+  const painted = P.surface(
+    ' ' + P.key(who) + (said ? P.meta(' · ') + P.plain(said) : '') + ' ',
+  );
+  return painted + P.meta('─'.repeat(Math.max(0, dashes - T.width(shown))) + tail);
 }
 
 class Screen {
@@ -77,9 +130,6 @@ class Screen {
     this.out = out;
     this.panel = panel;
     this.active = false;
-    this.view = require('./tabs').VIEWS[0];   // ACTIVITY — see ui/tabs.js
-    /** Last completed /audit and /health passes, for their panes. */
-    this.report = { audit: null, health: null, work: null, brief: null };
     this.workspaceScroll = 0;             // rows scrolled from the TOP of content
     // DRAG-SELECTION OVER THE FEED — the same Selection the input box uses,
     // over a different buffer: the whole rendered feed as plain text, so a
@@ -102,15 +152,26 @@ class Screen {
      * count as it stood when they scrolled away, so the difference is exactly
      * "what have I missed".
      */
-    // ASKED OF ui/tabs.js, not asserted: a bare `true` bottom-anchored whatever
-    // the first view happened to be, and not every pane is a feed — a document
-    // pinned to its own end opens on its last line.
-    this.stickToBottom = require('./tabs').followsLive(this.view);
+    // THE CONVERSATION FOLLOWS LIVE. There is one surface and it is a running
+    // account, so new output scrolls itself into view unless the user has
+    // scrolled away — which is the only thing that clears this.
+    //
+    // It does NOT pad above its content. A transcript with three lines in it
+    // starts at the TOP of the region and grows down, the way reading works;
+    // gluing it to the floor put the first thing the user said at the bottom of
+    // an otherwise empty screen and moved every line up on each new one.
+    this.stickToBottom = true;
     this._anchorSpoken = 0;
-    this.expandedSteps = new Set();
-    this.planCursor = -1;                 // which plan step Enter would expand
-    this.diffFile = null;                 // the file the DIFF view is showing
     this.inputText = '';
+    /**
+     * THE PAYLOADS IN `inputText` THAT ARRIVED AS PASTES — drawing only.
+     *
+     * Set from the reader by `UI.setInput`. `inputText` is always the whole
+     * truth and is what gets sent; this list only lets the box draw a huge
+     * block as `<pasted text>` instead of as four hundred rows. See
+     * ui/composer.js.
+     */
+    this.inputPastes = [];
     /** Caret position within `inputText`, and which line of it that lands on. */
     this.inputCursorAt = 0;
     this.inputCursorLine = 0;
@@ -179,23 +240,6 @@ class Screen {
     this.out.write(SHOW_CUR + ALT_OFF);
   }
 
-  setView(name) {
-    const changed = this.view !== name;
-    this.view = name;
-    this.workspaceScroll = 0;
-    this.stickToBottom = require('./tabs').followsLive(name);
-    // Re-entering DIFF returns to the file list rather than to whichever file
-    // happened to be open, which is what "Ctrl+3 — back to this list" promises.
-    if (changed && name === 'diff') this.diffFile = null;
-    this.draw();
-  }
-
-  toggleStep(n) {
-    if (this.expandedSteps.has(n)) this.expandedSteps.delete(n);
-    else this.expandedSteps.add(n);
-    this.draw();
-  }
-
   /** Region heights — see ui/geometry.js. */
   geometry() { return require('./geometry').regions(this); }
 
@@ -228,21 +272,14 @@ class Screen {
   // moving the answer.
   _wrapped() { return require('./inputbox').wrapped(this); }
   _shownInputRows() { return require('./inputbox').shownRows(this); }
-  _pasteSummary() { return require('./inputbox').summary(this); }
 
   /**
-   * The tab strip, with a live count beside the views that have something in
-   * them — a tab that never says anything is just a label.
-   */
-  /**
-   * The view selector, the viewport state and the scroll hint.
+   * The viewport state and the scroll hint — pure functions of state, living in
+   * views.js, whose whole job is state -> lines. They stay reachable as methods
+   * because that is how the Screen's callers and its tests address them.
    *
-   * All three are pure functions of state and live in views.js, whose whole job
-   * is state -> lines. They stay reachable as methods because that is how the
-   * Screen's callers and its tests address them.
+   * `tabsLine` used to sit here too. It is gone with the tabs.
    */
-  tabsLine(width, scroll = null) { return views.tabsLine(this.view, width, scroll); }
-
   viewportState(spoken = 0) {
     return views.viewportState({ stickToBottom: this.stickToBottom, spoken, anchorSpoken: this._anchorSpoken });
   }
@@ -253,36 +290,20 @@ class Screen {
     });
   }
 
-  /**
-   * The PINNED task banner over CONTEXT: the objective and, once there is a
-   * plan, the progress. It never scrolls, so "what am I doing and how far along
-   * am I?" is answered without reading anything. Returns [] for every other
-   * view and when there is no task yet (the launch screen owns that case).
-   *
-   * IT SAYS CONTEXT AND IT MEANS CONTEXT — this said "the activity view" while
-   * testing for `context`, left from when CONTEXT was the transcript. The
-   * banner owns the objective, so ui/contextview.js must not print one too.
-   *
-   * `bodyRows` is the space the whole workspace body has; the banner is capped
-   * to leave at least one row for the feed, and goes COMPACT when the terminal
-   * is narrow or short so the progress line survives instead of the feed.
-   */
-  bannerLines(cols, bodyRows) {
-    // ACTIVITY AND CONTEXT BOTH PIN IT, and ACTIVITY is why.
-    //
-    // ui/conversation.js deliberately does NOT redraw the first user message
-    // when it is the task objective, because this banner is showing it. While
-    // the banner was drawn only on CONTEXT, that made the objective vanish
-    // entirely from ACTIVITY: the feed suppressed it in favour of a banner that
-    // was not there. Two panes make the same assumption, so both get the banner.
-    if (!BANNER_VIEWS.has(this.view) || this.completion) return [];
-    const s = this.state;
-    if (!s || !s.session || !s.session.task) return [];
-    const compact = cols < 54 || bodyRows < 9;
-    // No `live` here any more — the status strip above the INPUT owns it.
-    const b = views.taskBanner({ session: s.session, width: cols, compact });
-    return b.slice(0, Math.max(0, bodyRows - 1));
-  }
+  // ------------------------------------------------------------------------
+  // THE PINNED TASK BANNER IS GONE, and this is where it was.
+  //
+  // It drew the objective and a `STEP 3/5 ████░░ 60%` bar above the feed, on
+  // two of the nine panes, permanently. Against §11's test — does this answer
+  // "where am I", "what model", "how much context", "what is LAIN doing",
+  // "what was said", "where do I type"? — it answers none of them: the
+  // objective IS the first thing the user said, so the conversation says it,
+  // and the progress bar is `/plan`.
+  //
+  // ui/conversation.js used to SUPPRESS the first user message because this
+  // banner was showing it. That suppression is gone with the banner; the feed
+  // draws every message, including the first.
+  // ------------------------------------------------------------------------
 
   // Thin delegations to ui/textselect.js, which owns the arithmetic; the Screen
   // supplies only which lines were painted and where they landed.
@@ -299,9 +320,11 @@ class Screen {
 
   scrollWorkspace(delta) {
     const { workspace } = this.geometry();
-    const bodyRows = Math.max(0, workspace - 1);
-    const feedRows = Math.max(1, bodyRows - this.bannerLines(this.cols, bodyRows).length);
-    const lines = this.workspaceLines(this.cols, feedRows);
+    const feedRows = Math.max(1, workspace);
+    // THE SAME WIDTH THE FRAME IS DRAWN AT, or the scroll would be computed
+    // against a feed of a different length than the one on screen. See
+    // views.content.
+    const lines = this.workspaceLines(views.contentBounds(this.cols).width, feedRows);
     const maxScroll = Math.max(0, lines.length - feedRows);
     this.workspaceScroll = Math.max(0, Math.min(this.workspaceScroll + delta, maxScroll));
     this.stickToBottom = this.workspaceScroll >= maxScroll;
@@ -324,83 +347,34 @@ class Screen {
    * Returns false when there is nowhere to go, so the key falls through rather
    * than silently doing nothing.
    */
-  jumpToAnchor(dir) {
-    const anchors = require('./anchors').rowsIn(this.lastFeedLines);
-    if (!anchors.length) return false;
-    const at = this.workspaceScroll;
-    const target = dir < 0
-      ? anchors.filter((r) => r < at).pop()
-      : anchors.find((r) => r > at);
-    if (target == null) return false;
-    // ---- CLAMPED THE SAME WAY EVERY OTHER SCROLL IS ----------------------
-    //
-    // THE DEFECT, and it made the newest message the one you could not reach.
-    // The last anchor sits near the END of the feed, which is BELOW the
-    // greatest scroll position that leaves a full window of rows on screen. So
-    // `workspaceScroll = target` was silently clamped back by `draw`, the view
-    // did not move — and this returned `true` anyway, so Alt+Down reported a
-    // jump that had not happened, for ever, at the bottom of every long
-    // conversation.
-    //
-    // Measured: eight anchors at rows 1..57, seven reachable, the eighth
-    // claiming success on every press while the scroll stayed at 49.
-    //
-    // Clamped against THE SAME ARRAY THE ANCHORS CAME FROM. `lastFeedLines` is
-    // what `rowsIn` indexed, so its length is the only bound that is guaranteed
-    // to agree with the row numbers being jumped to — recomputing the feed here
-    // would clamp against a different list than the one the targets came from.
-    const feedRows = Math.max(1, this.geometry().workspace - 1);
-    const total = (this.lastFeedLines && this.lastFeedLines.length) || 0;
-    const maxScroll = Math.max(0, total - feedRows);
-    const to = Math.max(0, Math.min(target, maxScroll));
-    // ALREADY THERE IS NOT A JUMP. An anchor past the end is on screen at the
-    // bottom of the feed; saying "moved" about a screen that did not change is
-    // what made this look broken rather than finished.
-    if (to === at) return false;
-    this.stickToBottom = to >= maxScroll;
-    this.workspaceScroll = to;
-    this.draw();
-    return true;
-  }
+  /**
+   * MOVING THE VIEWPORT lives in ui/navigate.js — see its header. These stay
+   * reachable as methods because that is how the Screen's callers and its tests
+   * address them.
+   */
+  jumpToRow(row) { return require('./navigate').jumpToRow(this, row); }
+
+  jumpToAnchor(dir) { return require('./navigate').jumpToAnchor(this, dir); }
 
   /**
-   * The input box's top border, carrying the exit hint when one is set.
-   * `┌─ Press Ctrl+C again to exit. ───┐` — a labelled border, not a modal, so it
-   * costs no rows and shows at every terminal size. `inner` is the input width.
-   */
-  /**
-   * The input box's top border, which is also the region's LABEL.
+   * ------------------------------------------------------------------------
+   * `_inputTop` AND `_inputLabel` STOOD HERE, and both are gone with the box.
    *
-   * The interaction region must always be identifiable at a glance, so the
-   * border says what it currently is: plain input, a command palette, a file
-   * picker, or — when the exit confirmation is armed — the hint, which
-   * outranks the label because it is transient and time-limited.
+   * The input was `┌─ INPUT ────┐ … └────┘`, and the top border doubled as a
+   * label saying what the region currently was: plain input, `COMMANDS`,
+   * `FILES`, the wording for an open question, or the exit hint.
+   *
+   * Each of those has a better home now:
+   *
+   *   INPUT        was a word restating what the caret already says. Gone.
+   *   COMMANDS,    the picker opens directly under the input and draws its own
+   *   FILES        title (ui/panel.js). The label was a second one.
+   *   the answer   likewise — the panel asking the question carries it.
+   *   the hint     `Press Ctrl+C again to exit` is the one that had nowhere
+   *                else to go, and it takes a row of its own for the two
+   *                seconds it is armed. See ui/geometry.js `hintRows`.
+   * ------------------------------------------------------------------------
    */
-  _inputTop(inner) {
-    const span = inner + 2;                       // dashes in the plain border
-    const text = this.exitHint || this._inputLabel();
-    if (!text) return '┌' + '─'.repeat(span) + '┐';
-    const label = ' ' + views.clip(text, Math.max(0, inner - 2)) + ' ';
-    const dashes = Math.max(0, span - 1 - label.length);
-    return '┌─' + label + '─'.repeat(dashes) + '┐';
-  }
-
-  _inputLabel() {
-    const p = this.panel;
-    if (p && p.visible && p.isCompletion) {
-      return p.kind === 'COMMAND_PALETTE' ? 'COMMANDS' : 'FILES';
-    }
-    // A QUESTION IS OPEN, SO THIS LINE IS THE ANSWER — and the border is where
-    // that gets said. Under the old label a box reading INPUT sat below a
-    // question whose own text said "type a number", and nothing on screen
-    // connected the two or admitted that typing there did nothing. The wording
-    // comes from ui/answer.js, the same source as the panel's footer and its
-    // row labels, so the three can never advertise different keys.
-    if (p && p.visible && p.acceptsTyped) {
-      return require('./answer').inputLabel(p.options, p.takes);
-    }
-    return 'INPUT';
-  }
 
   /** Redraw everything from state. Deterministic; costs no model tokens. */
   draw(state = null) {
@@ -410,49 +384,58 @@ class Screen {
     const rows = this.rows;
     const g = this.geometry();
     const buf = [];
+    // ---- THE ONE CONTENT FRAME -------------------------------------------
+    //
+    // Computed ONCE, here, and handed to every region. No renderer below works
+    // out its own horizontal margins: each is composed at `box.width` and drawn
+    // at `box.left + 1`, so the left and right gutters are the same number by
+    // construction rather than by four files agreeing. See views.contentBounds,
+    // and the screenshot that produced it — the whitespace did not match.
+    const box = views.contentBounds(cols);
+    const col0 = box.left + 1;
+    // WHERE CONTENT LANDED, for the click and selection arithmetic. Recorded as
+    // it is drawn, like every other entry in `rowMap`, so hit-testing can never
+    // be reading a different frame from the one on screen.
+    this._box = box;
 
-    // ---- HEADER (fixed) ----
+    // ---- HEADER — ONE ROW OF METADATA, NO BOX --------------------------
+    //
+    // `LAIN   lain-v2   claude-opus-5   42k/128k`, dim, and that is all of it.
+    //
+    // It used to be a four-row `┌─ L A I N ─┐` frame carrying the project, the
+    // path, the model, the ROUTE, the effort, a status word and a coloured dot
+    // — seven fields and a border, above a conversation that had no rows left.
+    // The route went with the tabs (see views.header); the status word moved to
+    // the one place that owns it, the live row above the input.
     const head = views.header({
       cwd: this.state.cwd,
-      session: this.state.session,
       model: this.state.model,
       provider: this.state.provider,
       connection: this.state.connection,
-      effort: this.state.effort,
-      plan: this.state.plan,
-      status: this.status,
-      // Inside a frame the content lives between `│ ` and ` │`, so it must be
-      // laid out to the INNER width — given the full width it right-aligned the
-      // status into the border and the state word was clipped away, which is
-      // the one thing on that row that must never be lost.
-      width: g.framed ? cols - 4 : cols,
-      compact: g.compactHeader,
-      stats: this.state.stats,
-      framed: g.framed,
+      output: this.state.output,
+      width: box.width,
     });
     let row = 1;
-    if (g.framed) {
-      // ┌─ LAIN ────────────┐ … │ content │ … └────────────────────┘
-      const inner = cols - 4;
-      buf.push(L(at(row++, 1) + views.clip(rule('L A I N', cols), cols)));
-      for (let i = 0; i < g.headerRows - 2; i++) {
-        const t = views.clip(head[i] || '', inner);
-        buf.push(L(at(row++, 1) + '│ ' + t + ' '.repeat(Math.max(0, inner - T.width(t))) + ' │'));
-      }
-      buf.push(L(at(row++, 1) + '└' + '─'.repeat(Math.max(0, cols - 2)) + '┘'));
-    } else {
-      for (let i = 0; i < g.headerRows; i++) {
-        buf.push(L(at(row++, 1) + views.clip(head[i] || '', cols)));
-      }
-    }
+    buf.push(L(at(row++, col0) + views.clip(head[0] || '', box.width)));
+    // THE RULE UNDER IT IS DRAWN LAST, because the scroll hint it carries is
+    // not known until the feed has been laid out. Every row in `buf` addresses
+    // itself (`at(row, 1)`), so composing one out of order costs nothing.
+    const ruleRow = g.headerRows > 1 ? row++ : 0;
 
-    // ---- WORKSPACE (scrollable, bounded) ----
-    // A PINNED banner (activity view) sits between the tab strip and the feed:
-    // the task and its progress stay put while the log below them scrolls.
-    const bodyRows = Math.max(0, g.workspace - 1);
-    const banner = this.bannerLines(cols, bodyRows);
-    const feedRows = Math.max(0, bodyRows - banner.length);
-    const lines = this.workspaceLines(cols, feedRows);
+    // ---- CONVERSATION (scrollable, bounded) ----
+    //
+    // It gets EVERY row the fixed regions did not take. There is no tab strip
+    // above it and no pinned banner inside it — the two rows those cost went
+    // back to the content they were sitting on top of.
+    const feedRows = Math.max(0, g.workspace);
+    // ---- THE INVISIBLE CONTENT FRAME -----------------------------------
+    //
+    // The conversation is built NARROWER than the terminal so there is a right
+    // gutter to match the left one the feed's own indent already provides. It is
+    // still drawn at column 1 — the inset is in the LINES, not in where they are
+    // placed — which is what keeps ui/textselect.js and ui/mouse.js reading one
+    // arithmetic for window row to feed line. See views.content.
+    const lines = this.workspaceLines(box.width, feedRows);
     // HELD FOR THE SELECTION, which needs the whole feed rather than the rows
     // on screen — that is what lets a drag survive scrolling. Kept from the
     // frame that was actually painted, so an offset always refers to text the
@@ -484,44 +467,57 @@ class Screen {
     }
     if (this.workspaceScroll > maxScroll) this.workspaceScroll = maxScroll;
 
-    this.rowMap = { tabs: row, cols };
-    buf.push(L(at(row, 1) + views.clip(this.tabsLine(cols, this.scrollHint(lines, feedRows)), cols)));
-    row++;
-    this.rowMap.bannerStart = row;
-    this.rowMap.bannerRows = banner.length;
-    for (const bl of banner) buf.push(L(at(row++, 1) + views.clip(bl, cols)));
-    let window = lines.slice(this.workspaceScroll, this.workspaceScroll + feedRows);
-    // A CONVERSATION GROWS UPWARD FROM THE INPUT; A REPORT DOES NOT.
+    // ---- THE FRAME, RECORDED WITH THE REST OF THE GEOMETRY ---------------
     //
-    // With less to say than there are rows, a feed drawn from the TOP leaves a
-    // field of blank rows between the last thing said and the caret. Every chat
-    // puts the newest message nearest the box you type in; padding ABOVE rather
-    // than below is the whole of that. WHICH panes do this lives in ui/tabs.js
-    // — see growsUpward, and what it cost to write the rule down twice.
-    let feedPad = 0;
-    // PADDING ABOVE IS A SEPARATE QUESTION FROM FOLLOWING NEW OUTPUT — see
-    // ui/tabs.js. ACTIVITY follows and does NOT pad: the conversation starts at
-    // the top of the pane and grows down.
-    if (require('./tabs').growsUpward(this.view)
-      && this.stickToBottom && window.length < feedRows) {
-      feedPad = feedRows - window.length;
-      window = new Array(feedPad).fill('').concat(window);
+    // Every region is drawn at `contentCol` and composed at `contentWidth`. Kept
+    // here so a click, a selection or a test reads the frame the draw ACTUALLY
+    // used rather than recomputing it — the same rule the rest of `rowMap`
+    // follows, and the reason a second copy of this arithmetic is not allowed.
+    this.rowMap = { cols, contentCol: col0, contentWidth: box.width, gutter: box.left };
+    // THE RULE, NOW THAT THE HINT IS KNOWN. `↓ 3 new · End` is the one thing
+    // the tab strip said that no other region can: it is news about content
+    // the user has not seen, and it belongs on the boundary of the region
+    // that content is in.
+    // ---- THE SCROLL ANCHOR, NOW THAT THE FEED HAS BEEN LAID OUT --------
+    //
+    // It needs the drawn feed and the settled scroll position, both of which
+    // exist only at this point — which is the same reason the rule is composed
+    // last. Recorded on the rowMap so a click can find it without re-deriving
+    // anything. See ui/anchors.js and ui/mouse.js.
+    const anchor = require('./anchors').scrollAnchor(lines, this.workspaceScroll, feedRows);
+    this.rowMap.anchorRow = anchor ? ruleRow : 0;
+    this.rowMap.anchorTarget = anchor ? anchor.row : -1;
+    if (ruleRow) {
+      buf.push(L(at(ruleRow, col0) + views.clip(
+        separator(box.width, this.scrollHint(lines, feedRows), anchor ? anchor.mark : ''), box.width,
+      )));
     }
+    const window = lines.slice(this.workspaceScroll, this.workspaceScroll + feedRows);
+    // NO PADDING ABOVE. The conversation starts at the TOP of its region and
+    // grows down, which is how reading works and what leaves the calm empty
+    // space between the last thing said and the input box. Padding it upward
+    // glued the first message to the floor and shifted every line on every new
+    // one — see the constructor.
+    const feedPad = 0;
     this.rowMap.feedStart = row;
     this.rowMap.feedRows = feedRows;
-    // HOW MANY BLANK ROWS SIT ABOVE THE TEXT. Hit-testing a click needs it:
-    // without it the row-to-line map is off by exactly the padding, and a drag
-    // selects text a few lines from the one under the pointer.
+    // Kept at zero so ui/textselect.js and ui/mouse.js keep ONE arithmetic for
+    // window row -> feed line, rather than two that differ by a constant.
     this.rowMap.feedPad = feedPad;
     // Selection maps window row -> lines[scroll + i - pad].
     this.rowMap.feedScroll = this.workspaceScroll;
 
     const painted = textselect.paintRows(window, {
       lines, sel: this.textSelection && this.textSelection.range(), feedPad,
-      scroll: this.rowMap.feedScroll, cols,
+      scroll: this.rowMap.feedScroll, cols: box.width,
     });
+    // THE COLUMN THE FEED STARTS ON, for ui/textselect.js: a click at screen
+    // column x is column `x - feedCol` of the line under it, and the frame moved
+    // that origin off column 1. Recorded rather than recomputed, for the reason
+    // the header of this block gives.
+    this.rowMap.feedCol = col0;
     for (let i = 0; i < feedRows; i++) {
-      buf.push(L(at(row++, 1) + views.clip(painted[i] || '', cols)));
+      buf.push(L(at(row++, col0) + views.clip(painted[i] || '', box.width)));
     }
 
     // ---- PENDING USER INPUT (only when something is waiting) ----
@@ -531,8 +527,8 @@ class Screen {
     this.rowMap.pendingStart = row;
     this.rowMap.pendingRows = g.pendingRows || 0;
     if (g.pendingRows > 0) {
-      const plines = require('./pending').draw(this.statusState(), cols, g.pendingRows);
-      for (let i = 0; i < g.pendingRows; i++) buf.push(L(at(row++, 1) + views.clip(plines[i] || '', cols)));
+      const plines = require('./pending').draw(this.statusState(), box.width, g.pendingRows);
+      for (let i = 0; i < g.pendingRows; i++) buf.push(L(at(row++, col0) + views.clip(plines[i] || '', box.width)));
     }
     // ---- WHAT IS RUNNING THAT YOU ARE NOT LOOKING AT --------------------
     //
@@ -542,8 +538,8 @@ class Screen {
     this.rowMap.jobsStart = row;
     this.rowMap.jobRows = g.jobRows || 0;
     if (g.jobRows > 0) {
-      const jlines = require('./jobsview').draw(this.statusState(), cols, g.jobRows);
-      for (let i = 0; i < g.jobRows; i++) buf.push(L(at(row++, 1) + views.clip(jlines[i] || '', cols)));
+      const jlines = require('./jobsview').draw(this.statusState(), box.width, g.jobRows);
+      for (let i = 0; i < g.jobRows; i++) buf.push(L(at(row++, col0) + views.clip(jlines[i] || '', box.width)));
     }
 
     // ---- INTERACTION PANEL (hidden / compact / expanded) ----
@@ -575,17 +571,25 @@ class Screen {
     this.rowMap.statusStart = row;
     this.rowMap.statusRows = g.statusRows;
     if (g.statusRows > 0) {
-      const strip = require('./status').statusStrip(this.statusState(), cols, g.statusRows);
-      for (let i = 0; i < g.statusRows; i++) buf.push(L(at(row++, 1) + views.clip(strip[i] || '', cols)));
+      const strip = require('./status').statusStrip(this.statusState(), box.width, g.statusRows);
+      for (let i = 0; i < g.statusRows; i++) buf.push(L(at(row++, col0) + views.clip(strip[i] || '', box.width)));
     }
 
     // ---- INPUT (fixed, LAST, always on the floor) ----
-    // When the exit confirmation is armed the top border carries the hint, so it
-    // is always visible beside the input without a modal or an extra row.
-    const inner = Math.max(4, cols - 4);
-    buf.push(L(at(row++, 1) + views.clip(this._inputTop(inner), cols)));
-    buf.push(...require('./inputbox').draw(this, { row, inner, cols, textRows: g.inputRows }));
-    row += g.inputRows - 1;
+    //
+    // A SUBTLE GREY GROUND ACROSS THE FULL WIDTH, and no border at all. The
+    // contrast is the region; see ui/inputbox.js for why that is enough and
+    // what the two rows of frame were costing.
+    //
+    // THE EXIT HINT GETS THE ONE ROW ABOVE IT while it is armed. It used to
+    // ride on the top border for free; with no border it is the single
+    // transient message important enough to spend a row on, because a person
+    // who has just pressed Ctrl+C is asking a question.
+    if (g.hintRows > 0) {
+      buf.push(L(at(row++, col0) + views.clip(P.warn(this.exitHint), box.width)));
+    }
+    buf.push(...require('./inputbox').draw(this, { row, cols: box.width, textRows: g.textRows, col: col0 }));
+    row += g.textRows;
 
     // ---- THE PANEL, DIRECTLY BELOW THE INPUT --------------------------------
     //
@@ -609,9 +613,17 @@ class Screen {
     this.rowMap.panelStart = row;
     this.rowMap.panelRows = g.panelRows;
     if (g.panelRows > 0 && this.panel && this.panel.visible) {
-      const plines = this.panel.render(cols, g.panelRows);
+      // ---- AND THE PANEL IS INSIDE THE FRAME TOO ---------------------------
+      //
+      // It used to be rendered at the full terminal width and drawn at column 1
+      // — so on a wide terminal the command menu was a box stretching wall to
+      // wall over a conversation that was not, which is the single thing that
+      // made the surface read as a TUI dashboard. It is the only region that may
+      // be NARROWER than the frame (see ui/panel.js `render`), never wider.
+      this.rowMap.panelCol = col0;
+      const plines = this.panel.render(box.width, g.panelRows);
       for (let i = 0; i < g.panelRows; i++) {
-        buf.push(L(at(row++, 1) + views.clip(plines[i] || '', cols)));
+        buf.push(L(at(row++, col0) + views.clip(plines[i] || '', box.width)));
       }
     }
 

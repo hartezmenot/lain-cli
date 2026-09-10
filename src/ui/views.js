@@ -132,137 +132,21 @@ function statusOf({ lifecycle, busy = false, awaitingUser = false, providerStatu
  */
 const { livePlan, progressOf, bar, progressCompact } = require('./progress');
 
-/**
- * THE TASK BANNER — pinned above the activity feed so it never scrolls away.
- *
- * This is where the answer to "what am I doing, and how far along?" lives. The
- * objective leads; the progress block sits DIRECTLY beneath it — current step,
- * a real bar, and a percentage that comes from COMPLETED work (progressOf), not
- * the active step index. With no plan there is no progress block: an honest
- * "here is the task" rather than a fabricated bar.
- *
- * `compact` collapses the whole thing to two lines (objective + one progress
- * line) for narrow or short terminals, where the design is explicit that the
- * progress indicator is the last thing to sacrifice.
- */
-/**
- * THE PINNED OBJECTIVE, when the objective is a four-hundred-line paste.
- *
- * ------------------------------------------------------------------------
- * SEEN ON SCREEN, and it is the pinned half of the wall-of-text failure:
- *
- *     TASK  STEER — RENDERING AUDIT # PHASE 0 — AUDIT BEFORE IMPLEMENTATION
- *           Before modifying code: 1. Inspect the existing activity/motion…
- *
- * Every newline collapsed to a space, headings and a numbered list run into one
- * another, and the row that is supposed to say WHAT IS BEING WORKED ON says
- * nothing recognisable at all. The feed had already solved this — a paste is
- * drawn as `[pasted text #1]` (ui/pasted.js) — and the banner was flattening
- * the identical bytes into prose two rows above it.
- *
- * SAME VOCABULARY AS THE FEED, deliberately. The marker names it, and the first
- * line of the paste follows as a title so the row still identifies WHICH task:
- *
- *     TASK  [pasted text #1]  STEER — RENDERING AUDIT
- *
- * A typed objective is untouched — it is a sentence, and a sentence flattened to
- * one row is exactly what this row is for.
- */
-function objectiveLine(objective) {
-  const s = String(objective == null ? '' : objective);
-  const pasted = require('./pasted');
-  const lines = s.split('\n').filter((l) => l.trim());
-  // ---- ONE ROW CANNOT SHOW TWO LINES, WHATEVER THEIR LENGTH -------------
-  //
-  // This asked `isPaste`, which is the FEED's question and rightly a bar about
-  // BULK: two hundred characters before a message counts as an attachment. The
-  // banner's question is different and it was borrowing the wrong one. Seen on
-  // screen, from a ten-line instruction that came to a hundred and seventy
-  // characters — under the bar, so "not a paste", so flattened:
-  //
-  //     TASK  STEER — ACCEPTANCE 1. one 2. two 3. three - alpha - beta A long…
-  //
-  // A heading, a numbered list and a bullet list run into one another in the
-  // one row on screen that is supposed to say WHAT IS BEING WORKED ON. The
-  // structure is short and it is still structure.
-  //
-  // So the banner asks its OWN question, and the question is NOT "is this more
-  // than one line". That was the first attempt and it was too broad: three
-  // lines composed with Ctrl+J — "line one / line two / line three" — flatten
-  // to a perfectly readable row, and showing only the first would hide two
-  // thirds of what was actually sent.
-  //
-  // What cannot survive flattening is STRUCTURE. A heading, a numbered list and
-  // a bullet list run together are gibberish at any length; three sentences run
-  // together are a sentence. `looksMarked` is the existing owner of exactly
-  // that question — the same one ui/markdown.js uses to decide whether a
-  // message needs rendering at all — so this cannot drift away from what the
-  // renderer thinks structure is.
-  //
-  // `isPaste` still decides whether the MARKER is added, because that is
-  // genuinely about bulk and has to agree with the feed's numbering.
-  const marker = pasted.isPaste(s) ? `${pasted.label(s)}  ` : '';
-  const structured = lines.length > 1 && require('./markdown').looksMarked(s);
-  if (!structured) return marker + s.replace(/\s+/g, ' ');
-  return marker + lines[0].trim().replace(/\s+/g, ' ');
-}
-
-function taskBanner({ session, width = 80, compact = false }) {
-  const task = session && session.task;
-  if (!task) return [];
-  const objective = clip(objectiveLine(task.objective), width);
-  const p = progressOf(livePlan(session));
-
-  // THREE DIFFERENT QUESTIONS, never collapsed into one indicator:
-  //   STEP     where in the plan the work is
-  //   PROGRESS how much is FINISHED (0% while step 1 is merely started)
-  //   STATUS   what is happening this second
-  // A single "40% · working" bar answers none of them reliably.
-  if (compact) {
-    if (!p.known) return [P.key(objective)];
-    // ONE ROW WHEN ONE ROW WILL DO. At 40x9 the whole workspace is three rows,
-    // and spending two of them on "what" and "how far" left nothing for either
-    // the feed or the live strip. Objective and progress share a row whenever
-    // the objective still has room to be recognisable; only when it does not do
-    // they separate again.
-    // The BAR is the part that can shrink without losing meaning; the step
-    // numbers and the percentage cannot. Asking for a narrower progress block
-    // buys the objective the room to stay on the same row.
-    const prog = progressCompact(p, Math.floor(width * 0.45));
-    const room = width - prog.length - 2;
-    if (room >= 12) return [P.key(clip(objective, room)) + '  ' + prog];
-    return [P.key(objective), prog];
-  }
-
-  // TWO ROWS, NOT NINE.
-  //
-  // This was `TASK` / objective / blank / `STEP 2 / 5` / a 40-cell bar /
-  // `20% complete` / blank / `STATUS` / the live row — nine rows of chrome for
-  // three facts. Measured on an 80x24 terminal that leaves five rows for the
-  // activity feed, so the work itself was pushed off the screen by the report
-  // of how the work was going.
-  //
-  // The three questions are still answered separately — where in the plan
-  // (STEP), how much is FINISHED (the bar and the percentage), and what is
-  // happening this second (the live row). They are simply laid out across the
-  // width the terminal already has instead of down the height it does not.
-  const lines = [P.meta('TASK  ') + P.key(clip(objective, width - 6))];
-  if (p.known) {
-    const head = `STEP ${p.current}/${p.total}`;
-    const tail = `${p.percent}%`;
-    // The bar takes what is left of the row. It is the part that can shrink
-    // without losing its meaning; the numbers cannot.
-    const room = width - head.length - tail.length - 4;
-    lines.push(clip(room >= 8
-      ? `${head}  ${bar(p.percent, Math.min(32, room))}  ${tail}`
-      : `${head}  ${tail}`, width));
-  }
-  // NO LIVE ROW HERE ANY MORE. What is happening this second now lives in the
-  // status strip directly above the INPUT (ui/status.js) — at the bottom of the
-  // screen where the user is already looking, instead of at the top where it
-  // spent the rows the work itself needs.
-  return lines;
-}
+// ------------------------------------------------------------------------
+// THE TASK BANNER AND `objectiveLine` STOOD HERE, AND ARE GONE.
+//
+// The banner pinned the objective and a `STEP 3/5 ████░░ 60%` bar above the
+// feed on two of the nine panes, permanently, and it was the reason
+// ui/conversation.js suppressed the first user message. Against §11's test it
+// answers none of the six questions the permanent surface exists to answer:
+// the objective IS the first thing the user said, so the conversation says it,
+// and the progress bar is what `/plan` is for.
+//
+// `progressOf`, `livePlan`, `bar` and `progressCompact` are UNTOUCHED and
+// still re-exported: `/copy`, `/plan`, ui/briefview.js and ui/projection.js
+// all read them, and removing a measurement because one of its four renderings
+// went away is how a feature disappears by accident.
+// ------------------------------------------------------------------------
 
 // The launch surfaces — splash, pipe banner, empty-state pane — live in
 // launch.js: they describe the PROGRAM rather than the work, and keeping them
@@ -279,14 +163,21 @@ const T = require('./text');
 const clip = T.clip;
 const pad = T.pad;
 
-/** `1m04s` / `820ms`. Durations are facts the program already has. */
-function dur(ms) {
-  if (ms == null || !isFinite(ms)) return '';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
-}
+/**
+ * ------------------------------------------------------------------------
+ * `dur(ms)` STOOD HERE — `1m04s` / `820ms` — and it is gone.
+ *
+ * It was the FOURTH copy of duration formatting in this tree and the only one
+ * nothing called: not one site in `src/`, not one in `tests/`. It was defined,
+ * exported, and dead.
+ *
+ * The other three were real and are now one. The live row above the caret, `/bg`
+ * and the background region all read `HH:MM:SS` from ui/workclock.js `hhmmss`,
+ * so a person comparing how long two things have taken does not have to convert
+ * between formats to do it. A fourth spelling sitting here exported was an
+ * invitation to make that four again.
+ * ------------------------------------------------------------------------
+ */
 
 // Path shortening and the project name are width maths too — one owner, in
 // text.js, so the header, the launch screen and the title all agree.
@@ -298,63 +189,123 @@ const center = T.center;
 // ------------------------------------------------------------------ header --
 
 /**
- * The header answers, at a glance: where am I, what is running, through what,
- * and how far along. Compact by design — a large logo buys nothing and costs
- * the rows the actual work needs.
+ * THE HEADER — one row, four facts, low prominence.
+ *
+ *     LAIN   lain-v2   claude-opus-5                        42k/128k
+ *
+ * ------------------------------------------------------------------------
+ * WHAT IT ANSWERS, AND WHY THERE IS NOTHING ELSE ON IT.
+ *
+ * §11's test for anything permanently on screen is whether it answers one of
+ * six questions. This row answers three of them — where am I, which model is
+ * active, how much context is being used — and nothing here answers any of the
+ * other three, so nothing else belongs.
+ *
+ * WHAT WAS REMOVED, AND WHERE IT WENT:
+ *
+ *   the `┌─ L A I N ─┐` frame   two rows of border round two rows of text.
+ *                               Chrome. Gone; the wordmark is now a word.
+ *   the ROUTE                   `omniroute → openrouter` sat here permanently.
+ *                               Routing is LAIN choosing correctly, not LAIN
+ *                               announcing its classifier: `/status` and
+ *                               `/harness` still say it, on demand. §26.
+ *   the EFFORT                  `effort high` — a setting, not a state.
+ *                               `/effort` says it and sets it.
+ *   the STATUS WORD and DOT     `○ READY` / `● WORKING`. What LAIN is doing is
+ *                               the live row above the input, which says it in
+ *                               more detail and one row from the caret. Two
+ *                               owners for one fact is how they come to
+ *                               disagree — and they did, at opposite ends of
+ *                               the screen.
+ *   the OBJECTIVE               it is the first thing the user said, so the
+ *                               conversation says it.
+ *
+ * THE PATH RIDES BESIDE THE NAME only when there is genuine room, and it is the
+ * first thing dropped. `lain-v2` is what a person calls this project;
+ * `~/Documents/lain-v2` is the same fact spelled longer.
+ *
+ * NOTHING HERE IS BRIGHTER THAN THE CONVERSATION (§30). The model id is the
+ * only field with colour, because it is the one a person checks before sending
+ * anything; everything else is dim.
  */
-function header({ cwd, session, model, provider, connection, effort, plan, status, width = 80, compact = false, stats = null, framed = false }) {
-  const w = Math.max(28, width);
-  const lines = [];
+function header({ cwd, model, provider, connection, output = null, width = 80 }) {
+  const w = Math.max(20, width);
 
-  // Row 1 — identity and place. The project NAME leads, because that is what
-  // the user calls it; the full path follows only if there is room for it.
-  // Inside a frame the box is already labelled `L A I N`, so repeating the
-  // wordmark here would spend a row saying it twice.
-  const name = projectName(cwd);
-  const brand = framed ? name : `LAIN  ▸ ${name}`;
-  const room = w - brand.length - 2;
-  const right = room >= 12 ? shortPath(cwd || '', room) : '';
-  // The project NAME is the thing to find; the path beside it is context.
-  lines.push(P.key(clip(brand, w))
-    + (right ? ' '.repeat(Math.max(1, w - brand.length - right.length)) + P.meta(right) : ''));
-
-  // Row 2 — the route, as SEPARATE fields. Collapsing model/provider/connection
-  // into one string is what makes "is it down or am I logged out?" unanswerable.
-  const dot = status === STATE.WORKING ? '●' : status === STATE.READY ? '○' : '◆';
-  const statusText = `${dot} ${status}`;
-  // THE ROUTE INCLUDES THE DOWNSTREAM, which was hiding inside the model id
-  // as a prefix and reading as part of its name. See ui/phrasing.js routeOf.
+  // THE MODEL, WITHOUT ITS ROUTE. `routeOf` splits the downstream out of the
+  // model id — that split is why the route was ever a separate field — and
+  // here only the model half is kept.
   const id = require('./phrasing').routeOf(model, provider, connection);
-  const route = id.route;
-  const shown = id.model;
-  const plainLeft = [shown || 'no model', route, `effort ${effort || 'auto'}`].filter(Boolean).join('   ');
-  const room2 = Math.max(10, w - statusText.length - 2);
-  // MODEL leads and is the only coloured field: it is the one a person checks
-  // before sending anything. The route and the effort are qualifiers.
-  const left = plainLeft.length <= room2
-    ? P.info(shown || 'no model') + P.meta((route ? '   ' + route : '') + `   effort ${effort || 'auto'}`)
-    : P.info(clip(plainLeft, room2));
-  lines.push(left + ' '.repeat(Math.max(1, w - Math.min(plainLeft.length, room2) - statusText.length))
-    + paintStatus(status, statusText));
+  const name = projectName(cwd);
+  const usage = outputLabel(output);
 
-  if (compact) return lines;
+  // Assembled as PARTS with a drop order, the same way the live row sheds
+  // detail: at 60 columns something has to go, and which something is a
+  // decision rather than an accident of clipping from the right.
+  // ---- FOUR FIELDS, FOUR WEIGHTS ----------------------------------------
+  //
+  // They were bold-white, dim and cyan, with the count dim — close, and the
+  // project was the weakest thing on a row where it is the second most useful.
+  //
+  //     LAIN      bold cyan    the identity, and the only accent that is a name
+  //     project   plain        where you are: the primary foreground, read often
+  //     model     cyan         what you are talking to, and what it costs
+  //     tokens    dim          the figure that moves, and metadata while it does
+  //
+  // Nothing here is at equal weight, which is the whole of §12.
+  const left = [P.head('LAIN'), P.plain(name), P.info(id.model || 'no model')];
+  const plainLeft = ['LAIN', name, id.model || 'no model'];
+  let leftText = plainLeft.join('   ');
+  let leftPaint = left.join(P.meta('   '));
+  if (T.width(leftText) > w - (usage ? usage.length + 3 : 0)) {
+    // The project name goes before the model does: you can be in the wrong
+    // directory and recover, but sending a paragraph to the wrong model costs
+    // money and a turn.
+    leftText = [plainLeft[0], plainLeft[2]].join('   ');
+    leftPaint = [left[0], left[2]].join(P.meta('   '));
+  }
+  const gap = Math.max(1, w - T.width(leftText) - (usage ? usage.length : 0));
+  return [clip(leftPaint + ' '.repeat(gap) + (usage ? P.meta(usage) : ''), w)];
+}
 
-  // THERE IS NO ROW 3.
-  //
-  // It carried the objective, or the plan's percentage — and BOTH are already
-  // pinned by the TASK banner two rows further down, so a 24-row terminal spent
-  // two of its rows printing the same sentence twice:
-  //
-  //     │ the dashboard status has been stale since Aug 14      ← header row 3
-  //     ┌─[1 context] 2 plan  3 diff …
-  //     TASK  the dashboard status has been stale since Aug 14  ← the banner
-  //
-  // Chrome repeating itself above a conversation that has no room left is the
-  // whole complaint. The header answers WHERE AM I and WHAT AM I TALKING TO;
-  // the banner answers WHAT AM I DOING and HOW FAR; the live strip above the
-  // INPUT answers WHAT IS HAPPENING RIGHT NOW. One question, one owner, one
-  // row — and this row goes back to the conversation.
-  return lines;
+/**
+ * `624` — THE OUTPUT TOKENS OF THE RESPONSE IN FRONT OF YOU.
+ *
+ * ------------------------------------------------------------------------
+ * ONE NUMBER, AND IT IS THE ONE THAT MOVES.
+ *
+ * A context figure (`42k/128k`) stood here first. It is a genuinely useful
+ * number and it is the WRONG number for a permanent row: it barely changes
+ * within a turn, it is large enough to read as noise, and the question it
+ * answers — "am I near a compaction" — is asked occasionally, which is what
+ * `/token` is for.
+ *
+ * What a person watching a response wants is proof it is still coming, and how
+ * much of it there has been. That number climbs while the model writes and
+ * stops when it stops.
+ *
+ * ------------------------------------------------------------------------
+ * `~` MEANS ESTIMATED, AND IT IS NOT DECORATION.
+ *
+ * No provider states output tokens until the response ends, so while one is
+ * streaming this is characters over `CHARS_PER_TOKEN` — see ui/index.js
+ * `noteOutputChars`. When the receipt lands, the same figure becomes the
+ * provider's own count and the tilde goes. A screen that showed both the same
+ * way would be reporting a guess as a measurement, which is the exact failure
+ * ui/tokenview.js exists to prevent.
+ *
+ * `0` at the start of a session is a fact, not a placeholder: nothing has been
+ * produced yet.
+ */
+/**
+ * THE HORIZONTAL FRAME lives in ui/frame.js — see its header for why it is its own
+ * module. Re-exported here so every caller keeps one import.
+ */
+const { contentBounds, proseWidth, GUTTER_MAX, PROSE_SOFT } = require('./frame');
+
+function outputLabel(output) {
+  if (!output) return '0';
+  const n = Math.max(0, Math.round(Number(output.tokens) || 0));
+  return output.measured ? String(n) : `~${n}`;
 }
 
 // --------------------------------------------------------------- workspace --
@@ -389,7 +340,7 @@ const PLAN_DONE_ROWS = 8;
  * steps kept visible as evidence. Expansion is DISPLAY ONLY: opening a step
  * cannot alter plan state, which is why a huge step can never corrupt the plan.
  */
-function planView({ plan, expanded = new Set(), width = 80, cursor = -1, evidence = null }) {
+function planView({ plan, expanded = new Set(), width = 80, cursor = -1, evidence = null, detail = false }) {
   if (!plan || !plan.steps.length) {
     return [
       '',
@@ -402,7 +353,17 @@ function planView({ plan, expanded = new Set(), width = 80, cursor = -1, evidenc
   }
   const lines = [];
   const p = progressOf(plan);
-  lines.push(P.head('PLAN'));
+  // ---- THE COUNT RIDES ON THE HEADING ---------------------------------
+  //
+  // `1/2 done` is the plainest of the three ways this view states progress —
+  // plainer than `STEP 2/2`, which is a POSITION, and plainer than `50%`,
+  // which is the same fact needing arithmetic. It was the heading of the old
+  // `/plan show` (`Plan  1/2 done`) and the pane never had it; when the
+  // command started rendering the pane, it was the one thing that would have
+  // been lost in the move.
+  const done = plan.steps.filter((s) => s.status === 'done').length;
+  const total = plan.steps.filter((s) => s.status !== 'dropped').length;
+  lines.push(P.head('PLAN') + P.meta(`  ${done}/${total} done`));
   lines.push('');
 
   const visible = plan.steps.filter((s) => s.status !== 'dropped');
@@ -410,13 +371,28 @@ function planView({ plan, expanded = new Set(), width = 80, cursor = -1, evidenc
   const shown = new Set(shownDone.map((s) => s.n));
   const olderDone = visible.filter((s) => s.status === 'done').length - shownDone.length;
   if (olderDone > 0) {
-    lines.push(`  ✓ ${olderDone} earlier completed step(s) — expand a recent step for its note`);
+    lines.push(`  ✓ ${olderDone} earlier completed step(s)`);
     lines.push('');
   }
   for (const s of visible) {
     if (s.status === 'done' && !shown.has(s.n)) continue;
     if (s.status === 'dropped') continue;
-    const open = expanded.has(s.n);
+    // ---- WHAT `detail` IS FOR, AND WHY `/plan` PASSES IT ----------------
+    //
+    // Expansion used to be a GESTURE: the PLAN pane had a step picker, Enter
+    // opened one, and the Why / Files / Status underneath were reachable that
+    // way and only that way. There is no pane and no picker, so `expanded` is
+    // always empty from every real caller — which would have made every one of
+    // those rows dead code and silently dropped a completed step's NOTE, the
+    // evidence of what was actually done.
+    //
+    // `/plan` is a document you read rather than a list you navigate, so it
+    // asks for the detail WHERE THERE IS ANY: a step that carries a note or
+    // files is opened, a bare `todo` stays one line. Nothing is hidden behind a
+    // keystroke that no longer exists, and a long plan of untouched steps is
+    // still a short list.
+    const open = expanded.has(s.n)
+      || (detail && (Boolean(s.note) || (Array.isArray(s.files) && s.files.length)));
     const sel = s.n === cursor ? '❯' : ' ';
     // Just the mark and the text. Step numbers, carets, statuses and right-hand
     // glyph columns are bookkeeping — the shape of the list already says where
@@ -481,7 +457,7 @@ const { MARK, phrase, verbOf } = require('./phrasing');
 const {
   pushAction, pushModel, pushUser, pushExternal, pushMcp, pushNote, renderFeed, compactRuns, spokenCount,
 } = require('./feed');
-const { inputViewport, pasteSummary, lineCount, wrapInput, caretRow } = require('./viewport');
+const { inputViewport, lineCount, wrapInput, caretRow } = require('./viewport');
 
 /** Soft-wrap a sentence to a width, for the few places prose is shown. */
 function wrap(text, width) {
@@ -526,14 +502,21 @@ function wrapUnder(lead, value, width) {
 /**
  * Derived entirely from task/evidence/checkpoint state — never narration.
  *
- * `cursor` picks which of the two choices Up/Down has landed on (0 diff,
- * 1 keep working) — see ui/keys.js's `if (this.screen.completion)` branch,
- * which is the only thing that ever changes it. The two used to be `[D]`/`[R]`
- * printable letters that a screen showing plain text could never actually
- * make live (see this module's header) — replaced with the same arrow+Enter
- * navigation the STILL GOING ROUND advisory uses, for the same reason.
+ * ------------------------------------------------------------------------
+ * IT TOOK A `cursor` UNTIL NOW, and the parameter is gone with what it chose.
+ *
+ * The report offered two rows — `❯ diff` and `❯ keep working` — with Up and Down
+ * moving the highlight, and before that they were `[D]` and `[R]`: printable
+ * letters a screen showing plain text could never make live, which is the
+ * failure the arrow navigation replaced.
+ *
+ * With ONE surface there is nowhere for `diff` to go, so both rows meant "put
+ * this away" and the choice was not a choice. The report names `/changes` now —
+ * a command that exists, typed when somebody wants it — and every key dismisses
+ * the report (ui/keys.js). A menu row is something you have to deal with before
+ * you can carry on; a named command is not.
  */
-function completion({ session, checkpoints, cwd, verification = [], width = 80, cursor = 0 }) {
+function completion({ session, checkpoints, cwd, verification = [], width = 80 }) {
   const lines = ['✓ TASK COMPLETE', ''];
   const obj = session && session.task ? session.task.objective.replace(/\s+/g, ' ') : '';
   if (obj) { lines.push(clip(obj, width)); lines.push(''); }
@@ -580,42 +563,31 @@ function completion({ session, checkpoints, cwd, verification = [], width = 80, 
     lines.push(`  ${l.evidence ? l.evidence.toolCalls || 0 : 0} tool calls · ${l.evidence ? (l.evidence.filesChanged || []).length || l.evidence.filesChanged.size || 0 : 0} files changed`);
     lines.push('');
   }
-  // Every key named here is handled in ui/index.js. Advertising one that
-  // does nothing is worse than not offering it.
+  // ---- ONE WAY OUT, BECAUSE THERE IS ONE SURFACE ------------------------
+  //
+  // This offered a CHOICE — `❯ diff` or `❯ keep working` — and the first of
+  // them navigated to a pane. With one surface there is nowhere to navigate
+  // to, so the choice is not a choice: dismissing the report is all either
+  // branch could mean, and what changed is `/changes` away.
+  //
+  // Named rather than offered as a highlighted row, because a command is
+  // something you type when you want it and a menu row is something you have
+  // to dispose of before you can carry on.
   lines.push('');
-  lines.push(`${cursor === 0 ? '❯ ' : '  '}diff — see what changed`);
-  lines.push(`${cursor === 1 ? '❯ ' : '  '}keep working — type to carry on, or /new to start something else`);
-  lines.push('');
-  lines.push('↑↓ choose · Enter select · Tab panes · Esc close');
+  lines.push(P.meta('/changes — what changed · /verify — prove it · Esc — carry on'));
   return lines;
 }
 
-/**
- * THE VIEW SELECTOR, drawn as the workspace's own RULE.
- *
- * `┌─ [1 context] 2 plan  3 diff … ─── ↑ more ─┐`. It labels the region and
- * selects within it at the same time, which is what keeps the boundary between
- * "what LAIN is doing" and "where I type" visible without spending a second row
- * on a border.
- *
- * Only the ACTIVE view is named in brackets and coloured; the others go dim.
- * Five equal labelled boxes read as five competing panels, which is exactly the
- * dashboard look the workspace is meant to avoid.
- *
- * Lives here rather than on the Screen because it is a pure function of the
- * active view, a width and a hint — which is this file's whole job — and
- * because layout.js is at the god-object guard.
- */
-function tabsLine(view, width, scroll = null) {
-  const names = require('./tabs').VIEWS;
-  const dots = names.map((n, k) => (n === view
-    ? P.key(P.info(`[${k + 1} ${n}]`))
-    : P.meta(` ${k + 1} ${n} `))).join('');
-  const right = scroll ? P.meta(` ${scroll} `) : '';
-  const room = Math.max(0, width - 2 - T.width(right));
-  const left = clip('─' + dots, room);
-  return '┌' + left + '─'.repeat(Math.max(0, room - T.width(left))) + right + '┐';
-}
+// ------------------------------------------------------------------------
+// `tabsLine` STOOD HERE — the numbered strip `[1 activity] 2 context 3 plan…`.
+//
+// It was the visible half of the pane machinery: nine labels, a bracketed
+// active one, and a right-hand slot carrying the scroll hint. The labels went
+// with the panes. The scroll hint did not — it is the one thing that strip
+// said which no other region could, because it is NEWS about content the user
+// has not seen — so it moved to the rule under the header (ui/layout.js
+// `separator`), which is the boundary of the region that content is in.
+// ------------------------------------------------------------------------
 
 /**
  * Which of the three viewport states is true.
@@ -650,11 +622,12 @@ function scrollHint(lines, bodyRows, { stickToBottom, scroll, anchorSpoken }) {
 }
 
 module.exports = {
-  tabsLine, viewportState, scrollHint,
+  viewportState, scrollHint,
   MARK, phrase, verbOf,
-  STATE, statusOf, progressOf, livePlan, bar, progressCompact, clip, pad, dur, shortPath, projectName,
-  header, activity, taskBanner, planView, completion, phrase, center, paintStatus,
-  inputViewport, pasteSummary, lineCount, wrapInput, caretRow, renderFeed, wrap, MARK,
+  STATE, statusOf, progressOf, livePlan, bar, progressCompact, clip, pad, shortPath, projectName,
+  contentBounds, proseWidth, GUTTER_MAX, PROSE_SOFT,
+  header, activity, planView, completion, phrase, center, paintStatus,
+  inputViewport, lineCount, wrapInput, caretRow, renderFeed, wrap, MARK,
   // owned by launch.js — the surfaces shown before any work exists
   welcome: launch.welcome,
   splashLines: launch.splashLines,

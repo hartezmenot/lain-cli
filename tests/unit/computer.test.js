@@ -10,14 +10,20 @@
  *
  * So what is pinned here is OWNERSHIP, not plumbing:
  *
- *   · the vocabulary is LAIN's — `click`, never `input.mouse.click`
+ *   · the vocabulary is LAIN's — `click`, never `mouse.click`
  *   · the aim, the order and the refusal are LAIN's
  *   · a transport performs the syscall and decides nothing
- *   · two transports are interchangeable, and one that cannot do something
- *     says so rather than having something similar substituted
+ *   · a transport that cannot do something says so rather than having
+ *     something similar substituted
+ *
+ * The desktop bridge is the one transport now (the Probe transport was removed
+ * from LAIN CLI with the Probe integration in 2026-09), so "interchangeable" is
+ * proven here with one carrier and kept honest by the dialect table: the day a
+ * transport that can verify the foreground reappears, computer.js's FOCUS
+ * branch becomes live again without being rewritten.
  *
  * A DOUBLE PROVES NONE OF IT ARRIVED ANYWHERE. Delivery is decided by a target
- * that logs what it received — live/wininput.test.js and live/mcp-input.test.js.
+ * that logs what it received — see live/wininput.test.js.
  */
 
 const assert = require('assert');
@@ -27,59 +33,35 @@ const computer = require('../../src/computer');
 const cap = require('../../src/capability');
 const tool = require('../../src/tools/computer');
 
-/** A Probe double that records the FOREIGN op names LAIN chose to send. */
-function fakeProbe({ focus = true, fails = false } = {}) {
+/** A desktop-bridge double that records the FOREIGN op names LAIN chose to send. */
+function fakeBridge({ focus = true, fails = false, deny = null } = {}) {
   const calls = [];
-  return {
-    state: 'CONNECTED',
-    calls,
-    ops() { return calls.map((c) => c.op); },
-    async call(op, params = {}) {
-      calls.push({ op, params });
-      if (op === 'permission.state') {
-        return { ok: true, result: { capabilities: {
-          'keyboard.press': { granted: true }, 'screen.capture': { granted: true },
-          'mouse.click': { granted: true }, 'mouse.move': { granted: true },
-        } } };
-      }
-      if (op === 'window.focus') {
-        return { ok: true, result: { focused: focus, title: params.window, note: focus ? null : 'refused' } };
-      }
-      if (fails) return { ok: false, error: 'the far side said no' };
-      if (op === 'screen.capture') return { ok: true, result: { file: 'shot.png', width: 1920, height: 1080 } };
-      if (op === 'vision.ocr') return { ok: true, result: { text: 'HEALTH 100' } };
-      if (op === 'window.list') return { ok: true, result: { windows: [{ title: 'GAME' }] } };
-      return { ok: true, result: { ok: true } };
-    },
-  };
-}
-
-/** A desktop bridge double, in the OTHER dialect. */
-function fakeBridge() {
-  const calls = [];
-  return {
-    calls,
-    app: {
-      desktop: () => ({
-        bridge: {
-          calls,
-          async call(op, params = {}) {
-            calls.push({ op, params });
-            if (op === 'window.focus') return { ok: true, result: { focused: true, title: params.window } };
-            if (op === 'screen.capture') return { ok: true, result: { file: 'b.png' } };
-            return { ok: true, result: { ok: true } };
-          },
+  const app = {
+    desktop: () => ({
+      bridge: {
+        calls,
+        async call(op, params = {}) {
+          calls.push({ op, params });
+          if (deny && op === deny) return { ok: false, denied: true, capability: deny, error: 'refused' };
+          if (fails) return { ok: false, error: 'the far side said no' };
+          if (op === 'window.focus') {
+            return { ok: true, result: { focused: focus, title: params.window, note: focus ? null : 'refused' } };
+          }
+          if (op === 'screen.capture') return { ok: true, result: { file: 'b.png', width: 1920, height: 1080 } };
+          if (op === 'window.list') return { ok: true, result: { windows: [{ title: 'GAME' }] } };
+          return { ok: true, result: { ok: true } };
         },
-      }),
-    },
+      },
+    }),
   };
+  return { app, calls };
 }
 
 module.exports = async function () {
   // ------------------------------------------------------- THE VOCABULARY --
 
   await test('OWNERSHIP: the model names what it WANTS, never a foreign op string', () => {
-    // `click`, not `input.mouse.click`. The foreign spelling exists in exactly
+    // `click`, not `mouse.click`. The foreign spelling exists in exactly
     // one table and nothing above it ever sees one.
     for (const name of computer.NAMES) {
       assert.ok(!name.includes('.'), `${name} is a foreign operation name leaking into LAIN's vocabulary`);
@@ -88,16 +70,14 @@ module.exports = async function () {
       ['windows', 'focus', 'screenshot', 'ocr', 'move', 'click', 'type', 'key', 'hold']);
   });
 
-  await test('OWNERSHIP: LAIN translates to whichever dialect the transport speaks', async () => {
-    const probe = fakeProbe();
-    const r = await computer.perform({ _probe: probe }, 'screenshot', {});
-    assert.strictEqual(r.stage, cap.STAGE.SUCCEEDED);
-    assert.ok(probe.ops().includes('screen.capture'), 'the Probe dialect');
-
+  await test('OWNERSHIP: LAIN translates to the dialect the transport speaks', async () => {
     const b = fakeBridge();
-    const r2 = await computer.perform(b.app, 'click', { x: 10, y: 20 });
-    assert.strictEqual(r2.transport, 'desktop');
-    assert.ok(b.calls.some((c) => c.op === 'mouse.click'), 'the bridge dialect, from the same request');
+    const shot = await computer.perform(b.app, 'screenshot', {});
+    assert.strictEqual(shot.stage, cap.STAGE.SUCCEEDED);
+    assert.ok(b.calls.some((c) => c.op === 'screen.capture'), 'the bridge dialect');
+    const click = await computer.perform(b.app, 'click', { x: 10, y: 20 });
+    assert.strictEqual(click.transport, 'desktop');
+    assert.ok(b.calls.some((c) => c.op === 'mouse.click'), 'one vocabulary, translated at the boundary');
   });
 
   await test('OWNERSHIP: a transport that CANNOT do something says so, not something similar', async () => {
@@ -116,15 +96,6 @@ module.exports = async function () {
     assert.match(r.why, /nothing is connected/);
   });
 
-  await test('OWNERSHIP: the Probe is preferred when both are connected', async () => {
-    const probe = fakeProbe();
-    const b = fakeBridge();
-    const app = { _probe: probe, desktop: b.app.desktop };
-    const r = await computer.perform(app, 'screenshot', {});
-    assert.strictEqual(r.transport, 'probe', 'it can do strictly more — OCR, and the hold pair');
-    assert.strictEqual(b.calls.length, 0);
-  });
-
   // ------------------------------------------------ AIM, AND WHAT IT MEANS --
 
   await test('AIM: a keystroke is FOCUS-aimed and a click is SCREEN-aimed', () => {
@@ -139,42 +110,27 @@ module.exports = async function () {
   });
 
   await test('AIM: typing without a window is refused before anything is attempted', async () => {
-    const probe = fakeProbe();
-    const r = await tool.tools.computer.run(
-      { op: 'type', text: 'hello' }, { app: { _probe: probe } });
+    const b = fakeBridge();
+    const r = await tool.tools.computer.run({ op: 'type', text: 'hello' }, { app: b.app });
     assert.strictEqual(r.isError, true);
     assert.match(r.output, /NOTHING WAS SENT/);
-    assert.strictEqual(probe.calls.length, 0, 'not even a permission read');
+    assert.strictEqual(b.calls.length, 0, 'not even a permission read');
   });
 
   await test('AIM: clicking without coordinates is refused, and says why a window will not do', async () => {
-    const probe = fakeProbe();
-    const r = await tool.tools.computer.run({ op: 'click', window: 'GAME' }, { app: { _probe: probe } });
+    const b = fakeBridge();
+    const r = await tool.tools.computer.run({ op: 'click', window: 'GAME' }, { app: b.app });
     assert.strictEqual(r.isError, true);
     assert.match(r.output, /screen coordinate, not at a window/);
-    assert.strictEqual(probe.calls.length, 0);
-  });
-
-  await test('AIM: a keystroke goes through the ONE delivery sequence', async () => {
-    // permission → focus → verify again → inject. There must be exactly one of
-    // it, and this proves `computer` calls it rather than copying it.
-    const probe = fakeProbe();
-    await computer.perform({ _probe: probe }, 'key', { key: 'W' }, { window: 'GAME' });
-    assert.deepStrictEqual(probe.ops(), [
-      'permission.state', 'permission.state', 'window.focus', 'window.focus', 'input.keyboard.tap',
-    ]);
-  });
-
-  await test('AIM: the foreground refused means the key is not sent', async () => {
-    const probe = fakeProbe({ focus: false });
-    const r = await computer.perform({ _probe: probe }, 'key', { key: 'W' }, { window: 'GAME' });
-    assert.strictEqual(r.stage, cap.STAGE.FOCUS_FAILED);
-    assert.ok(!probe.ops().includes('input.keyboard.tap'));
+    assert.strictEqual(b.calls.length, 0);
   });
 
   await test('AIM: keyboard through the desktop bridge is REFUSED, with the reason', async () => {
     // The bridge cannot verify the foreground before each keystroke, and an
-    // unverified keystroke goes wherever the user is looking.
+    // unverified keystroke goes wherever the user is looking. The delivery
+    // sequence itself (permission → focus → verify → inject) has exactly one
+    // home, keyboarddelivery.js, which this proves nothing about — its own
+    // suite drives it with a transport double.
     const b = fakeBridge();
     const r = await computer.perform(b.app, 'key', { key: 'W' }, { window: 'GAME' });
     assert.strictEqual(r.stage, cap.STAGE.FAILED);
@@ -185,36 +141,34 @@ module.exports = async function () {
   // ------------------------------------------------------------- EVIDENCE --
 
   await test('EVIDENCE: a READ succeeds; an injected click is SENT_UNCONFIRMED', async () => {
-    const probe = fakeProbe();
-    const read = await computer.perform({ _probe: probe }, 'ocr', {});
+    const b = fakeBridge();
+    const read = await computer.perform(b.app, 'screenshot', {});
     assert.strictEqual(read.stage, cap.STAGE.SUCCEEDED,
-      'there is nothing unconfirmed about text that came back');
-    const click = await computer.perform({ _probe: probe }, 'click', { x: 5, y: 5 });
+      'there is nothing unconfirmed about a picture that came back');
+    const click = await computer.perform(b.app, 'click', { x: 5, y: 5 });
     assert.strictEqual(click.stage, cap.STAGE.SENT_UNCONFIRMED,
       'the OS accepted a coordinate; nothing observed which window was under it');
   });
 
   await test('EVIDENCE: focus reports the VERIFIED answer, not the API return', async () => {
-    const ok = await computer.perform({ _probe: fakeProbe({ focus: true }) }, 'focus', {}, { window: 'GAME' });
+    const ok = await computer.perform(fakeBridge({ focus: true }).app, 'focus', {}, { window: 'GAME' });
     assert.strictEqual(ok.stage, cap.STAGE.SUCCEEDED);
-    const no = await computer.perform({ _probe: fakeProbe({ focus: false }) }, 'focus', {}, { window: 'GAME' });
+    const no = await computer.perform(fakeBridge({ focus: false }).app, 'focus', {}, { window: 'GAME' });
     assert.strictEqual(no.stage, cap.STAGE.FOCUS_FAILED);
     assert.match(no.why, /did not put GAME in front/);
   });
 
   await test('EVIDENCE: the trail names every stage, and the transport is named too', async () => {
-    const r = await computer.perform({ _probe: fakeProbe() }, 'screenshot', {});
+    const b = fakeBridge();
+    const r = await computer.perform(b.app, 'screenshot', {});
     assert.deepStrictEqual(r.trail.map((t) => t.stage),
       [cap.STAGE.REQUESTED, cap.STAGE.EXECUTING, cap.STAGE.SUCCEEDED]);
-    assert.strictEqual(r.transport, 'probe', '"which bridge did this" is part of the evidence');
+    assert.strictEqual(r.transport, 'desktop', '"which bridge did this" is part of the evidence');
   });
 
   await test('EVIDENCE: a denial is final and says so', async () => {
-    const probe = fakeProbe();
-    probe.call = async (op) => (op === 'screen.capture'
-      ? { ok: false, denied: true, capability: 'screen.capture', error: 'refused' }
-      : { ok: true, result: {} });
-    const r = await computer.perform({ _probe: probe }, 'screenshot', {});
+    const b = fakeBridge({ deny: 'screen.capture' });
+    const r = await computer.perform(b.app, 'screenshot', {});
     assert.strictEqual(r.stage, cap.STAGE.REFUSED);
     assert.match(r.why, /Do not ask again/);
   });
@@ -232,12 +186,14 @@ module.exports = async function () {
     }
   });
 
-  await test('BOUNDARY: the raw probe tool keeps what is genuinely the Probe\'s', () => {
-    // Memory, breakpoints, disassembly and findings ARE an external instrument.
-    // Screen and input are how anyone uses a computer.
+  await test('BOUNDARY: the vocabulary is screen and input, and stays that way', () => {
+    // Memory, breakpoints, disassembly and findings belong to an external
+    // instrument, not to using the computer. (This was the boundary against the
+    // Probe's domain; the Probe is gone from LAIN CLI, and the rule keeps the
+    // vocabulary from growing into whatever external instrument comes next.)
     for (const op of ['memory.read', 'debug.attach', 'finding.save']) {
       assert.ok(!computer.NAMES.includes(op.split('.')[0]),
-        `${op} is the Probe's domain and must not be absorbed`);
+        `${op} is an external instrument's domain and must not be absorbed`);
     }
   });
 

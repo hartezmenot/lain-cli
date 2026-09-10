@@ -9,10 +9,10 @@
  * That is honest, and on its own it is a dead end: the one thing a person wants
  * at that moment is to LOOK, and there was no way to.
  *
- * So this opens it. In LAIN's OWN Chromium when one is running, because that is
- * the browser LAIN owns and the design says not to overload the user's session with
- * LAIN's automation. Otherwise the machine's default viewer, which is what a
- * person would have done by hand.
+ * So this opens it — in the machine's default viewer, which is what a person
+ * would have done by hand. (LAIN's own Chromium used to be opened first, to
+ * keep LAIN's windows out of the user's session; it went with the browser in
+ * 2026-09, and the default viewer is the only window left.)
  *
  * IT NEVER CLAIMS THE PICTURE WAS SEEN. Opening a window is not looking at one,
  * and the difference is the whole of the evidence discipline here: `visual_choice`
@@ -94,8 +94,9 @@ function esc(s) {
  * Open one image for a person to look at.
  *
  * @returns {{ok, how, file, page, why, facts}}
- *   `how` is 'lain-chromium' or 'default-viewer' — which window this is in
- *   matters, because one of them is LAIN's and one of them is the user's.
+ *   `how` is 'default-viewer' — the machine's own viewer, the same window any
+ *   other file on this machine opens in. (A 'lain-chromium' value was removed
+ *   with the browser in 2026-09.)
  */
 async function open(app, file) {
   const target = path.resolve(String(file || ''));
@@ -117,14 +118,11 @@ async function open(app, file) {
     return { ok: false, how: null, file: target, facts, why: `could not write the page: ${e.message}` };
   }
 
-  // LAIN'S OWN BROWSER FIRST. It is the one LAIN is allowed to drive, it has
-  // its own profile, and using it keeps LAIN's windows out of the user's
-  // session — which is the whole point of having it. See browser.js.
-  const browser = require('./browser').live();
-  if (browser) {
-    const r = await browser.open(`file:///${out.replace(/\\/g, '/')}`).catch((e) => ({ ok: false, error: e.message }));
-    if (r && r.ok !== false) return { ok: true, how: 'lain-chromium', file: target, page: out, facts };
-  }
+  // (This used to open in LAIN's own Chromium first — the browser LAIN was
+  // allowed to drive, keeping its windows out of the user's session. That
+  // browser was removed in 2026-09 per the browser-ownership ruling, and the
+  // machine's own viewer is the only path left, which is the same viewer any
+  // other file on this machine opens in.)
 
   try {
     if (process.platform === 'win32') {

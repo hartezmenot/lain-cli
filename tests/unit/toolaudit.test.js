@@ -115,9 +115,11 @@ module.exports = async function () {
   });
 
   await test('TOOLS: the ones a coding task always needs are always offered', () => {
-    // Some tools follow a live transport (probe, computer, browser) and are
-    // correctly absent. These are not those: a model with no way to read, edit,
-    // search or run is not a coding agent.
+    // Some tools follow a live transport and are correctly absent when it is not
+    // configured (computer — the MCP one; the probe and browser transports were
+    // removed in 2026-09, and are no longer exceptions to be found). These are
+    // not those: a model with no way to read, edit, search or run is not a
+    // coding agent.
     for (const name of [
       'read_file', 'write_file', 'edit_file', 'apply_patch',
       'grep', 'glob', 'symbols', 'list_dir',

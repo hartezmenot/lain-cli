@@ -27,7 +27,6 @@ const { test, tmpdir } = require('../helpers');
 const F = require('../../src/facts');
 const contracts = require('../../src/contracts');
 const clifacts = require('../../src/clifacts');
-const probefacts = require('../../src/probefacts');
 const datafacts = require('../../src/datafacts');
 const F2 = require('../../src/findings');
 
@@ -55,20 +54,20 @@ module.exports = async function () {
     // A fact cannot be UNKNOWN and confident, and cannot claim a value it did
     // not establish. Forcing the pair in the constructor means no discoverer
     // can produce that combination by accident.
-    const f = F.make({ area: F.AREA.PROBE, name: 'x', value: F.REPR.UNKNOWN, confidence: F2.CONFIDENCE.PROVEN });
+    const f = F.make({ area: F.AREA.CLI, name: 'x', value: F.REPR.UNKNOWN, confidence: F2.CONFIDENCE.PROVEN });
     assert.strictEqual(f.confidence, F2.CONFIDENCE.UNVERIFIED,
       'a confident UNKNOWN is a contradiction and must not be constructible');
   });
 
   await test('FACT: an unknown fact is rendered as loudly as a known one, and says why', () => {
-    const f = F.unknown({ area: F.AREA.PROBE, name: 'Offset representation', why: 'it belongs to the Probe' });
+    const f = F.unknown({ area: F.AREA.CLI, name: 'Offset representation', why: 'another process owns it' });
     const line = F.line(f);
     assert.match(line, /UNKNOWN/);
-    assert.match(line, /belongs to the Probe/, 'hiding the reason is how somebody guesses instead');
+    assert.match(line, /another process owns it/, 'hiding the reason is how somebody guesses instead');
   });
 
   await test('FACT: a long name is not welded to its value', () => {
-    const f = F.make({ area: F.AREA.PROBE, name: 'Target naming and authorization', value: 'x' });
+    const f = F.make({ area: F.AREA.CLI, name: 'Target naming and authorization', value: 'x' });
     assert.match(F.line(f), /authorization: x/, 'there must be a space between the label and the value');
   });
 
@@ -145,56 +144,6 @@ module.exports = async function () {
   await test('CONTRACT: findings report forward-slashed relative paths on every platform', () => {
     const p = byName(contracts.pathFacts(ROOT, ROOT), 'Paths reported by findings');
     assert.match(p.value, /forward slashes/);
-  });
-
-  // ------------------------------------------------------------ the Probe --
-
-  await test('PROBE: with no Probe connected the contract is UNKNOWN, not invented', () => {
-    // The Probe's source is not in this tree. Writing its parameter list down
-    // here is the drift defect probeskill.js already refuses.
-    const facts = probefacts.discover(ROOT);
-    const contract = byName(facts, 'Probe contract');
-    if (!contract) return;                       // a Probe is connected in this process
-    assert.strictEqual(contract.value, F.REPR.UNKNOWN);
-    assert.match(contract.why, /\/mcp probe/, 'it must say how to get the answer');
-  });
-
-  await test('PROBE: PID is decimal and an address is a hex STRING — proved by JSON grammar', () => {
-    // Not a recollection: `1234` is a JSON number and the JSON grammar has no
-    // hexadecimal literal, so a PID sent as a number is necessarily decimal.
-    // `"0x1abc"` is a quoted string. Different representation AND different
-    // type, so the two can never be interchangeable.
-    // THE PROBE TOOL IS ONLY ADVERTISED WHILE ONE IS CONNECTED, so a plain
-    // call here would take the UNKNOWN branch and the PROVEN path — the one
-    // that matters — would never be asserted. A connection is simulated so the
-    // schema is offered; nothing is sent anywhere.
-    const probeMod = require('../../src/probe');
-    const realLive = probeMod.live;
-    probeMod.live = () => ({ capabilities: [{ name: 'process.attach' }, { name: 'memory.read' }] });
-    let facts;
-    try { facts = probefacts.representationFacts(); } finally { probeMod.live = realLive; }
-    const pid = byName(facts, 'PID');
-    const addr = byName(facts, 'Memory address');
-    assert.ok(pid && addr);
-    assert.notStrictEqual(pid.value, F.REPR.UNKNOWN, 'with the schema advertised this must be established');
-    assert.strictEqual(pid.confidence, F2.CONFIDENCE.PROVEN);
-    assert.match(pid.evidence, /JSON number cannot be hexadecimal|cannot be hexadecimal/,
-      'the proof is the JSON grammar, and must be stated as the evidence');
-    assert.match(pid.value, /decimal/);
-    assert.match(pid.counterExample, /0x/, 'the hex form must be named as the thing NOT to send');
-    assert.match(addr.value, /hexadecimal/);
-    assert.match(addr.examples.join(' '), /0x/);
-    assert.notStrictEqual(pid.value, addr.value, 'a PID and an address are not the same representation');
-  });
-
-  await test('PROBE: what the Probe owns is UNKNOWN and names the call that answers it', () => {
-    const facts = probefacts.representationFacts();
-    const offset = byName(facts, 'Offset representation');
-    assert.ok(offset);
-    assert.strictEqual(offset.value, F.REPR.UNKNOWN);
-    assert.match(offset.why, /capabilities/, 'the exact discovery call must be named');
-    assert.match(offset.why, /do not generalise|not generalise/i,
-      'it must say the PID and address facts do NOT extend to this');
   });
 
   // ------------------------------------------------------- contradictions --

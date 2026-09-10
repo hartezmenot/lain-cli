@@ -381,6 +381,24 @@ function confirmAdapter({ question, yes = 'Yes', no = 'No' }) {
  * that is not registered cannot appear here, and one that is registered cannot
  * be missing. `/effort` appears exactly once because it is defined exactly once.
  */
+/**
+ * A `token  description` row, columns aligned — and a real gap even when the
+ * token overruns the column.
+ *
+ * `padEnd` alone leaves NO gap once the left side reaches the column width, so
+ * `/mcp [status|connect|revoke|disconnect]` ran directly into its own
+ * description with not even a space between them. That is not just a spacing
+ * defect: ui/panel.js `accentRow` finds the boundary between the command and
+ * its explanation by looking for the two-space gap the row is built with, so
+ * a row with none drew as one uncoloured sentence instead of an accented
+ * token beside a dim description — the one row that most needed the gap.
+ */
+function twoCol(left, desc, col) {
+  const l = String(left == null ? '' : left);
+  const gap = l.length + 2 <= col ? col - l.length : 2;
+  return l + ' '.repeat(gap) + String(desc == null ? '' : desc);
+}
+
 function commandPaletteAdapter({ commands = [], filter = '' }) {
   const f = String(filter || '').toLowerCase();
   const matches = commands.filter((c) => c.name.startsWith(f));
@@ -397,7 +415,7 @@ function commandPaletteAdapter({ commands = [], filter = '' }) {
   // `/model` and `/models` exactly as before.
   matches.sort((a, b) => Number(b.name === f) - Number(a.name === f));
   const items = matches.map((c) => ({
-    label: (c.name + (c.args ? ' ' + c.args : '')).padEnd(30) + (c.desc || ''),
+    label: twoCol(c.name + (c.args ? ' ' + c.args : ''), c.desc || '', 30),
     value: c.name,
     command: c.name,
   }));
@@ -434,51 +452,30 @@ function fileCompletionAdapter({ entries = [], filter = '' }) {
   };
 }
 
-/**
- * Which changed file to open in the DIFF view.
- *
- * The workspace itself stays a read-only rendering of state; SELECTION goes
- * through the one panel, so the diff view needs no cursor of its own and no
- * second key-handling path.
- */
-function changedFilesAdapter({ files = [] }) {
-  const items = files.map((f) => ({
-    label: `${pad(f.kind.toUpperCase(), 9)} ${pad(clip(f.rel, 46), 48)} +${f.added} -${f.removed}`,
-    value: f.rel,
-    file: f,
-  }));
-  if (!items.length) items.push({ label: 'nothing has changed in this session yet', selectable: false });
-  return {
-    title: `CHANGED FILES   ${files.length}`,
-    kind: KIND.FILE_PICKER,
-    mode: MODE.EXPANDED,
-    items,
-    footer: '↑↓ select · Enter open the diff · Esc close',
-  };
-}
-
-/** Which plan step to expand. Expansion is display-only; this cannot edit a plan. */
-function planStepsAdapter({ steps = [], expanded = new Set() }) {
-  const items = steps.map((s) => ({
-    label: `${expanded.has(s.n) ? '▼' : '◆'} ${String(s.n).padStart(2)}  ${pad(clip(s.text, 52), 54)} ${s.status}`,
-    value: s.n,
-    step: s,
-  }));
-  if (!items.length) items.push({ label: 'no plan in this session', selectable: false });
-  return {
-    title: 'PLAN STEPS',
-    kind: KIND.STEP_PICKER,
-    mode: MODE.EXPANDED,
-    items,
-    footer: '↑↓ select · Enter expand or collapse · Esc close',
-  };
-}
+// ------------------------------------------------------------------------
+// `changedFilesAdapter` AND `planStepsAdapter` STOOD HERE, and both are gone.
+//
+// They were the two pickers the WORKSPACE opened on an empty Enter: "which
+// changed file to show in the DIFF pane" and "which plan step to expand". The
+// argument for them was a good one and is worth keeping — the workspace stayed
+// a read-only rendering of state, and SELECTION went through the one panel, so
+// no pane needed a cursor of its own or a second key-handling path.
+//
+// There are no panes. `/changes` prints every changed file's diff in full (a
+// diff view whose default state contains no diff is a table of contents), and
+// `/plan` prints every step with the note and files behind it (see views.js
+// `planView` and its `detail` flag). Neither needs to be asked WHICH, because
+// neither is showing one at a time.
+//
+// The panel is untouched and still has exactly one selection path; it simply
+// has two fewer things to be asked about.
+// ------------------------------------------------------------------------
 
 function helpAdapter({ commands = [] }) {
   return {
     title: 'COMMANDS',
     mode: MODE.EXPANDED,
-    items: commands.map((c) => ({ label: `${(c.name + (c.args ? ' ' + c.args : '')).padEnd(24)}${c.desc}`, value: c.name })),
+    items: commands.map((c) => ({ label: twoCol(c.name + (c.args ? ' ' + c.args : ''), c.desc, 24), value: c.name })),
     footer: '↑↓ select · Enter insert · Esc close',
   };
 }
@@ -523,7 +520,7 @@ function outputAdapter({ title = '', lines = [] }) {
   };
 }
 
-module.exports = { routeHealth, effortAdapter, modelsAdapter, modelRoutesAdapter, routeDetailAdapter, providerAdapter, configAdapter, fmt, LETTERS, splitOption, confirmAdapter, commandPaletteAdapter, fileCompletionAdapter, changedFilesAdapter, planStepsAdapter, helpAdapter, outputAdapter };
+module.exports = { routeHealth, effortAdapter, modelsAdapter, modelRoutesAdapter, routeDetailAdapter, providerAdapter, configAdapter, fmt, LETTERS, splitOption, confirmAdapter, commandPaletteAdapter, fileCompletionAdapter, helpAdapter, outputAdapter };
 
 
 // THE QUESTION FRAMES LIVE IN ui/askframes.js — see its header for why. Required

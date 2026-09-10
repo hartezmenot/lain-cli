@@ -34,7 +34,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 
 const jobsMod = require('../jobs');
 
@@ -103,7 +102,7 @@ function execute(file, args, { cwd, timeoutMs = DEFAULT_TIMEOUT_MS, signal, inpu
     }
     let child;
     try {
-      child = spawn(file, args, { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = require('../harness/processes').spawnOwned({ command: file, args, cwd });
     } catch (e) {
       resolve({ ok: false, error: `could not start ${file}: ${e.message}`, startFailed: true });
       return;
@@ -124,26 +123,29 @@ function execute(file, args, { cwd, timeoutMs = DEFAULT_TIMEOUT_MS, signal, inpu
 
     const started = Date.now();
     let settled = false;
-    const done = (r) => {
+    const done = async (r) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ pid: child.pid, elapsedMs: Date.now() - started, stdout: out, stderr: err, truncated, ...r });
+      if (signal) signal.removeEventListener('abort', onAbort);
+      try { await require('../harness/processes').stopTree(child); }
+      catch (e) { r.ok = false; r.error = e.message; r.cleanupError = e.message; }
+      resolve({ pid: child.commandPid || child.pid, ownerPid: child.pid, elapsedMs: Date.now() - started, stdout: out, stderr: err, truncated, ...r });
     };
     const timer = setTimeout(() => {
-      try { child.kill(); } catch { /* already gone */ }
       done({ ok: false, timedOut: true, exitCode: null, error: `timed out after ${Math.round(timeoutMs / 1000)}s` });
     }, timeoutMs);
     if (timer.unref) timer.unref();
 
-    if (signal) {
-      signal.addEventListener('abort', () => {
-        try { child.kill(); } catch { /* already gone */ }
-        done({ ok: false, interrupted: true, exitCode: null, error: 'interrupted by the user' });
-      }, { once: true });
-    }
+    const onAbort = () => done({ ok: false, interrupted: true, exitCode: null, error: 'interrupted by the user' });
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
     child.on('error', (e) => done({ ok: false, exitCode: null, error: e.message }));
-    child.on('close', (code) => done({ ok: code === 0, exitCode: code }));
+    child.on('close', (code) => {
+      const result = child.commandResult;
+      if (result && result.error) return done({ ok: false, startFailed: true, error: result.error, exitCode: null });
+      if (result) code = result.code;
+      done({ ok: code === 0, exitCode: code });
+    });
 
     if (input != null) { try { child.stdin.write(String(input)); } catch { /* closed */ } }
     try { child.stdin.end(); } catch { /* closed */ }
@@ -158,7 +160,9 @@ function execute(file, args, { cwd, timeoutMs = DEFAULT_TIMEOUT_MS, signal, inpu
  * probe/bridge, and the evidence must identify the actual execution path."
  * Without it, a program that failed and a shell that failed read identically,
  * and the difference decides the fix: a shell flattens an exit code, a direct
- * spawn does not, and only one of them expands a glob.
+ * spawn does not, and only one of them expands a glob. (The browser and the
+ * probe/bridge mechanisms named in the quote were removed in 2026-09; the
+ * vocabulary lives on for the four that remain.)
  */
 // The stamp itself lives in via.js: shell.js and jobs.js say the same thing,
 // and two of the three used to spell it their own way.

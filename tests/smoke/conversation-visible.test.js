@@ -8,7 +8,7 @@
  *
  * That was reproduced by driving the binary through the real draw path with a
  * turn that makes thirty tool calls. The frame it produced contained ten rows
- * of `✓ Searched for "."` / `✓ Read src/render.js`, a raw liveness warning, and
+ * of `✓ search · .` / `✓ read · src/render.js`, a raw liveness warning, and
  * not one word of what the model or the user had said.
  *
  * These tests hold the fix at the level the user experiences it: what is
@@ -52,15 +52,26 @@ function project() {
   return dir;
 }
 
-/** A turn that searches and reads `n` times, saying something at `saidAt`. */
+/** A turn that searches and writes `n` times, saying something at `saidAt`. */
 function flood(n, said = {}) {
   const steps = [];
   for (let i = 0; i < n; i++) {
     const file = ['dashboard.js', 'render.js', 'status.js', 'feed.js'][i % 4];
     steps.push({
       text: said[i] || '',
+      // ---- HALF ROUTINE, HALF DURABLE --------------------------------
+      //
+      // A successful read or search is live state and leaves no row in the
+      // conversation at all (ui/durable.js), so a flood made only of those can
+      // no longer test the run COMPACTION this exists for. A WRITE persists, and a
+      // turn that writes fourteen files is just as real a flood. Both halves are
+      // then asserted: the writes are compacted, and the searches are simply gone.
       tool_calls: [i % 2
-        ? { name: 'read_file', input: { path: `src/${file}` } }
+        // A NEW FILE EACH TIME. `write_file` refuses to overwrite a file this
+        // session has not read, and refuses to shrink a substantial one without
+        // `truncate` — both correct, and both would make these writes FAIL, which
+        // is a different test (a failure is never compacted away).
+        ? { name: 'write_file', input: { path: `src/gen/${file}-${i}.js`, content: `// pass ${i}` } }
         : { name: 'grep', input: { pattern: `token${i}`, path: '.' } }],
     });
   }
@@ -101,10 +112,14 @@ module.exports = async function () {
     assertIncludes(frame, 'stale cache in status.js', 'the answer must survive the flood that produced it');
 
     // AND THE FLOOD ITSELF, COUNTED RATHER THAN SPELLED OUT.
-    const rows = lastFrameRows(r.out).filter((l) => /✓/.test(l) && !/TOOL |LAIN /.test(l));
+    const rows = lastFrameRows(r.out).filter((l) => /[✓✗]/.test(l) && !/TOOL /.test(l));
     assert.ok(rows.length >= 1, `no call rows were drawn at all:\n${frame}`);
     assert.ok(rows.length <= 8, `${rows.length} call rows on one screen is the failure:\n${frame}`);
     assert.ok(/×\d/.test(frame), `a long run must be counted, not listed:\n${frame}`);
+    // AND THE SEVEN SEARCHES LEFT NOTHING BEHIND AT ALL, which is the other
+    // half of not burying the answer.
+    assert.ok(!/search · /.test(frame),
+      `a routine search must not take a row in the conversation:\n${frame}`);
   });
 
   await test('CONVERSATION LIVE: the order is USER, then LAIN, then what LAIN did', async () => {
@@ -113,7 +128,9 @@ module.exports = async function () {
       env: { LAIN_FORCE_TUI: '1', COLUMNS: '100', LINES: '40' },
       stdin: 'why is the dashboard stale\n',
       script: [
-        { text: 'Looking at the renderer first.', tool_calls: [{ name: 'read_file', input: { path: 'src/render.js' } }] },
+        // A WRITE, NOT A READ. A successful read leaves no row (ui/durable.js),
+        // and this test is about the ORDER of the rows there are.
+        { text: 'Looking at the renderer first.', tool_calls: [{ name: 'write_file', input: { path: 'src/gen/render-note.js', content: '// touched' } }] },
         { text: 'The cache is never invalidated.', tool_calls: [{ name: 'grep', input: { pattern: 'cache', path: '.' } }] },
         { text: 'That is the defect.' },
       ],
@@ -127,7 +144,7 @@ module.exports = async function () {
     };
     assert.ok(at('why is the dashboard stale') < at('Looking at the renderer first.'),
       'the question comes before the answer');
-    assert.ok(at('Looking at the renderer first.') < at('Read src/render.js'),
+    assert.ok(at('Looking at the renderer first.') < at('render-note.js'),
       'LAIN says what it is about to do, THEN does it');
     assert.ok(at('The cache is never invalidated.') < at('That is the defect.'),
       'and the conversation reads downward');
@@ -215,7 +232,7 @@ module.exports = async function () {
     // much the live row happened to move. Stopping at the gap that ends the row
     // makes the key the action and nothing else.
     const calls = new Set(everything.match(
-      /✓ (?:Ran|Read|Searched for) [^\s│][^│\r\n]*?(?=\s{2,}|│|$)/g) || []);
+      /✓ (?:[a-z_]+) · [^\s│][^│\r\n]*?(?=\s{2,}|│|$)/g) || []);
     assert.ok(calls.size <= 4,
       `${calls.size} calls (${[...calls].join(' | ')}) means the turn did not stop at its bound`);
 
@@ -253,7 +270,7 @@ module.exports = async function () {
     // detection was deleted outright. The observation now goes to the panel as
     // an advisory, so that is what must be there.
     const drawn = frames(r.out).map(plain).join('\n');
-    assert.match(drawn, /STILL GOING ROUND/,
+    assert.match(drawn, /STILL\s+GOING\s+ROUND/i,
       'eight identical reads must still be reported — to the user, in the panel');
   });
 

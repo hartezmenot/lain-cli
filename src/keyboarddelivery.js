@@ -41,8 +41,11 @@
  * TESTABLE WITHOUT A MACHINE. Everything talks to an object with `.call(op,
  * params, ms)`, so the whole sequence can be driven by a double at unit tier —
  * and a double is never evidence that a key arrived anywhere. That verdict
- * comes only from a target that logs what it received; see
- * tools/keywitness.js, tests/live/wininput.test.js and tests/live/mcp-input.test.js.
+ * comes only from a target that logs what it received; see tools/keywitness.js
+ * and tests/live/wininput.test.js. (There was also a transport-path live test,
+ * mcp-input.test.js; it was removed with the Probe transport in 2026-09, and
+ * the sequence it exercised will need such a test again the day a transport
+ * that can verify the foreground reappears.)
  */
 
 const cap = require('./capability');

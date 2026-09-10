@@ -168,10 +168,10 @@ function hypothesisFor(members, area) {
     return `A file in ${area} does not parse, so anything importing it fails at load. The test failures are `
       + 'very likely a consequence of that rather than separate defects.';
   }
-  if (has(F.CATEGORY.FRONTEND_CONSOLE, F.CATEGORY.TYPO)) {
-    return `A name in ${area} resolves to nothing and the browser is reporting an exception. These are plausibly `
-      + 'the same defect seen statically and at run time.';
-  }
+  // (A FRONTEND_CONSOLE+TYPO cluster rule lived here — "a name that resolves to
+  // nothing, and the page reporting an exception at that name", the same defect
+  // seen statically and at runtime. It was removed with the browser in 2026-09;
+  // nothing can observe a running page any more.)
   if (cats.size === 1) {
     return `${members.length} findings of the same kind in ${area}. They may share one cause, or simply one area.`;
   }

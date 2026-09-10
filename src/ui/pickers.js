@@ -19,8 +19,10 @@ const { KIND, MODE, pad, clip } = require('./panel');
  *
  * The command used to answer "which model from the catalog", so the top-level
  * question was a 900-row list and every non-model reviewer had to be spelled as
- * a model or not exist. Four actors, one row each, and the row says what each
- * one COSTS you: automated, or a page you drive yourself.
+ * a model or not exist. Three actors, one row each, and the row says what each
+ * one COSTS you: automated, or a packet you hand over yourself. (A fourth row —
+ * LAIN's own Chromium driving a chat page — was removed with the browser in
+ * 2026-09.)
  *
  * Choosing the API actor drills into the ordinary model picker. That is a
  * SECOND question, asked only once the first is answered, and it is the same
@@ -54,9 +56,8 @@ function externalActorAdapter({ status, onPick, onPickApi = null }) {
     // what you were about to choose was cut off exactly where the meaning was.
     const note = a.kind === 'API'
       ? (a.ok ? `automated · ${a.model}` : (a.model ? `automated · ${a.why}` : 'automated · no model chosen'))
-      : a.kind === 'BROWSER' ? 'you drive the page; LAIN preps the packet'
-        : a.kind === 'HUMAN' ? 'packet to clipboard; paste the reply back'
-          : a.why;
+      : a.kind === 'HUMAN' ? 'packet to clipboard; paste the reply back'
+        : a.why;
     items.push({
       label: `${a.chosen ? '● ' : '  '}${pad(clip(a.label, 28), 30)}${clip(note, 46)}`,
       value: a.kind,

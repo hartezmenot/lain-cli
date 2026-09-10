@@ -33,6 +33,17 @@ function statusState(ui) {
   return {
     phase: ui.phase,
     phaseSince: ui.phaseSince,
+    // ---- HOW LONG THIS TASK HAS BEEN WORKING ----------------------------
+    //
+    // A SNAPSHOT, not the clock. One elapsed-work figure for the whole
+    // foreground task — it does not restart between a read and a write, and it
+    // does not count time the provider spent rate limiting us. See
+    // ui/workclock.js, and `clock` below for the one thing that advances it.
+    clock: require('./workclock').reading(ui.clock),
+    // THE TRANSIENT OPERATION NOTE, if one is standing. It takes the live row
+    // only where that row would otherwise say READY - a turn's own phase always
+    // outranks it. See ui/operation.js for what is and is not an operation.
+    op: require('./operation').current(ui),
     interrupting: ui.interrupting,
     interrupted: ui.interrupted,
     failed: ui.failed,
@@ -129,6 +140,23 @@ function lastAuditOf(session) {
   return null;
 }
 
+/**
+ * `{used, window}` in TOKENS, or null when no window is known.
+ *
+ * NULL IS AN ANSWER. A provider that states no context length, or a model that
+ * did not resolve, gives a figure with no denominator — and `42k/?` is worse
+ * than saying nothing, because the number without its bound cannot be acted on.
+ * ui/views.js `contextLabel` draws nothing for null.
+ */
+function contextUsage(app, pc) {
+  const window = Number(pc && pc.ctx) || 0;
+  if (!window) return null;
+  let chars = 0;
+  try { chars = app.session.contextChars(); } catch { return null; }
+  const { CHARS_PER_TOKEN } = require('../session');
+  return { used: Math.round(chars / CHARS_PER_TOKEN), window };
+}
+
 function frameState(ui) {
   const app = ui.app;
   let pc = {};
@@ -148,6 +176,38 @@ function frameState(ui) {
     provider: pc.provider,
     connection: pc.connectionId,
     effort: app.cfg.effort,
+    /**
+     * THE OUTPUT TOKENS OF THE RESPONSE IN FLIGHT — the header's one number.
+     *
+     * `{tokens, measured}`: an ESTIMATE from the characters that have arrived
+     * while the model is writing, and the provider's own MEASURED count once
+     * the receipt lands. ui/views.js `outputLabel` draws the difference. See
+     * ui/index.js `noteOutputChars`.
+     */
+    output: ui.liveOutput || null,
+    /**
+     * HOW MUCH OF THE MODEL'S WINDOW THIS CONVERSATION OCCUPIES.
+     *
+     * NOT ON THE HEADER ANY MORE — `/token` reads it. It stays on the snapshot
+     * because it is the one figure that has to be computed from live session
+     * state rather than from a stored total, and the command must not grow a
+     * second way of computing it.
+     *
+     * OCCUPANCY, NOT THE BILL. `usage` below is cumulative and only grows;
+     * this is what is in the window right now, which is the number that decides
+     * whether the next long paste forces a compaction. Neither can stand in for
+     * the other, and neither is the header's live output count.
+     *
+     * MEASURED THE WAY THE COMPACTOR MEASURES IT. `contextChars()` over the
+     * pessimistic `CHARS_PER_TOKEN` src/session.js already compacts against —
+     * so the figure a person reads and the figure that acts cannot disagree.
+     * It is an ESTIMATE and it is deliberately the same estimate.
+     *
+     * `pc` is resolved for this frame anyway (three lines above), so the window
+     * costs nothing extra; `contextChars` is one pass over the message list
+     * reading `.length`, which is O(1) per message.
+     */
+    context: contextUsage(app, pc),
     providerStatus,
     readiness: ui.readiness(pc),
     evidence: app.session.evidence,
@@ -248,13 +308,76 @@ function changedCount(ui) {
  * `/resume` for free. `termtitle.set` drops identical repeats, so calling
  * this on every redraw costs one string comparison.
  */
-function title(ui, s) {
-  const busy = Boolean(ui.phase || ui.busy);
-  termtitle.update({
-    folder: views.projectName(s.cwd),
-    topic: s.session && s.session.task ? s.session.task.objective : '',
-    busy,
-  });
+/**
+ * THE OS WINDOW TITLE — `Verifying · lain-v2`, or just `lain-v2`.
+ *
+ * ------------------------------------------------------------------------
+ * THE SAME CHAIN AS THE LIVE ROW, AND DELIBERATELY THE SAME FUNCTION.
+ *
+ *     real operation → phase → liveState → the status row
+ *                                       → this title
+ *
+ * `ui.statusState()` is the snapshot the status row is drawn from; `liveState`
+ * turns it into the one true sentence about what is happening; `stateOf`
+ * classifies that into one of five glyphs. The title cannot say "working" while
+ * the screen says RATE LIMITED, because both read the same answer — which is
+ * the whole reason this does not compute a state of its own.
+ *
+ * THE SPINNER TURNS BECAUSE THIS IS CALLED, and this is called from `refresh`,
+ * which the ticker drives only while `ui.phase` is set. So the animation is a
+ * consequence of real work being in flight rather than a cause of it: when the
+ * turn loop stops announcing phases the redraws stop, and the next title
+ * written has no glyph on it.
+ *
+ * A BACKGROUND JOB DOES NOT HOLD THE SPINNER. `statusState` is the FOREGROUND
+ * turn's state — a `/bg` task has its own row in the background region and its
+ * own account in `/bg`, and it deliberately does not set `ui.phase`. A dev
+ * server that has been up for an hour must not leave a glyph rotating in the
+ * taskbar for an hour.
+ *
+ * A FAILURE HERE IS NOT A SESSION-ENDING EVENT. `termtitle.set` already
+ * swallows a rejected write; these catches cover the composition too, because a
+ * malformed state must not be able to take down a redraw over a decoration on
+ * somebody else's window.
+ */
+/**
+ * ADVANCE THE WORK CLOCK — the one caller of ui/workclock.js `apply`.
+ *
+ * ------------------------------------------------------------------------
+ * THE SAME CLASSIFICATION AS THE WINDOW TITLE, AND THAT IS THE POINT.
+ *
+ *     real operation → phase → liveState → stateOf → the title's glyph
+ *                                                  → this clock's run/pause
+ *
+ * `title` below reads exactly this chain for its glyph. So the clock cannot be
+ * counting while the screen says RATE LIMITED, and it cannot be frozen while
+ * the screen says RECEIVING — both answers come from one function, and there is
+ * no second derivation of "is LAIN working" to disagree with it.
+ *
+ * `liveState` is pure and is already called several times a frame (the strip
+ * calls it, the title calls it). Calling it again is not a second authority; it
+ * is the same answer asked for again.
+ *
+ * WHAT IS NOT HERE: starting and stopping. Only the turn lifecycle knows that a
+ * person pressed Enter, so ui/turnstate.js owns `start` and `settle`. This only
+ * decides whether an already-started clock is counting.
+ */
+function clock(ui) {
+  if (!ui || !ui.clock) return;
+  try {
+    const live = require('./status').liveState(ui.statusState());
+    require('./workclock').apply(ui.clock, termtitle.stateOf(live));
+  } catch { /* a clock that cannot classify itself simply keeps its value */ }
 }
 
-module.exports = { statusState, frameState, lastSessionToken, readiness, changedCount, title };
+function title(ui, s) {
+  let state = termtitle.STATE.IDLE;
+  try {
+    state = termtitle.stateOf(require('./status').liveState(ui.statusState()));
+  } catch { state = termtitle.STATE.IDLE; }
+  try {
+    termtitle.update({ folder: views.projectName(s.cwd), state });
+  } catch { /* the title is chrome on another program's window */ }
+}
+
+module.exports = { statusState, frameState, lastSessionToken, readiness, changedCount, title, clock, contextUsage };

@@ -327,7 +327,18 @@ function draw(s){
     :(s.retry?'<span class="warn">◒ RATE LIMITED</span>'
       :(s.interrupted?'<span class="warn">■ INTERRUPTED</span>':'<span class="dim">○ idle</span>'+prog));
   const d=s.desktop;
-  $('detail').innerHTML=row('model',esc(s.model.id||'none'))
+  // THE HARNESS SECTION. Rendered from s.harness and from nothing else - the
+  // page never derives a task state, a verdict or a health from prose.
+  const H=s.harness;
+  const hv=H&&H.verification;
+  const hrows=H?(row('task',esc(H.task.state)+' <span class="dim">'+esc(H.task.title)+'</span>',
+      H.task.state==='PASSED'?'ok':(H.task.state==='FAILED'?'bad':''))
+    +row('proved',hv?(esc(hv.verdict)+' <span class="dim">'+hv.passed+'✓ '+hv.failed+'✗ '+hv.inconclusive+'?</span>'):'<span class="dim">nothing yet</span>',
+      hv&&hv.verdict==='PASSED'?'ok':(hv&&hv.verdict==='FAILED'?'bad':''))
+    +(H.processes.length?row('services',H.processes.map(function(x){return esc(x.name)+' '+esc(x.status)+' '+esc(x.health)+(x.port?' :'+x.port:'');}).join('<br>'),'dim'):'')
+    +row('evidence',H.evidence.artifacts+' artifact(s) · '+H.evidence.events+' event(s)','dim')
+    +(H.timeline.length?row('last',H.timeline.slice(-3).map(function(x){return esc(x.time)+' '+esc(x.text);}).join('<br>'),'dim'):'')):'';
+  $('detail').innerHTML=hrows+row('model',esc(s.model.id||'none'))
     +row('route',esc([s.model.provider,s.model.connection].filter(Boolean).join(' · ')||'—'))
     +row('context',s.context.percent+'%')
     +(s.lifecycle?row('lifecycle',esc(s.lifecycle.state)):'')

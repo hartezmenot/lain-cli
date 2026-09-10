@@ -61,63 +61,68 @@ module.exports = async function () {
     assert.ok(EXIT_CONFIRM_MS >= 1000 && EXIT_CONFIRM_MS <= 2000, `got ${EXIT_CONFIRM_MS}ms`);
   });
 
-  // ---- the pinned task banner ---------------------------------------------
+  // ---- WHERE THE PINNED TASK BANNER WENT ----------------------------------
+  //
+  // It drew the objective and a `STEP 3/5 ████░░ 60%` bar above the feed, on
+  // two of the nine panes, permanently. Against the six questions a permanent
+  // region has to answer it answered none: the objective IS the first thing the
+  // user said, so the conversation says it, and the plan's progress is `/plan`.
+  //
+  // THE MEASUREMENT SURVIVED THE RENDERING, and this is where that is held.
+  // `progressOf` is the thing these tests were ever really about — progress is
+  // COMPLETED work, never the active step index — and it is still read by
+  // `/plan`, `/copy` and ui/briefview.js. A percentage that reports work as
+  // finished the moment it begins is the one thing a progress indicator must
+  // never do, and it does not stop mattering because the banner is gone.
 
-  await test('BANNER: no task means no banner (the launch screen owns that)', () => {
-    assert.deepStrictEqual(views.taskBanner({ session: { task: null }, width: 80 }), []);
+  await test('PROGRESS: no plan means no percentage — nothing is invented', () => {
+    const p = views.progressOf(views.livePlan(sess({ plan: null })));
+    assert.ok(!p || !p.known, 'a made-up number is worse than admitting the total is unknown');
   });
 
-  await test('BANNER: a task with no plan shows the objective but NO invented progress', () => {
-    const b = views.taskBanner({ session: sess({ plan: null }), width: 80 });
-    // The objective now shares its row with the `TASK` label rather than
-    // occupying a row of its own beneath it.
-    assert.ok(b.some((l) => l.includes('Fix the authentication flow')), 'the objective is shown');
-    assert.ok(!b.some((l) => /%/.test(l)), 'no percentage without a plan to measure');
-    assert.ok(!b.some((l) => /STEP/.test(l)), 'no step count without a plan');
+  await test('PROGRESS: 0% — five steps, none done is 0%, not 20%', () => {
+    const p = views.progressOf(mkPlan(['active', 'todo', 'todo', 'todo', 'todo']));
+    assert.strictEqual(p.percent, 0, 'starting step 1 of 5 has completed nothing');
+    assert.strictEqual(p.current, 1, 'and it is still STEP 1 of 5');
+    assert.strictEqual(p.total, 5);
+    assert.ok(/░/.test(views.bar(p.percent)) && !/█/.test(views.bar(p.percent)), 'an empty bar');
   });
 
-  await test('BANNER: 0% — five steps, none done reads STEP 1 / 5 and 0% (not 20%)', () => {
-    const b = views.taskBanner({ session: sess({ plan: mkPlan(['active', 'todo', 'todo', 'todo', 'todo']) }), width: 80 });
-    const s = b.join('\n');
-    assert.ok(/STEP 1\/5/.test(s), s);
-    assert.ok(/\b0%/.test(s), s);
-    assert.ok(!/20%/.test(s), 'progress is completed work, never the active index');
-    assert.ok(b.some((l) => /░/.test(l) && !/█/.test(l)), 'an empty bar');
-    // The banner is TWO rows now: the objective on the first, progress on the
-    // second. It was nine rows of chrome for three facts, which left five rows
-    // for the activity feed on an 80x24 terminal.
-    assert.ok(b[0].startsWith('TASK') && b[0].includes('Fix the authentication'), b[0]);
-    assert.ok(b.length <= 3, `the banner grew back to ${b.length} rows`);
+  await test('PROGRESS: two of five done is STEP 3 of 5 and 40%', () => {
+    const p = views.progressOf(mkPlan(['done', 'done', 'active', 'todo', 'todo']));
+    assert.strictEqual(p.percent, 40);
+    assert.strictEqual(p.current, 3);
+    const b = views.bar(p.percent);
+    assert.ok(/█/.test(b) && /░/.test(b), 'a partially filled bar');
   });
 
-  await test('BANNER: intermediate — two of five done reads STEP 3 / 5 and 40%', () => {
-    const b = views.taskBanner({ session: sess({ plan: mkPlan(['done', 'done', 'active', 'todo', 'todo']) }), width: 80 });
-    const s = b.join('\n');
-    assert.ok(/STEP 3\/5/.test(s), s);
-    assert.ok(/40%/.test(s), s);
-    assert.ok(b.some((l) => /█/.test(l) && /░/.test(l)), 'a partially filled bar');
+  await test('PROGRESS: a finished PLAN is 100% and never says DONE', () => {
+    const p = views.progressOf(mkPlan(['done', 'done', 'done']));
+    assert.strictEqual(p.percent, 100);
+    const b = views.bar(p.percent);
+    assert.ok(/█/.test(b) && !/░/.test(b), 'a full bar');
+    // A FINISHED PLAN IS NOT A FINISHED TASK. A bar reading DONE beside a task
+    // that is still verifying is the progress indicator lying about the one
+    // thing it must never lie about.
+    assert.ok(!/\bDONE\b/.test(b + views.progressCompact(p, 40)),
+      'the plan\'s progress must not claim the task is done');
   });
 
-  await test('BANNER: all steps done reads 100% — and never the word DONE', () => {
-    const b = views.taskBanner({ session: sess({ plan: mkPlan(['done', 'done', 'done']) }), width: 80 });
-    const s = b.join('\n');
-    assert.ok(/100%/.test(s), s);
-    assert.ok(b.some((l) => /█/.test(l) && !/░/.test(l)), 'a full bar');
-    assert.match(s, /STEP 3\/3/, 'the step count says as much and claims nothing');
-    // THE PROGRESS BAR IS THE PLAN'S, AND A FINISHED PLAN IS NOT A FINISHED
-    // TASK. This asserted the opposite — that a full bar reads "DONE" — and a
-    // bar reading DONE beside a task that is still verifying is the progress
-    // indicator lying about the one thing it must never lie about.
-    assert.ok(!/\bDONE\b/.test(s), `the plan's progress must not claim the task is done:\n${s}`);
+  await test('PROGRESS: the compact form keeps step, bar and percent on one short line', () => {
+    const p = views.progressOf(mkPlan(['done', 'done', 'active', 'todo', 'todo']));
+    const row = views.progressCompact(p, 40);
+    assert.ok(/STEP 3\/5/.test(row), row);
+    assert.ok(/40%/.test(row), row);
+    assert.ok(/[█░]/.test(row), 'still carries a bar');
+    assert.ok(require('../../src/ui/text').width(row) <= 40, `fits 40 cols: ${row}`);
   });
 
-  await test('BANNER: compact form keeps step, bar and percent on one short line', () => {
-    const b = views.taskBanner({ session: sess({ plan: mkPlan(['done', 'done', 'active', 'todo', 'todo']) }), width: 40, compact: true });
-    assert.ok(b.length <= 2, `compact is at most two lines, got ${b.length}`);
-    const prog = b[b.length - 1];
-    assert.ok(/STEP 3\/5/.test(prog), prog);
-    assert.ok(/40%/.test(prog), prog);
-    assert.ok(/[█░]/.test(prog), 'still carries a bar');
-    for (const l of b) assert.ok(l.length <= 40, `fits 40 cols: ${l.length}`);
+  await test('PROGRESS: `/plan` is where the bar is drawn now', () => {
+    // §12: the pane went, the capability did not. The command that replaced it
+    // must actually render the measurement, or this is all unreachable code.
+    const lines = views.planView({ plan: mkPlan(['done', 'done', 'active', 'todo', 'todo']), width: 80 });
+    const text = require('../../src/ui/text').strip(lines.join(String.fromCharCode(10)));
+    assert.ok(/40%/.test(text), `the percentage must be on the plan view:\n${text}`);
+    assert.ok(/[█░]/.test(text), 'and the bar with it');
   });
 };

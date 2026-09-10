@@ -100,19 +100,28 @@ function fit(session, pc, { systemPrompt = '', live = '', cfg = {}, surface = 'C
     // actually has when their context is rewritten mid-task. Both are checked
     // against the session as it now stands (continuity.js); neither is a
     // reassurance printed unconditionally.
-    const summary = require('./continuity').compactionSummary(session, first);
+    // ---- ONE CONCISE LINE, AND NOT A COMPRESSION REPORT ------------------
+    //
+    // IT USED TO BE THREE, and the first was 120 characters of them:
+    //
+    //     CONTEXT COMPACTION  84k → 31k chars — elided 42k chars of earlier
+    //     tool output (nothing was deleted; re-run a call to get it back)
+    //     kept: the objective · 3 corrections you made · the plan (2/5 done)
+    //
+    // Auto-compaction is housekeeping the user did not ask for, happening in the
+    // middle of their task. What they need from it is that it happened and that
+    // nothing was lost; the accounting - what was elided, what survived, how
+    // close to the budget this leaves them - is `/token`, which exists and says
+    // all of it properly. A reassurance paragraph printed over the work it was
+    // making room for is the thing it was making room for.
+    //
+    // STILL NOT INTO THE CONVERSATION: the surface is transient and closes
+    // itself (src/turnevents.js). Nobody said this to the model.
+    const kb = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.max(0, Math.round(n))));
     notices.push({
-      type: 'notice', level: 'info',
-      // NOT INTO THE CONVERSATION. Compaction is LAIN talking to the person at
-      // the keyboard about its own housekeeping; nobody said it to the model.
-      surface,
-      message: `${summary.headline} — elided `
-        + (first.elided >= 1000 ? `${Math.round(first.elided / 1000)}k` : `${first.elided}`)
-        + ' chars of earlier tool output (nothing was deleted; re-run a call to get it back)',
+      type: 'notice', level: 'info', surface,
+      message: `Context compacted · ${kb(first.before)} → ${kb(first.after)} · nothing was deleted · /token`,
     });
-    if (summary.kept.length) {
-      notices.push({ type: 'notice', level: 'info', surface, message: `kept: ${summary.kept.join(' · ')}` });
-    }
   }
 
   // ---- PASS TWO: measure what is ACTUALLY going out -----------------------

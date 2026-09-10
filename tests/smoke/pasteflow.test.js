@@ -1,22 +1,37 @@
 'use strict';
 
 /**
- * A PASTE IS SHOWN AS A MARKER AND SUBMITTED AS ITSELF.
+ * A PASTE IS SHOWN AS A MARKER WHILE YOU COMPOSE, AND SUBMITTED AS ITSELF.
  *
  * ------------------------------------------------------------------------
  * THE REGRESSION THIS GUARDS, stated as the data flow it must not break:
  *
  *     clipboard
  *        -> INPUT EDITOR            the full text lives here
- *        -> activity/context        shows `[pasted text #N]`
+ *        -> COMPOSER PROJECTION     drawn as `<pasted text>` while editing
  *        -> ENTER
  *        -> SUBMIT                  the FULL ORIGINAL PAYLOAD
- *        -> model
+ *        -> turn record             the FULL ORIGINAL PAYLOAD
+ *        -> conversation            the FULL ORIGINAL PAYLOAD
+ *        -> model                   the FULL ORIGINAL PAYLOAD
  *
  * The marker is a DRAWING. It is not the message. Replacing the input buffer
- * with `[pasted text #1]`, or submitting the marker instead of the payload,
+ * with `<pasted text>`, or submitting the marker instead of the payload,
  * silently destroys what the user actually pasted — and it destroys it in the
  * one direction nobody checks, because the screen looks correct either way.
+ *
+ * ------------------------------------------------------------------------
+ * THE COLLAPSE SWAPPED ENDS, AND THE PAYLOAD ASSERTIONS DID NOT MOVE.
+ *
+ * It used to be the CONVERSATION that drew `[pasted text #1]` while the input
+ * box drew the whole wall. Both were the wrong way round: the composer is where
+ * a wall of text destroys something — you cannot see the sentence you typed in
+ * front of it — and the transcript is the RECORD, which has to be readable
+ * back, exported, reviewed and scrolled.
+ *
+ * So every assertion about what reaches the model is unchanged, and the two
+ * about what is DRAWN are inverted: the composer is compact, the conversation
+ * is complete.
  *
  * ------------------------------------------------------------------------
  * EVERY CASE BELOW IS A DOOR THE PAYLOAD CAN BE LOST THROUGH, and they are
@@ -84,12 +99,16 @@ module.exports = async function () {
       `all of it, not a summary: got ${String(msg.content).split(NL).length} lines`);
 
     // AND THE MARKER IS NOT THE MESSAGE.
-    assertNotIncludes(msg.content, '[pasted text',
+    assertNotIncludes(msg.content, '<pasted text>',
       'the marker is a DRAWING — submitting it destroys what the user pasted');
-    // But it IS what the screen shows.
-    assertIncludes(out, '[pasted text', 'the activity view must stay compact');
-    assertNotIncludes(out, 'line 14 of the ALPHA payload',
-      'and must not draw the payload line by line');
+    assertNotIncludes(msg.content, '[pasted text',
+      'nor the older spelling of it');
+    // IT IS WHAT THE COMPOSER SHOWS while the paste is still being edited...
+    assertIncludes(out, '<pasted text>', 'the composer must stay compact');
+    // ...AND THE CONVERSATION SHOWS WHAT WAS SENT, once it has been. A
+    // transcript that cannot be read back is a transcript nobody can trust.
+    assertIncludes(out, 'line 14 of the ALPHA payload',
+      'the record draws the payload the user actually sent');
   });
 
   await test('PASTE: typing AFTER a paste keeps both the payload and the typing', async () => {
@@ -104,8 +123,10 @@ module.exports = async function () {
   });
 
   await test('PASTE: TWO pastes in one message both arrive whole', async () => {
-    // Two payloads means two markers on screen and one message underneath, and
-    // the numbering is the only thing that distinguishes them.
+    // Two payloads means two markers in the composer and one message
+    // underneath. They are told apart by their POSITION — you can see both at
+    // once, in the order you put them — which is why the numbering that used to
+    // distinguish them is gone.
     const a = payload('CHARLIE', 20);
     const b = payload('DELTA', 20);
     const { code, user, out } = await submitted([START + a + END, START + b + END, CR]);
@@ -115,8 +136,9 @@ module.exports = async function () {
     assertIncludes(msg.content, 'LAST_LINE_CHARLIE');
     assertIncludes(msg.content, 'FIRST_LINE_DELTA', 'and the second payload must be there too');
     assertIncludes(msg.content, 'LAST_LINE_DELTA');
-    assert.ok(!/\[pasted text/.test(String(msg.content)), 'neither may be replaced by its marker');
-    assertIncludes(out, '[pasted text', 'the screen still shows markers');
+    assert.ok(!/<pasted text>|\[pasted text/.test(String(msg.content)),
+      'neither may be replaced by its marker');
+    assertIncludes(out, '<pasted text>', 'the composer still collapses both of them');
   });
 
   await test('PASTE: DELETING after a paste edits the payload, not the marker', async () => {
@@ -131,7 +153,7 @@ module.exports = async function () {
     assert.strictEqual(code, 0);
     const msg = user.find((m) => /FIRST_LINE_ECHO/.test(String(m.content || '')));
     assert.ok(msg, 'the payload must still be there after editing it');
-    assert.ok(!/\[pasted text/.test(String(msg.content)),
+    assert.ok(!/<pasted text>|\[pasted text/.test(String(msg.content)),
       'a backspace must never be editing the MARKER — that submits a broken marker and no payload');
     // ---- EXACTLY THREE CHARACTERS, OFF THE END OF THE PAYLOAD ---------
     //
@@ -140,7 +162,7 @@ module.exports = async function () {
     // arithmetic and not behaviour, and the behaviour was right all along.
     //
     // This is the proof that the buffer holds the TEXT: had it held the marker,
-    // a backspace would have eaten `[pasted text #1]` and the payload would
+    // a backspace would have eaten `<pasted text>` and the payload would
     // have gone out whole or not at all, never three characters shorter.
     assertIncludes(msg.content, 'LAST_LINE_E');
     assert.ok(!/LAST_LINE_ECH/.test(String(msg.content)),

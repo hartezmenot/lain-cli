@@ -25,7 +25,6 @@
  * fact the machine had before the first attempt — see execution.js.
  */
 
-const { spawn } = require('child_process');
 const { via, KIND } = require('./via');
 const execution = require('../execution');
 const attemptsMod = require('../attempts');
@@ -64,21 +63,11 @@ const { findBash, isWslShim, shellPrefix } = execution;
  *
  * `child.kill()` ends the shell; the thing the shell launched is a grandchild
  * that inherits the pipes and keeps running. On Windows `taskkill /T` walks the
- * tree; elsewhere the child leads its own process group, so one signal to the
- * negative pid reaches all of it. Both are best-effort by nature — a process
- * can always be unkillable — which is why the caller never waits on this.
+ * tree; elsewhere the owned command has its own process group. The request
+ * starts immediately; finish awaits bounded cleanup and reports any failure.
  */
 function killTree(child) {
-  if (!child || child.killed || child.exitCode != null) { try { child.kill(); } catch { /* gone */ } return; }
-  const pid = child.pid;
-  try {
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
-        .on('error', () => { try { child.kill(); } catch { /* gone */ } });
-    } else {
-      try { process.kill(-pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
-    }
-  } catch { try { child.kill(); } catch { /* gone */ } }
+  require('../harness/processes').stopTree(child).catch(() => { /* finish reports cleanup failure */ });
 }
 
 function run(command, { shell, cwd, timeoutMs = DEFAULT_TIMEOUT_MS, signal }) {
@@ -95,10 +84,14 @@ function run(command, { shell, cwd, timeoutMs = DEFAULT_TIMEOUT_MS, signal }) {
 
     let child;
     try {
-      // `detached` on POSIX makes the child lead its own process group, which is
-      // what lets one signal reach everything it started. It is NOT unref'd —
-      // the child stays attached to this process's lifetime.
-      child = spawn(file, args, { cwd, windowsHide: true, detached: process.platform !== 'win32' });
+      // Referenced IPC owns a detached guardian; it survives caller death long
+      // enough to terminate the command tree, while normal calls await it.
+      // Node's Windows shell launch supplies cmd.exe's verbatim /s /c quoting.
+      // Treating its command text as a normal argv item escapes embedded quotes
+      // and makes quoted file paths reach programs with literal quote characters.
+      child = require('../harness/processes').spawnOwned(process.platform === 'win32' && shell === 'cmd'
+        ? { command, cwd, shell: file }
+        : { command: file, args, cwd });
     } catch (e) {
       return resolve({
         output: `could not start ${shell} (${file}): ${e.message}`,
@@ -126,11 +119,13 @@ function run(command, { shell, cwd, timeoutMs = DEFAULT_TIMEOUT_MS, signal }) {
 
     let timedOut = false;
     let settled = false;
-    const finish = (result) => {
+    const finish = async (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (signal) signal.removeEventListener('abort', onAbort);
+      try { await require('../harness/processes').stopTree(child); }
+      catch (e) { result.isError = true; result.cleanupError = e.message; result.output += `\n${e.message}`; }
       resolve(result);
     };
 
@@ -168,6 +163,9 @@ function run(command, { shell, cwd, timeoutMs = DEFAULT_TIMEOUT_MS, signal }) {
     });
 
     child.on('close', (code) => {
+      const result = child.commandResult;
+      if (result && result.error) return finish({ output: `could not start ${shell} (${file}): ${result.error}`, isError: true, exitCode: null, startFailed: true, stderr: result.error });
+      if (result) code = result.code;
       const parts = [];
       // WHICH MECHANISM RAN THIS, AND WHERE. The vocabulary for the stamp lives
       // in via.js because three tools say it and two of them used to spell it

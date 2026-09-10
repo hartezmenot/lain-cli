@@ -27,10 +27,12 @@
  * lain-probe owns OS input and that has not changed. See that file's header.
  *
  * WHAT IT IS NOT EVIDENCE OF. A green run here says the machine can deliver a
- * keystroke to a focused window. It says NOTHING about the LAIN → Probe →
- * target path, which has its own permission prompt, its own foreground
- * behaviour and its own test (live/mcp-input.test.js). Passing here and failing
- * there is a meaningful result, and it is the one this pair exists to produce.
+ * keystroke to a focused window. It says NOTHING about any transport-mediated
+ * path — a real permission prompt and a real foreground change between the aim
+ * and the injection. That verdict belonged to live/mcp-input.test.js, which was
+ * removed with the Probe transport in 2026-09; a transport that can verify the
+ * foreground will need its own such test before anything claims delivery
+ * through it.
  *
  * IT PUTS A WINDOW ON THE SCREEN for about three seconds and takes the
  * foreground for that time. That is the cost of testing this honestly; a test

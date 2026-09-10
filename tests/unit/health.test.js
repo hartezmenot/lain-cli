@@ -33,10 +33,17 @@ module.exports = async function () {
   await test('HEALTH: the implemented workflows read as implemented', async () => {
     const a = await health.assess(fakeApp());
     const m = byArea(a);
-    for (const area of ['/audit', '/troubleshoot', '/compare', '/resume']) {
+    // NAMED FOR THE CAPABILITY, NOT FOR A COMMAND. `/audit` and
+    // `/troubleshoot` were removed from the command surface in the 2026-09
+    // UX subtraction pass; the WORKFLOWS they reached were not, so the view
+    // probes the module and the mode rather than the command registry, and
+    // these two rows are named for what a person can do. Dropping them from
+    // this list would have quietly stopped checking they still exist.
+    for (const area of ['Project reading', 'Troubleshooting', '/compare', '/resume']) {
       assert.ok(m.has(area), `${area} must appear in the readiness view`);
       assert.strictEqual(m.get(area).state.word, 'IMPLEMENTED');
     }
+    for (const area of ['/audit', '/troubleshoot']) assert.ok(!m.has(area), `${area} was removed from the primary command surface`);
   });
 
   await test('HEALTH: reliability is "implemented", never "stable" from code alone', async () => {

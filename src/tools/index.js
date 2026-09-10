@@ -38,7 +38,7 @@ const semanticTools = require('./semantic');
 // moment that failure forms. See tools/migrate.js.
 const migrateTools = require('./migrate');
 
-// `visual_choice` is ALWAYS offered, unlike `computer` and `probe`. It needs no
+// `visual_choice` is ALWAYS offered, unlike `computer`. It needs no
 // bridge — its candidates are images produced by whatever made them, a browser
 // screenshot or a Python script — and the behaviour it replaces (capture,
 // describe, adjust, repeat) is available to a model on any task with a picture
@@ -69,12 +69,22 @@ const testTools = require('./tests');
 // only LAIN's own .lain/ state (lainstore.js), never user source. See
 // tools/concept.js for why they are four tools and one family.
 const conceptTools = require('./concept');
+// THE HARNESS TOOLS — `verify_task`, `service_start`, `service_check`,
+// `observe` — are always offered, for the sharpest version of the reason the
+// test tools are. What each replaces is not an expensive habit but a WRONG
+// ONE: "I've fixed it" said with nothing run; `npm run dev &` left on a port
+// nobody recorded; a `sleep 5` standing in for a health check; a screenshot
+// taken to read a value the DOM already knows. A tool that only appeared once
+// something had detected a task, a service or a browser would be missing at
+// exactly the moment each of those habits forms. See tools/harness.js.
+const harnessTools = require('./harness');
 
 const TOOLS = {
   ...fsTools.tools, ...editTools.tools, ...search.tools, ...intel.tools, ...shell.tools,
   ...planTools.tools, ...ask.tools, ...visualTools.tools, ...jobTools.tools,
   ...execTools.tools, ...observeTools.tools, ...semanticTools.tools,
   ...migrateTools.tools, ...testTools.tools, ...conceptTools.tools,
+  ...harnessTools.tools,
 };
 
 /**
@@ -91,9 +101,9 @@ const TOOLS = {
  * guess its way through, and a guess that lands on the wrong spelling is a
  * keystroke that goes nowhere with no way to tell why.
  *
- * `computer` covers everything `desktop` did AND OCR, over either transport —
- * computer.js owns the dialect for both — so this is pure subtraction. The
- * bridge did not go away; it stopped being a second vocabulary.
+ * `computer` covers everything `desktop` did AND OCR — computer.js owns the
+ * dialects — so this is pure subtraction. The bridge did not go away; it
+ * stopped being a second vocabulary.
  *
  * A model on an ordinary coding task is still never told it can control the
  * machine: `computer` appears only when a transport is live. Every function
@@ -104,57 +114,32 @@ function active(ctxApp) {
   let mcpConfigured = false;
   try { mcpConfigured = require('../mcp').configured(require('../config').load()); } catch { mcpConfigured = false; }
   let out = TOOLS;
-  // `probe` follows the CONNECTION, not the configuration. `desktop` can be
-  // advertised while merely configured because its tool connects the bridge
-  // lazily on first use; the Probe is started by the user with `/mcp probe` and
-  // opens a window, so advertising one that is not running would offer the
-  // model an investigation it cannot perform.
-  let probeLive = null;
-  try { probeLive = require('../probe').live(); } catch { probeLive = null; }
-  // The PROBE environment keeps the Probe's vocabulary even when the connection
-  // has dropped: the environment deliberately survives a disconnect, so the
-  // model must still be able to call probe ops (and get an honest error) and
-  // reach probe_bridge_cli. Withdrawing the vocabulary here would turn a dropped
-  // connection back into the accidental-CLI-fallback this gate exists to stop.
-  const envIsProbe = (() => {
-    try { return require('../environment').describe(ctxApp()).isProbe; } catch { return false; }
-  })();
-  if (probeLive || envIsProbe) out = { ...out, ...require('./probe').tools };
-  // `computer` FOLLOWS EITHER TRANSPORT, because it is LAIN's operation and not
+  // `computer` FOLLOWS THE TRANSPORT, because it is LAIN's operation and not
   // any bridge's: the model asks to click or to look, and LAIN decides which of
   // the connected bridges carries it. That is the whole ownership correction —
-  // screen and input are how anyone uses a computer, while memory, breakpoints
-  // and findings genuinely are the Probe's domain and keep the `probe` tool.
-  if (probeLive || mcpConfigured) out = { ...out, ...require('./computer').tools };
-  // `browser` follows the RUNTIME, like `probe` and unlike `desktop`: the user
-  // starts LAIN's Chromium with /external browser, and a model told it can drive
-  // a browser that is not running will try.
-  let browserLive = null;
-  try { browserLive = require('../browser').live(); } catch { browserLive = null; }
-  if (browserLive) out = { ...out, ...require('./browser').tools };
+  // screen and input are how anyone uses a computer. (The Probe transport and
+  // its `probe` tool were removed from LAIN CLI in 2026-09; the desktop bridge
+  // remains the carrier.)
+  if (mcpConfigured) out = { ...out, ...require('./computer').tools };
   // ---- LOOKING SOMETHING UP, and the two halves follow different rules ----
   //
   // `web_fetch` is a plain HTTP GET: no browser, no profile, no cookies. It
   // works headless, in CI and over SSH, so it is always offered — a question
   // whose answer is in a changelog should never have to be answered from a
   // training cut-off. See src/research.js for what leaves and who is told.
-  //
-  // `web_search` FOLLOWS THE RUNTIME, like `browser` and `probe`, because it
-  // drives that same Chromium. Search engines are the one part of the web that
-  // is actively hostile to a bare socket, and offering a model a search it
-  // cannot perform is offering it a way to waste a step.
+  // (LAIN's browser ownership — the `browser` tool and the Chromium-driving
+  // `web_search` — was removed in 2026-09; the plain fetch survives.)
   out = { ...out, ...require('./web').fetchTools };
-  if (browserLive) out = { ...out, ...require('./web').searchTools };
   return out;
 }
 
 /**
  * Schemas sent to the model. Same source as dispatch, so they cannot drift.
  *
- * THE APP IS THE CONTEXT, and the Probe vocabulary rides the session's
- * environment, so every reader forwards the App it is working for. A reader
- * with none (a unit test, a cold start) gets the connection-only vocabulary,
- * which is the same answer it always gave.
+ * THE APP IS THE CONTEXT, and the transport-gated vocabulary (`computer`)
+ * rides the session's connections, so every reader forwards the App it is
+ * working for. A reader with none (a unit test, a cold start) gets the
+ * connection-only vocabulary, which is the same answer it always gave.
  */
 function schemas(app) {
   return Object.values(active(() => app)).map((t) => t.schema);
@@ -169,8 +154,6 @@ function names(app) { return Object.keys(active(() => app)); }
  * gets told what does exist and picks again.
  */
 async function execute(name, input, ctx) {
-  // The vocabulary must include the Probe's own tools whenever the session is
-  // IN the PROBE environment, connected or not — see the note inside active().
   const tool = active(() => (ctx && ctx.app) || null)[name];
   if (!tool) {
     return { output: `unknown tool "${name}". Available: ${names(ctx && ctx.app).join(', ')}`, isError: true };
@@ -186,17 +169,9 @@ async function execute(name, input, ctx) {
   // It answers only about the FILESYSTEM. Whether the screen may be seen is
   // permissions.js's question and is asked elsewhere; whether a directory is
   // ours to work in is trust.js's, and is asked here.
-  // ---- WHOSE TASK IS THIS? --------------------------------------------------
-  //
-  // The second gate at the same door, beside the filesystem one. While the
-  // session's execution environment is PROBE (environment.js), investigation
-  // work belongs to the Probe's own tool surface; a CLI tool is refused HERE
-  // rather than left to compete, because the measured failure was exactly that —
-  // an investigation task answered with filesystem searches. `probe.bridge_cli`
-  // is the one explicit door back out, so a genuine shell need costs a named,
-  // deliberate call instead of a silent fallback.
-  const envVerdict = require('../environment').checkToolAllowed(name, ctx && ctx.app);
-  if (!envVerdict.ok) return { output: envVerdict.output, isError: true };
+  // (The PROBE-environment tool gate that sat beside this one was removed with
+  // the Probe integration in 2026-09 — there is no longer a second execution
+  // environment to enforce a boundary for.)
 
   const verdict = await require('../gate').check(name, input, ctx, { mutates: Boolean(tool.mutates) });
   if (!verdict.ok) return { output: verdict.output, isError: true };

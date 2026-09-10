@@ -379,6 +379,34 @@ module.exports = async function () {
     assert.ok(/counts: 200 passed/.test(r.output), 'the classified counts are still the headline');
   });
 
+  await test('QUIET: the recovery route is the runner\'s filter, never a second full run', async () => {
+    // ---- THE ADVICE IS THE GAP-MATRIX ROW 25 FIX ----------------------------
+    //
+    // The elision note existed before; what it TAUGHT did. "Re-run `<command>`
+    // with run_bash and grep it" spends a SECOND FULL SUITE RUN — minutes, plus
+    // another request to read — to recover one line the first run already
+    // established as passing. The route a model should learn is the runner's
+    // own name filter: one flag, one test.
+    //
+    // PINNED ON THE OLD ADVICE'S SIGNATURE (`run_bash` + `grep`), not on any
+    // mention of re-running: the new note says "rather than re-running
+    // everything", which is the advice AGAINST the waste and must be allowed
+    // to say so.
+    const reg = require('../../src/tools');
+    const dir = project({
+      'package.json': JSON.stringify({ scripts: { test: 'node t.js' } }),
+      't.js': `console.log('SUITE');\n${bulk(200, (i) => `console.log('  \\u2713 GROUP: scenario ${i} behaves the way it was written to')`)};\n`
+        + "console.log('200 passed, 0 failed');\n",
+    });
+    const r = await reg.execute('run_tests', {}, { cwd: dir });
+    assert.strictEqual(r.meta.testState, T.STATE.TESTS_PASSED);
+    const note = (r.output.match(/\[[^\]]*passing test line[^\]]*\]/) || [''])[0];
+    assert.ok(note, 'the elision note must be findable');
+    assert.match(note, /filter/i, 'the note must name the runner\'s filter as the recovery route');
+    assert.ok(!/run_bash/.test(note), 'the note must not send the model to the shell for what the runner can do itself');
+    assert.ok(!/grep/.test(note), 'and must not teach grepping a re-run');
+  });
+
   await test('TOOL: discover_tests on an empty tree says NO_TESTS_FOUND, with its search', async () => {
     const reg = require('../../src/tools');
     const dir = project({ 'a.txt': 'x' });

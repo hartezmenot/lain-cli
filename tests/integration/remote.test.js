@@ -10,8 +10,8 @@
  *          pairing, its polling loop, its dedupe, its capability validation and
  *          every answer it produces.
  *   FAKE   Telegram itself, and the local model — two small HTTP servers this
- *          file starts, pointed at with `LAIN_TELEGRAM_API` and a `/rc` brain
- *          endpoint.
+ *          file starts, pointed at with `LAIN_TELEGRAM_API` and the wire's
+ *          `setBrain`.
  *
  * That split is deliberate and it is the only one that lets the interesting
  * things be tested at all. A test that hit real Telegram would need a real bot
@@ -24,12 +24,19 @@
  * refused, not a message to a stranger.
  *
  * ------------------------------------------------------------------------
- * THE TOKEN IN THIS FILE IS FAKE and is shaped like a real one on purpose:
+ * EVERY TOKEN IN THIS FILE IS FAKE and shaped like a real one on purpose:
  * `http::valid_token` refuses anything that is not, so a test using `xyz` would
- * exercise the rejection path and prove nothing about the rest.
+ * exercise the rejection path and prove nothing about the rest. Each test MINTS
+ * ITS OWN (see `mintToken`) and the fake refuses any other token with a 404 on
+ * every method — which is what the real Telegram does to a wrong credential —
+ * so a supervisor that outlived its run (the orphan hazard the teardown note
+ * describes) can land on this server's port and still be refused. It can
+ * neither steal updates nor inject replies, because its remembered token
+ * belongs to a fake that is already gone.
  */
 
 const assert = require('assert');
+const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -40,8 +47,29 @@ const supervisor = require('../../src/supervisor');
 const guardian = require('../../src/guardian');
 const rc = require('../../src/remotecontrol');
 
-/** Shaped like Telegram's, and belonging to nobody. */
+/** Shaped like Telegram's, and belonging to nobody. Kept only for the tests
+ *  that assert a leaked credential never appears in a readable surface. */
 const FAKE_TOKEN = '000000000:AAAAAAAAAAAA';
+
+/** A fresh, well-formed credential per test. The fake below answers ONLY this
+ *  token; anything else gets the 404 a wrong credential earns at the real
+ *  Telegram. One-of-a-kind tokens are what make an orphaned supervisor that
+ *  wanders onto this port harmless — its remembered token is not this one. */
+function mintToken() {
+  const secret = crypto.randomBytes(24).toString('base64url').slice(0, 24);
+  return `${100000000 + Math.floor(Math.random() * 899999999)}:${secret}`;
+}
+
+/** How long an empty getUpdates is HELD before being answered empty, standing in
+ *  for the long-poll window the adapter is built around. The hold is what paces
+ *  the adapter's poll loop — with no hold the loop is limited only by process
+ *  creation and the rig manufactures a curl-spawn storm that is nothing like
+ *  the wire the adapter is built for. Two and a half seconds paces the loop at
+ *  a tenth of Telegram's 25s window while keeping the wait any test can sit
+ *  through short; a held request is released the instant a message is spoken,
+ *  and a poll that arrives to a non-empty queue is answered immediately, so
+ *  the hold never delays a pickup — it only spaces the empty polls. */
+const HOLD_MS = 2500;
 
 function isolate(tag) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `lain-rc-${tag}-`));
@@ -54,42 +82,104 @@ function isolate(tag) {
  * hand over next; `sent` is everything the adapter posted back, which is how
  * every assertion about what the bot SAID is made.
  */
-function fakeTelegram({ me = { id: 77, username: 'lain_test_bot', first_name: 'LAIN Test' } } = {}) {
-  const state = { queue: [], sent: [], polls: 0, fail: false, nextUpdateId: 1 };
+/**
+ * DIAGNOSTIC TRACE — off unless LAIN_RC_TRACE names a file. When it does, every
+ * rig-side event (update spoken, poll served/held, message landed) is written
+ * with epoch-ms so the gap between the supervisor DOING something and the rig
+ * SEEING it can be measured after the fact. The supervisor's own stderr is
+ * `ignore`d by design (see supervisor.rs), so this file is the only clock.
+ */
+function tracer() {
+  const target = process.env.LAIN_RC_TRACE;
+  if (!target) return { append: () => {}, stamp: () => '' };
+  const stamp = () => `${Date.now()} ${process.pid}`;
+  const append = (line) => {
+    try { fs.appendFileSync(target, `${stamp()} ${line}\n`); } catch { /* diagnosis only */ }
+  };
+  return { append, stamp };
+}
+
+function fakeTelegram({ token = mintToken(), me = { id: 77, username: 'lain_test_bot', first_name: 'LAIN Test' } } = {}) {
+  const trace = tracer().append;
+  const state = { token, queue: [], sent: [], polls: 0, fail: false, nextUpdateId: 1, held: [] };
+  const reply = (res, body) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  };
+  const takeAll = () => { const take = state.queue; state.queue = []; return take; };
+  // A HELD GETUPDATES IS HANDED ITS MESSAGE THE MOMENT ONE IS SPOKEN.
+  const release = () => {
+    while (state.held.length > 0 && state.queue.length > 0) {
+      reply(state.held.shift(), { ok: true, result: takeAll() });
+    }
+  };
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
-    const method = url.pathname.split('/').pop();
-    const reply = (body) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(body));
-    };
-    if (state.fail) { res.writeHead(500); res.end('nope'); return; }
-    if (method === 'getMe') return reply({ ok: true, result: me });
+    // The wire: {base}/bot{token}/{method}. The token rides in the path — the
+    // fake reads it back out, and answers a wrong one with the 404 the real
+    // Telegram gives a credential it does not know. Everything depends on this
+    // refusal staying here: it is what makes an orphaned supervisor holding some
+    // earlier test's token unable to steal updates from this server's port.
+    const m = /^\/bot([^/]+)\/([a-zA-Z]+)$/.exec(url.pathname);
+    const method = m ? m[2] : null;
+    const who = m ? m[1] : null;
+    if (who !== state.token) {
+      trace('TOKEN-404 some-other-token (an orphan?)');
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, description: 'Not Found' }));
+      return;
+    }
+    if (state.fail) { trace(`SERVE-FAIL ${method}`); res.writeHead(500); res.end('nope'); return; }
+    if (method === 'getMe') return reply(res, { ok: true, result: me });
     if (method === 'getUpdates') {
       state.polls += 1;
-      const take = state.queue;
-      state.queue = [];
-      // LONG POLLING IS NOT SIMULATED. Answering immediately with an empty list
-      // is a legitimate thing Telegram does and keeps the test quick; the
-      // adapter's own timeout is what would differ, and it is not what is
-      // under test here.
-      return reply({ ok: true, result: take });
+      if (state.queue.length > 0) { trace(`POLL-SERVED n=${state.queue.length}`); return reply(res, { ok: true, result: takeAll() }); }
+      // AN EMPTY QUEUE IS HELD, NOT ANSWERED. A real getUpdates stays open
+      // until an update arrives or the long-poll window closes — that hold is
+      // what paces the adapter's poll loop, and the adapter is BUILT around it
+      // (POLL_SECS, HTTP_TIMEOUT_SECS). The previous fake answered instantly,
+      // which turned the loop into a curl spawn storm whenever the machine
+      // was busy; a message spoken into that storm was handed over late,
+      // past these tests' own pairing gates, and the late "Authorized" text
+      // was then read as the answer to whatever was asked next. The hold
+      // below is short only because the tests do not need to wait: a held
+      // request is released by `say` at once, the way Telegram delivers.
+      trace('POLL-HELD');
+      state.held.push(res);
+      setTimeout(() => {
+        const i = state.held.indexOf(res);
+        if (i < 0) return; // a message arrived and already answered this.
+        state.held.splice(i, 1);
+        if (state.fail) { trace('HOLD-TIMEOUT-FAIL'); res.writeHead(500); res.end('nope'); return; }
+        trace('HOLD-TIMEOUT-EMPTY');
+        reply(res, { ok: true, result: [] });
+      }, HOLD_MS);
+      return;
     }
     if (method === 'sendMessage') {
-      state.sent.push({ chat_id: url.searchParams.get('chat_id'), text: url.searchParams.get('text') || '' });
-      return reply({ ok: true, result: { message_id: state.sent.length } });
+      const text = url.searchParams.get('text') || '';
+      state.sent.push({ chat_id: url.searchParams.get('chat_id'), text });
+      trace(`SENT text=${JSON.stringify(text).slice(0, 80)}`);
+      return reply(res, { ok: true, result: { message_id: state.sent.length } });
     }
-    return reply({ ok: false, description: `unexpected method ${method}` });
+    return reply(res, { ok: false, description: `unexpected method ${method}` });
   });
   state.server = server;
   state.listen = () => new Promise((r) => server.listen(0, '127.0.0.1', () => r(`http://127.0.0.1:${server.address().port}`)));
-  state.close = () => new Promise((r) => server.close(() => r()));
-  /** Queue a message as if a person sent it. */
+  state.close = () => new Promise((r) => {
+    // A held request must be answered before the close, or the open socket
+    // keeps the server from ever finishing it.
+    while (state.held.length > 0) reply(state.held.shift(), { ok: true, result: takeAll() });
+    server.close(() => r());
+  });
+  /** Queue a message as if a person sent it. A held getUpdates gets it now. */
   state.say = (text, chatId = 555) => {
+    trace(`SAY text=${JSON.stringify(text).slice(0, 60)} held=${state.held.length}`);
     state.queue.push({
       update_id: state.nextUpdateId++,
       message: { chat: { id: chatId, username: 'someone' }, text },
     });
+    release();
   };
   return state;
 }
@@ -102,8 +192,10 @@ function fakeTelegram({ me = { id: 77, username: 'lain_test_bot', first_name: 'L
  * real 3B model emphatically is not.
  */
 function fakeBrain(answers) {
+  const trace = tracer().append;
   const state = { answers: [...answers], seen: [], down: false };
   const server = http.createServer((req, res) => {
+    trace('BRAIN-REQUEST');
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
@@ -112,6 +204,7 @@ function fakeBrain(answers) {
       // second one can come back.
       if (state.down) { res.writeHead(503); res.end('model is loading'); return; }
       state.seen.push(body);
+      trace(`BRAIN-ANSWER n=${state.seen.length}`);
       const content = state.answers.shift();
       res.writeHead(content === undefined ? 500 : 200, { 'content-type': 'application/json' });
       res.end(content === undefined
@@ -144,9 +237,9 @@ function until(fn, ms = 15000, step = 50) {
  * WHATEVER HAPPENS — see the note in guardian.test.js about the afternoon that
  * produced 354 orphaned supervisors.
  */
-async function withRemote(tag, fn, { brainAnswers = null } = {}) {
+async function withRemote(tag, fn, { brainAnswers = null, token = null } = {}) {
   const home = isolate(tag);
-  const tg = fakeTelegram();
+  const tg = fakeTelegram(token ? { token } : {});
   const api = await tg.listen();
   const brain = brainAnswers ? fakeBrain(brainAnswers) : null;
   const brainUrl = brain ? await brain.listen() : '';
@@ -176,6 +269,18 @@ async function withRemote(tag, fn, { brainAnswers = null } = {}) {
     try { await supervisor.shutdown(); } catch { /* never started */ }
     await new Promise((r) => setTimeout(r, 150));
     try { await supervisor.shutdown(); } catch { /* already gone, which is the point */ }
+    // ---- A SHUTDOWN THAT NEVER ARRIVED LEAVES A LEAK, NOT A MYSTERY --------
+    //
+    // The child is spawned detached and unref'd — outliving this process is
+    // its job — so a shutdown request that starves under load (timed out, or
+    // answered but not yet exited) leaves a supervisor nothing else can
+    // reach: the port may be gone, but the endpoint file still names the
+    // pid, and that is the same truth `existing()` itself trusts. This home
+    // was minted for this test and is destroyed with it, so the pid named
+    // there can only be this test's own supervisor. Killed here, it cannot
+    // join the orphan population that starves every later run's polls.
+    const leaked = supervisor.endpoint();
+    if (leaked) { try { process.kill(leaked.pid, 'SIGKILL'); } catch { /* already gone */ } }
     guardian.forgetLocal();
     await tg.close();
     if (brain) await brain.close();
@@ -201,6 +306,9 @@ module.exports = async function () {
   // ---- THE CREDENTIAL ----------------------------------------------------
 
   await test('RC: a token is proved against Telegram before it is stored, and never comes back out', async () => {
+    // The constant token stays visible in this one test on purpose: the
+    // assertions below are about IT never reaching a readable surface. The fake
+    // is told to serve it, so this test still exercises the real connect path.
     await withRemote('connect', async ({ home }) => {
       const r = await rc.connect(FAKE_TOKEN);
       assert.ok(r.ok, `connect failed: ${r.error}`);
@@ -222,7 +330,7 @@ module.exports = async function () {
       assert.strictEqual(text.includes(FAKE_TOKEN), false, 'the event log leaked the token');
       assert.ok(text.includes('REMOTE_CONNECTED'), 'but the connection itself is recorded');
       assert.ok(text.includes('lain_test_bot'), 'by its public username');
-    });
+    }, { token: FAKE_TOKEN });
   });
 
   await test('RC: a token Telegram rejects is not stored at all', async () => {
@@ -235,14 +343,14 @@ module.exports = async function () {
       assert.strictEqual(fs.existsSync(cred), false, 'nothing may be written on the strength of a typed value');
       const s = await rc.status();
       assert.strictEqual(s.configured, false, 'and it must not report itself as connected');
-    });
+    }, { token: FAKE_TOKEN });
   });
 
   // ---- AUTHORIZATION -----------------------------------------------------
 
   await test('RC: an unpaired chat learns nothing about the runtime', async () => {
     await withRemote('unpaired', async ({ tg }) => {
-      await rc.connect(FAKE_TOKEN);
+      await rc.connect(tg.token);
       tg.say('/session');
       tg.say('what is running?');
       const got = await until(() => (tg.sent.length >= 2 ? saidTo(tg) : null));
@@ -257,7 +365,7 @@ module.exports = async function () {
 
   await test('RC: pairing authorizes exactly one chat, and the code is spent', async () => {
     await withRemote('pairing', async ({ tg }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       tg.say(`/pair ${r.pairingCode}`);
       const ok = await until(() => (saidTo(tg).includes('Authorized') ? saidTo(tg) : null));
       assert.ok(ok, 'the paired chat is told so');
@@ -273,7 +381,7 @@ module.exports = async function () {
 
   await test('RC: a wrong code teaches a guesser nothing', async () => {
     await withRemote('guess', async ({ tg }) => {
-      await rc.connect(FAKE_TOKEN);
+      await rc.connect(tg.token);
       tg.say('/pair AAAA-AAAA');
       const said = await until(() => (saidTo(tg) ? saidTo(tg) : null));
       assert.match(said, /not right/);
@@ -289,7 +397,7 @@ module.exports = async function () {
 
   await test('RC: a command is answered from the runtime, with no model involved', async () => {
     await withRemote('command', async ({ tg }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
       const before = tg.sent.length;
@@ -305,7 +413,7 @@ module.exports = async function () {
 
   await test('RC: anything that is not a command is refused as a command, not tried as one', async () => {
     await withRemote('noshell', async ({ tg }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
       const before = tg.sent.length;
@@ -319,7 +427,7 @@ module.exports = async function () {
 
   await test('RC: the same update is never acted on twice', async () => {
     await withRemote('dedupe', async ({ tg }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
       const before = tg.sent.length;
@@ -340,7 +448,7 @@ module.exports = async function () {
 
   await test('RC: plain English goes model → capability → model, and the runtime decides', async () => {
     await withRemote('english', async ({ tg, brain, brainUrl }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       await rc.setBrain({ baseUrl: brainUrl, model: 'fake-local' });
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
@@ -348,7 +456,7 @@ module.exports = async function () {
       const before = tg.sent.length;
       tg.say('which of my projects are still running?');
       const said = await until(() => (tg.sent.length > before ? tg.sent[tg.sent.length - 1].text : null), 20000);
-      assert.ok(said, 'the bot answered');
+      assert.ok(said, `the bot answered (model calls=${brain.seen.length}, polls=${tg.polls}, queued=${tg.queue.length})`);
       assert.match(said, /Nothing is running/i, 'the model got to phrase it');
       // AND IT WAS ASKED THE RIGHT WAY ROUND: routing first, then explanation.
       // Two calls, and the second one carried the runtime's own text as facts.
@@ -365,7 +473,7 @@ module.exports = async function () {
 
   await test('RC: a local model that invents a number does not get to say it', async () => {
     await withRemote('invented', async ({ tg, brainUrl }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       await rc.setBrain({ baseUrl: brainUrl, model: 'fake-local' });
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
@@ -400,7 +508,7 @@ module.exports = async function () {
 
   await test('RC: a local model that names a capability that does not exist is refused', async () => {
     await withRemote('invention', async ({ tg, brainUrl }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       await rc.setBrain({ baseUrl: brainUrl, model: 'fake-local' });
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
@@ -420,7 +528,7 @@ module.exports = async function () {
 
   await test('RC: the local model dying costs a phrasing and not the runtime', async () => {
     await withRemote('braindown', async ({ tg, brain, brainUrl }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       await rc.setBrain({ baseUrl: brainUrl, model: 'fake-local' });
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
@@ -445,7 +553,7 @@ module.exports = async function () {
 
   await test('RC: /session shows several sessions with their own states', async () => {
     await withRemote('multi', async ({ tg }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
 
@@ -483,7 +591,7 @@ module.exports = async function () {
 
   await test('RC: progress is shown only where something counted it', async () => {
     await withRemote('progress', async ({ tg }) => {
-      await rc.connect(FAKE_TOKEN);
+      await rc.connect(tg.token);
       guardian.identify('counted', { name: 'Counted' });
       guardian.turnBegin('counted', { turnId: 't1', model: 'm' });
       guardian.identify('uncounted', { name: 'Uncounted' });
@@ -523,7 +631,7 @@ module.exports = async function () {
 
   await test('RC: a queued continuation is one queue and one recovery, not a second one', async () => {
     await withRemote('continue', async ({ tg }) => {
-      await rc.connect(FAKE_TOKEN);
+      await rc.connect(tg.token);
       guardian.identify('conv', { name: 'Conv' });
       guardian.turnBegin('conv', { turnId: 't1', model: 'm' });
       guardian.turnEnd('conv', { outcome: 'rate_limited', reason: 'the route was limited' });
@@ -550,8 +658,8 @@ module.exports = async function () {
   });
 
   await test('RC: a model switch is validated against the routes the runtime knows are shut', async () => {
-    await withRemote('switch', async () => {
-      await rc.connect(FAKE_TOKEN);
+    await withRemote('switch', async ({ tg }) => {
+      await rc.connect(tg.token);
       guardian.identify('sw', { name: 'Switch' });
       guardian.turnBegin('sw', { turnId: 't1', model: 'old-model' });
       // The runtime learns a route is limited, the way it always does.
@@ -581,8 +689,8 @@ module.exports = async function () {
   });
 
   await test('RC: unknown is not zero — a route that never reported a cache says so', async () => {
-    await withRemote('tokens', async () => {
-      await rc.connect(FAKE_TOKEN);
+    await withRemote('tokens', async ({ tg }) => {
+      await rc.connect(tg.token);
       guardian.identify('cost', { name: 'Cost' });
       guardian.turnBegin('cost', { turnId: 't1', model: 'm' });
       // Usage with no cache field at all: this provider does not report one.
@@ -599,7 +707,7 @@ module.exports = async function () {
 
   await test('RC: when the local model comes back it reads the runtime, not the past', async () => {
     await withRemote('brainback', async ({ tg, brain, brainUrl }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       await rc.setBrain({ baseUrl: brainUrl, model: 'fake-local' });
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
@@ -640,15 +748,20 @@ module.exports = async function () {
   });
 
   // ---- THE OTHER END OF /continue ----------------------------------------
+  //
+  // The watcher that polled for these is gone; the DOOR is not. `drainQueued`
+  // is the same door it always was: the runtime's held queue, through the same
+  // recovery a locally refused sentence takes. The Harness that inherits
+  // remote control will open this door rather than build a second one.
 
   await test('RC: the CLI drains a remote continuation through the SAME recovery', async () => {
-    await withRemote('drain', async () => {
-      await rc.connect(FAKE_TOKEN);
+    await withRemote('drain', async ({ tg }) => {
+      await rc.connect(tg.token);
       const id = 'drained';
 
       // ---- A CLI THAT IS ATTACHED AND IDLE ------------------------------
       //
-      // The smallest thing `remotewatch` needs: a session, somewhere to write
+      // The smallest thing the drain needs: a session, somewhere to write
       // a notice, and a `submit` to record what it was asked to run. Anything
       // more would be testing the App class rather than the seam.
       const submitted = [];
@@ -659,7 +772,7 @@ module.exports = async function () {
         dispatching: 0,
         abort: null,
         inputClosed: false,
-        render: { notice: (kind, text) => notices.push(`${kind}: ${text}`) },
+        render: { notice: (kind, text) => notices.push(`${kind}: ${text}`), write: text => notices.push(text) },
         submit: async (text, opts) => {
           submitted.push({ text, opts, handover: app._handover });
           return { stopReason: 'end' };
@@ -678,7 +791,7 @@ module.exports = async function () {
       const queued = await rc.capability('session.continue', { session: id, intent: 'carry on' });
       assert.ok(queued.ok, queued.text);
 
-      await require('../../src/remotewatch').tick(app);
+      await require('../../src/inputgate').drainQueued(app);
 
       // ---- IT RAN, AS THE SAME TASK, WITH THE PACKET --------------------
       assert.strictEqual(submitted.length, 1, 'the queued intent was never run');
@@ -693,26 +806,16 @@ module.exports = async function () {
       // The flag does not outlive its turn.
       assert.strictEqual(app._handover, null);
 
-      // AND THE QUEUE IS EMPTY, so a second tick runs nothing.
-      await require('../../src/remotewatch').tick(app);
+      // AND THE QUEUE IS EMPTY, so a second drain runs nothing.
+      await require('../../src/inputgate').drainQueued(app);
       assert.strictEqual(submitted.length, 1, 'the intent was run twice');
     });
   });
 
-  await test('RC: a remote stop aborts the turn in flight and is then spent', async () => {
-    await withRemote('remotestop', async () => {
-      await rc.connect(FAKE_TOKEN);
+  await test('RC: a remote stop is recorded by the runtime and spent, not left set', async () => {
+    await withRemote('remotestop', async ({ tg }) => {
+      await rc.connect(tg.token);
       const id = 'stopping';
-      let aborted = false;
-      const app = {
-        session: { id },
-        cfg: {},
-        dispatching: 0,
-        abort: { signal: { aborted: false }, abort: () => { aborted = true; } },
-        inputClosed: false,
-        render: { notice: () => {} },
-        submit: async () => ({ stopReason: 'end' }),
-      };
       guardian.turnBegin(id, { turnId: 't1', model: 'm' });
       // The observation calls are fire-and-forget by design, so the session may
       // not exist yet the instant after asking for one.
@@ -722,14 +825,19 @@ module.exports = async function () {
       });
       const asked = await rc.capability('session.stop', { session: id });
       assert.ok(asked.ok, asked.text);
-
-      await require('../../src/remotewatch').tick(app);
-      assert.strictEqual(aborted, true, 'the turn was not stopped');
+      const askedState = await until(async () => {
+        const s = await guardian.state(id);
+        return s && s.stop_requested === true ? s : null;
+      });
+      assert.ok(askedState, 'the stop request was never recorded');
 
       // ---- AND THE REQUEST IS SPENT -------------------------------------
       //
+      // The CLI-side watcher that honoured this is gone with /rc; the runtime
+      // API that clears it survives for the Harness that inherits the control.
       // A flag left set would abort the NEXT turn, started minutes later by
       // somebody who never asked for anything to stop.
+      guardian.stopClear(id);
       const st = await until(async () => {
         const s = await guardian.state(id);
         return s && s.stop_requested === false ? s : null;
@@ -742,7 +850,7 @@ module.exports = async function () {
 
   await test('RC: the runtime tells an authorized chat when something needs a person', async () => {
     await withRemote('notify', async ({ tg }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
       const before = tg.sent.length;
@@ -771,7 +879,7 @@ module.exports = async function () {
 
   await test('RC: a notification is not repeated on the next tick', async () => {
     await withRemote('notifyonce', async ({ tg }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
 
@@ -796,13 +904,13 @@ module.exports = async function () {
 
   await test('RC: Telegram going away degrades the link and leaves the runtime alone', async () => {
     await withRemote('degrade', async ({ tg }) => {
-      await rc.connect(FAKE_TOKEN);
+      await rc.connect(tg.token);
       await until(async () => ((await rc.status()).link === 'LISTENING' ? true : null));
       tg.fail = true;
       const degraded = await until(async () => ((await rc.status()).link === 'DEGRADED' ? await rc.status() : null));
       assert.ok(degraded, 'the link never reported itself degraded');
       assert.ok(degraded.last_error, 'and it says why');
-      assert.strictEqual(degraded.last_error.includes(FAKE_TOKEN), false, 'the error leaked the token');
+      assert.strictEqual(degraded.last_error.includes(tg.token), false, 'the error leaked the token');
 
       // THE RUNTIME IS UNAFFECTED — §15. Sessions and workers do not depend on
       // a chat service being reachable.
@@ -818,8 +926,8 @@ module.exports = async function () {
   });
 
   await test('RC: disconnect removes it, and a restart does not silently reconnect', async () => {
-    await withRemote('disconnect', async ({ home }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+    await withRemote('disconnect', async ({ tg, home }) => {
+      const r = await rc.connect(tg.token);
       assert.ok(r.ok);
       const gone = await rc.disconnect();
       assert.ok(gone.ok && gone.removed);
@@ -838,7 +946,7 @@ module.exports = async function () {
 
   await test('RC: the credential and the authorizations survive a supervisor restart', async () => {
     await withRemote('survive', async ({ tg }) => {
-      const r = await rc.connect(FAKE_TOKEN);
+      const r = await rc.connect(tg.token);
       tg.say(`/pair ${r.pairingCode}`);
       await until(() => (saidTo(tg).includes('Authorized') ? true : null));
 

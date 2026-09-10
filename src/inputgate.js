@@ -116,13 +116,24 @@ async function recover(app, verdict) {
   // sent from a phone arrive here identically — the second simply has no failure
   // to report, so it says where it came from instead of what went wrong. That
   // difference is a NOTICE and nothing else: every step below is the same one.
-  if (verdict.queued) {
-    app.render.notice('info',
-      'picked up from remote control — running it here with what LAIN observed.');
-  } else {
-    app.render.notice('warn',
-      `held — ${said}. Recovering with what LAIN observed rather than sending that on its own.`);
-  }
+  // ---- IT IS AN OPERATION, NOT A SENTENCE LAIN SAID --------------------
+  //
+  // THIS USED TO BE A `notice`, WHICH PUT IT IN THE CONVERSATION:
+  //
+  //     held — the last turn did not finish. Recovering with what LAIN
+  //     observed rather than sending that on its own.
+  //
+  // — a paragraph of recovery machinery, drawn exactly like something the model
+  // had answered, still sitting between two real exchanges an hour later. It is
+  // not a message and nobody comes back for it.
+  //
+  // The FACT is unchanged and is still recorded: `app._handover` carries the
+  // reason into the packet the model reads, the Guardian has the verdict, and
+  // `/lain` and LAIN_DEBUG still print the detail. What changed is that the
+  // person at the keyboard gets one transient row saying what is being done —
+  // see ui/operation.js, and §5 for why these three lines were the example.
+  const op = require('./ui/operation');
+  op.say(app, verdict.queued ? 'Picked up from remote control' : 'Recovering interrupted turn');
   if (process.env.LAIN_DEBUG) {
     app.render.notice('info', `[gate] ${String(verdict.reason || '').slice(0, MAX_REASON)}`);
   }
@@ -136,6 +147,7 @@ async function recover(app, verdict) {
   //
   // Bounded inside runtimefacts.refresh, because a wedged supervisor must cost a
   // recovery some latency and never the recovery itself.
+  op.say(app, 'Restoring what LAIN observed');
   await require('./runtimefacts').refresh(app);
 
   // ---- 3. TAKE -----------------------------------------------------------
@@ -179,6 +191,7 @@ async function recover(app, verdict) {
       input: rows.map((h) => ({ text: h.text, at: h.at, reason: h.reason })),
     }
     : null;
+  op.say(app, 'Continuing from verified state');
   try {
     return await app.submit(intent, { sameTask: true, from: 'handover' });
   } finally {
@@ -215,9 +228,11 @@ async function recover(app, verdict) {
  * second implementation of it, and that is the whole reason the queue is in the
  * runtime rather than in either surface.
  *
- * CALLED ONLY WHEN NOTHING IS IN FLIGHT — see remotewatch.js. Draining into a
- * running turn would be a steer the user did not aim at this turn, and would
- * race the transcript against itself.
+ * CALLED ONLY WHEN NOTHING IS IN FLIGHT. Draining into a running turn would be a
+ * steer the user did not aim at this turn, and would race the transcript against
+ * itself. (The /rc-era watcher that called this from a timer was removed with
+ * /rc; the door stays — the Harness that inherits remote control will open it
+ * rather than build a second recovery.)
  *
  * @returns {Promise<object|null>} the turn record, or null when nothing waited.
  */

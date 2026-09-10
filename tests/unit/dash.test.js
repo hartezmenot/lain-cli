@@ -262,22 +262,20 @@ module.exports = async function () {
     assert.strictEqual(after.code, 0, 'the socket must be closed, not merely ignored');
   });
 
-  await test('DASH: /dash, /rc and /ready are three things and none is an alias', () => {
+  await test('DASH: /dash and /ready are two things and neither is an alias', () => {
     const commands = require('../../src/commands');
-    // /rc USED TO MEAN READINESS. It now means REMOTE CONTROL, and readiness
-    // moved to /ready with the same engine — see reportcommands.js. The property
-    // these three assertions protect is unchanged: separate subjects, separate
+    // /rc WAS REMOTE CONTROL (a Telegram bot set up from the terminal) and was
+    // removed from LAIN CLI in 2026-09 — the supervisor capability wire survived
+    // without it. Readiness lives at /ready with the engine it always had. The
+    // property these assertions protect is unchanged: separate subjects, separate
     // engines, no aliasing.
-    for (const name of ['/dash', '/rc', '/ready']) {
+    for (const name of ['/dash', '/ready']) {
       assert.ok(commands.REGISTRY.has(name), `${name} must exist`);
     }
+    assert.ok(!commands.REGISTRY.has('/rc'), '/rc was removed');
     const dash = commands.REGISTRY.get('/dash');
-    const rc = commands.REGISTRY.get('/rc');
     const ready = commands.REGISTRY.get('/ready');
-    assert.notStrictEqual(dash.run, rc.run, '/dash is a local web server; /rc is a Telegram bot');
-    assert.notStrictEqual(rc.run, ready.run, '/rc is remote control; /ready is readiness');
     assert.notStrictEqual(dash.run, ready.run);
-    assert.match(rc.desc, /remote/i, '/rc must read as remote control');
     assert.ok(!/remote control/i.test(ready.desc), '/ready must not read as remote control');
   });
 

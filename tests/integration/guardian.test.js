@@ -406,7 +406,20 @@ module.exports = async function () {
     // vocabulary rather than the behaviour and failed on a comment saying
     // exactly the right thing, which is a guard training people to delete
     // explanations.
+    // ---- AND LINE ENDINGS, WHICH BROKE THIS GUARD ONCE -------------------
+    //
+    // `.` does not match a carriage return in JavaScript, so on a CRLF checkout
+    // `//.*$` cannot reach the end of the line and NOTHING was stripped — the
+    // guard then failed on a comment that says, correctly, that the gate does
+    // not read `record.stopReason`. This repository has `core.autocrlf=true` and
+    // no `.gitattributes`, so a fresh clone on Windows produces exactly that:
+    // the guard was failing for every new contributor on this platform and
+    // passing only where a tool happened to have rewritten the file as LF.
+    //
+    // The rule is about what the gate DOES. It has no opinion about line
+    // endings, so they are normalised before it is applied.
     const code = gate
+      .replace(/\r/g, '')
       .replace(/\/\*[\s\S]*?\*\//g, ' ')
       .split(String.fromCharCode(10))
       .map((l) => l.replace(/\/\/.*$/, ''))

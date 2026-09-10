@@ -49,8 +49,8 @@ function home() {
   return path.join(base, '.lain-v2');
 }
 
-function stateDir() { return path.join(home(), 'supervisor'); }
-function endpointFile() { return path.join(stateDir(), 'endpoint.json'); }
+function stateDir(root = home()) { return path.join(root, 'supervisor'); }
+function endpointFile(root = home()) { return path.join(stateDir(root), 'endpoint.json'); }
 
 /**
  * Where the built binary is. Debug and release are both accepted because a
@@ -91,9 +91,9 @@ function alive(pid) {
 }
 
 /** The endpoint a live supervisor is serving on, or null. */
-function endpoint() {
+function endpoint(root = home()) {
   let raw;
-  try { raw = fs.readFileSync(endpointFile(), 'utf8'); } catch { return null; }
+  try { raw = fs.readFileSync(endpointFile(root), 'utf8'); } catch { return null; }
   let v;
   try { v = JSON.parse(raw); } catch { return null; }
   if (!v || !v.pid || !v.port) return null;
@@ -160,17 +160,57 @@ function send(port, msg, { timeoutMs = TIMEOUT_MS } = {}) {
  * the requirement is precisely that it is not. `unref()` then removes it from
  * this process's event loop so LAIN can exit whenever it likes.
  */
-async function ensure({ startTimeoutMs = START_TIMEOUT_MS } = {}) {
+const starting = new Map();
+const owned = new Map();
+
+function ensure(opts = {}) {
+  const root = path.resolve(home());
+  if (starting.has(root)) return starting.get(root);
+  const pending = start(root, opts).finally(() => starting.delete(root));
+  starting.set(root, pending);
+  return pending;
+}
+
+async function stopChild(child) {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+  if (process.platform === 'win32') {
+    await new Promise((resolve) => {
+      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+      killer.once('error', resolve);
+      killer.once('close', resolve);
+    });
+  } else {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
+  }
+  const deadline = Date.now() + 3000;
+  while (alive(child.pid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+  if (alive(child.pid)) throw new Error(`owned supervisor ${child.pid} did not stop`);
+}
+
+/** Only processes spawned by this client, never one discovered in another home. */
+async function cleanupOwned() {
+  await Promise.all([...starting.values()]);
+  const results = await Promise.allSettled([...owned.values()].map(stopChild));
+  for (const [pid, child] of owned) if (!alive(pid) || child.exitCode !== null) owned.delete(pid);
+  const failed = results.find((r) => r.status === 'rejected');
+  if (failed) throw failed.reason;
+}
+
+async function start(root, { startTimeoutMs = START_TIMEOUT_MS, signal = null } = {}) {
+  if (signal && signal.aborted) return { available: true, running: false, why: 'supervisor startup cancelled' };
   const first = probe();
   if (first.running) return first;
   if (!first.available) return first;
 
-  try { fs.mkdirSync(stateDir(), { recursive: true }); } catch { /* already there */ }
+  try { fs.mkdirSync(stateDir(root), { recursive: true }); } catch { /* reported by readiness */ }
+  let child;
+  let spawnError = null;
   try {
-    const child = spawn(first.binary, ['serve'], {
+    child = spawn(first.binary, ['serve', '--home', root], {
       detached: true,
       stdio: 'ignore',
-      env: process.env,
+      windowsHide: true,
+      env: { ...process.env, LAIN_HOME: root },
     });
     // A SPAWN FAILURE ARRIVES LATE, AND UNHANDLED IT IS FATAL. `spawn` reports
     // ENOENT by emitting `error` on the child, after this function has already
@@ -178,7 +218,11 @@ async function ensure({ startTimeoutMs = START_TIMEOUT_MS } = {}) {
     // process down. LAIN must never die because an optional component is
     // missing, so the failure is absorbed here and surfaced by the readiness
     // poll below, which is the thing that can actually report it.
-    child.on('error', () => { /* reported by the poll: no port is ever announced */ });
+    child.on('error', (e) => { spawnError = e; });
+    if (child.pid) {
+      owned.set(child.pid, child);
+      child.once('exit', () => owned.delete(child.pid));
+    }
     child.unref();
   } catch (e) {
     return { available: false, running: false, endpoint: null, binary: first.binary, why: `could not start the supervisor: ${e.message}` };
@@ -188,13 +232,16 @@ async function ensure({ startTimeoutMs = START_TIMEOUT_MS } = {}) {
   // holding a pipe, because holding a pipe is the thing we just avoided.
   const deadline = Date.now() + startTimeoutMs;
   while (Date.now() < deadline) {
-    const ep = endpoint();
+    if (spawnError || (signal && signal.aborted)) break;
+    const ep = endpoint(root);
     if (ep) {
-      const pong = await send(ep.port, { op: 'ping' });
+      const pong = await send(ep.port, { op: 'ping' }, { timeoutMs: Math.max(1, Math.min(500, deadline - Date.now())) });
       if (pong && pong.ok) return { available: true, running: true, endpoint: ep, binary: first.binary, why: '' };
     }
     await new Promise((r) => setTimeout(r, 60));
   }
+  await stopChild(child);
+  if (signal && signal.aborted) return { available: true, running: false, endpoint: null, why: 'supervisor startup cancelled' };
   return { available: true, running: false, endpoint: null, binary: first.binary, why: 'the supervisor did not announce a port in time' };
 }
 
@@ -349,6 +396,18 @@ async function shutdown(opts = {}) {
   return send(ep.port, { op: 'shutdown' }, opts);
 }
 
+/** Test/installer teardown for an explicit home. Verify the wire's PID first. */
+async function shutdownIn(root, { timeoutMs = 3000 } = {}) {
+  const ep = endpoint(root);
+  if (!ep) return;
+  const pong = await send(ep.port, { op: 'ping' }, { timeoutMs });
+  if (!pong.ok || pong.pid !== ep.pid) throw new Error(`cannot verify supervisor identity in ${root}`);
+  await send(ep.port, { op: 'shutdown' }, { timeoutMs });
+  const deadline = Date.now() + timeoutMs;
+  while (alive(ep.pid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+  if (alive(ep.pid)) throw new Error(`supervisor ${ep.pid} remained after teardown in ${root}`);
+}
+
 /**
  * Build the binary. Only ever called deliberately — never on a normal start,
  * because a coding CLI that shells out to a compiler at launch is a coding CLI
@@ -367,8 +426,8 @@ function build({ release = true } = {}) {
 }
 
 module.exports = {
-  probe, ensure, submit, status, cancel, list, events, shutdown, build,
+  probe, ensure, submit, status, cancel, list, events, shutdown, shutdownIn, build,
   call, callIfRunning,
   noteProvider, providers, setProvider, clearProvider,
-  endpoint, binary, alive, stateDir, endpointFile, TIMEOUT_MS,
+  endpoint, binary, alive, stateDir, endpointFile, TIMEOUT_MS, cleanupOwned,
 };

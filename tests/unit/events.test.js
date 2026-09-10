@@ -35,6 +35,23 @@ module.exports = async function () {
       'tool.completed', 'tool.started',
       'visual.judged', 'visual.presented',
       'waiting_for_user',
+      // ---- THE HARNESS VOCABULARY, ADDED TO THE SAME BUS -----------------
+      //
+      // Listed here rather than tested loosely, because this assertion IS the
+      // contract: a companion written against this list is written against all
+      // of it. The harness needed named facts for the same reason the original
+      // fifteen exist, and putting them on a second bus would have made a
+      // companion merge two channels in arrival order — the drift the whole
+      // file exists to prevent. See src/events.js and src/harness/runtime.js.
+      'task.created', 'task.paused', 'task.resumed', 'task.cancelled', 'task.state',
+      'agent.started', 'agent.completed', 'agent.failed',
+      'tool.failed',
+      'process.started', 'process.stopped', 'process.failed', 'process.health',
+      'browser.started', 'browser.observed', 'browser.error', 'browser.closed',
+      'verification.started', 'verification.passed', 'verification.failed', 'verification.inconclusive',
+      'observation.made', 'artifact.created',
+      'approval.required', 'approval.resolved',
+      'recovery.started', 'hook.ran',
     ].sort());
   });
 

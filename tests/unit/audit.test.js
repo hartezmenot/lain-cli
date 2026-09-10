@@ -7,12 +7,16 @@
  *   - an audit that reports the PHRASE "not implemented" from a comment as
  *     unfinished work (noise dressed as a finding);
  *   - an audit that dumps code instead of a plain-language reading;
- *   - `/troubleshoot` quietly becoming an ordinary edit request because the
- *     classifier guessed BUGFIX from the words, defeating the whole point of a
- *     command that says "trace before you touch anything".
+ *   - the AUDIT machinery rotting now that no command reaches it.
  *
- * They test the PATH the user takes — command → mode → guidance — not just that
- * a function returns a value.
+ * BOTH COMMANDS WERE REMOVED FROM THE SURFACE in the 2026-09 UX subtraction
+ * pass, and the WIRING block below now guards THAT: the door is gone, the room
+ * behind it is not, and a plain-English problem report still reaches the
+ * TROUBLESHOOT workflow through mode.js rather than through a command the user
+ * had to know existed.
+ *
+ * They test the PATH the user takes — description → mode → guidance — not just
+ * that a function returns a value.
  */
 
 const assert = require('assert');
@@ -137,38 +141,47 @@ module.exports = async function () {
 
   // ------------------------------------------------------ command wiring ---
 
-  await test('WIRING: /audit and /troubleshoot are registered commands', () => {
-    assert.ok(commands.looksLikeCommand('/audit'));
-    assert.ok(commands.looksLikeCommand('/troubleshoot the button is stuck'));
+  await test('WIRING: /audit and /troubleshoot are GONE from the command surface', () => {
+    // ---- THESE FOUR TESTS ASSERTED THE OPPOSITE UNTIL THIS PASS ----------
+    //
+    // Both commands were removed deliberately (see the note above
+    // `/troubleshoot` in src/commands.js). The tests were not updated with
+    // them, so a green suite was impossible and six failures became permanent
+    // furniture — which is worse than either decision, because a suite with
+    // known-red tests in it stops being read at all.
+    //
+    // WHAT IS ASSERTED NOW IS THE DECISION ITSELF: the door is gone, and the
+    // room behind it is not. Re-registering either command should fail here.
+    assert.ok(!commands.looksLikeCommand('/audit'), '/audit was removed from the surface');
+    assert.ok(!commands.looksLikeCommand('/troubleshoot the button is stuck'),
+      '/troubleshoot was removed from the surface');
   });
 
-  await test('WIRING: /audit <folder> forwards to the comparison, not the self-audit', async () => {
-    const other = project({ 'src/orchestra.js': 'x' });
-    const here = sink();
-    here.cfg = {};
-    here.session = { cwd: process.cwd() };
-    await commands.run(here, `/audit ${other}`);
-    assert.ok(here._lastCompare, '/audit with a source must run /compare (which records _lastCompare)');
-    assert.match(here.all, /Comparison/);
+  await test('WIRING: the TROUBLESHOOT workflow is reached by DESCRIBING the problem', () => {
+    // The capability was never deleted — only the command that forced it. A
+    // person now says what is wrong and the classifier picks the shape, which
+    // is the whole point of the subtraction: no mode to know about.
+    const mode = require('../../src/mode');
+    assert.strictEqual(mode.classify('something is broken somewhere', {}).mode, 'TROUBLESHOOT');
+    assert.strictEqual(mode.classify('the dashboard is acting up', {}).mode, 'TROUBLESHOOT');
+    // And the mode is still a real one the rest of the program knows.
+    assert.strictEqual(mode.KIND.TROUBLESHOOT, 'TROUBLESHOOT');
   });
 
-  await test('WIRING: bare /troubleshoot asks what is wrong instead of doing nothing', async () => {
-    const app = sink();
-    let submitted = null;
-    app.submit = (t, o) => { submitted = { t, o }; };
-    await commands.run(app, '/troubleshoot');
-    assert.match(app.all, /Troubleshoot what/i);
-    assert.strictEqual(submitted, null, 'an empty /troubleshoot must not submit a turn');
+  await test('WIRING: the troubleshoot MACHINERY survives the command removal', () => {
+    // REMOVE A USER-FACING COMMAND, DO NOT DELETE AN INTERNAL CAPABILITY.
+    // The evidence scan and the report renderer are still here and still
+    // consumed (/copy troubleshoot, the relay); this pins that, so a later
+    // cleanup cannot mistake the surviving module for dead code.
+    const ts = require('../../src/troubleshoot');
+    assert.strictEqual(typeof ts, 'object');
+    assert.ok(Object.keys(ts).length > 0, 'the troubleshoot module still exports its machinery');
   });
 
-  await test('WIRING: /troubleshoot <text> submits that text FORCED into TROUBLESHOOT mode', async () => {
-    const app = sink();
-    let submitted = null;
-    app.submit = (t, o) => { submitted = { t, o }; };
-    await commands.run(app, '/troubleshoot the signal button stays OFF');
-    assert.ok(submitted, 'it must submit a turn');
-    assert.strictEqual(submitted.t, 'the signal button stays OFF');
-    assert.strictEqual(submitted.o.forceMode, 'TROUBLESHOOT');
+  await test('WIRING: /compare still exists — it is what /audit <folder> used to reach', () => {
+    // `/audit <folder>` forwarded here. The comparison itself was never the
+    // thing being removed, so it must still be reachable on its own name.
+    assert.ok(commands.looksLikeCommand('/compare'), '/compare is still a command');
   });
 
   // ------------------------------------------------- the mode override ---

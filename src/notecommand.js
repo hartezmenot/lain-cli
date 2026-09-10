@@ -6,7 +6,7 @@
  * THE PROBLEM, in the user's own words: *"I wanted to complain about something
  * but forgot what it was."* A thought arrives in the middle of doing something
  * else — the spacing feels compressed, that migration left something behind,
- * the browser check never actually ran — and by the time the current thing is
+ * the verification never actually ran — and by the time the current thing is
  * finished it is gone.
  *
  * Every mechanism LAIN already had loses it. The transcript loses it to
@@ -22,8 +22,8 @@
  *
  *     /note the context summary still feels compressed
  *     /note decision external JSON is the source of truth
- *     /note fact lain-probe takes decimal PIDs
- *     /note limitation browser checks need a Chromium that is not installed
+ *     /note fact the dashboard binds 127.0.0.1 only
+ *     /note limitation the fixture environment has no network
  *
  * Bare `/note` lists what is remembered. `/note drop C03` removes one.
  * ------------------------------------------------------------------------
@@ -88,21 +88,28 @@ function register({ define, C }) {
   });
 }
 
-/** What is remembered, grouped by kind — settled things first, notes last. */
+/**
+ * What is remembered — THE MEMORY PANE, drawn here.
+ *
+ * ------------------------------------------------------------------------
+ * TWO RENDERINGS OF ONE STORE BECAME ONE.
+ *
+ * `ui/memoryview.js` drew the MEMORY workspace pane and this function drew
+ * `/note` with no arguments, off the same `memory.grouped(root)`. They said
+ * different things: the pane explained what this store IS and what it is not,
+ * offered the two commands that write to it, and grouped by kind with the
+ * settled kinds first; this printed a bare list.
+ *
+ * The pane is gone; its rendering is the one that survives, because it is the
+ * better answer to the same question, and because a second formatter over one
+ * store is a second thing to keep in step.
+ * ------------------------------------------------------------------------
+ */
 function list(app, memory, root, C) {
-  const groups = memory.grouped(root);
-  if (!groups.length) {
-    app.render.write(C.dim('\n  No runtime notes for this project yet.\n'));
-    app.render.write(C.dim('  /note <what you noticed> keeps one. These are this machine\'s observations —\n'
-      + '  evidence-backed project FACTS live in .lain and are promoted from scratch, not noted.\n'));
-    return;
+  const width = (app.render && app.render.width) || 80;
+  for (const line of require('./ui/memoryview').render({ root, width })) {
+    app.render.write(line + '\n');
   }
-  app.render.write(C.dim('\n  RUNTIME NOTES — this machine\'s observations; not evidence-gated project facts.\n'));
-  for (const g of groups) {
-    app.render.write(`\n  ${C.bold(g.kind.toUpperCase())}\n`);
-    for (const i of g.items) app.render.write(`${C.dim(`    ${i.id}`)}  ${i.text}\n`);
-  }
-  app.render.write(C.dim('\n  /note drop <id> removes one.\n'));
 }
 
 module.exports = { register, list };

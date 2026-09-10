@@ -106,7 +106,7 @@ module.exports = async function () {
       timeoutMs: 45000,
     });
     const out = plain(r.out);
-    assertIncludes(out, 'INTERRUPTED', 'a press during work must cancel the work');
+    assert.match(out, /INTERRUPTED/i, 'a press during work must cancel the work');
     assert.ok(!/Press Ctrl\+C again to exit/.test(out), 'and must NOT arm the exit confirmation');
   });
 };

@@ -21,11 +21,12 @@
  * ------------------------------------------------------------------------
  *
  * WHAT IT IS FOR. Everything it reports is already obtainable: the parser, the
- * symbol model, the typo check, the residue scanner, the diff sensor, the
- * execution ledger and the browser are all reachable as tools. Obtaining it
+ * symbol model, the typo check, the residue scanner, the diff sensor and the
+ * execution ledger are all reachable as tools. Obtaining it
  * that way costs six or eight tool calls and leaves the correlation to whoever
  * is reading. This does the collection and the correlation once, and hands over
- * a single document.
+ * a single document. (A browser was among these once, as a tool; it was removed
+ * in 2026-09 and the list is shorter.)
  *
  * IT CHANGES NOTHING. Not one byte is written by any part of this. It is safe
  * during a turn for the same reason `/health` is.
@@ -48,7 +49,7 @@ const ANALYZER_TIMEOUT_MS = 120_000;
  */
 function parseArgs(argv = '') {
   const raw = String(argv || '').trim();
-  const opts = { deadCode: false, residue: null, tests: false, full: false };
+  const opts = { deadCode: false, residue: null, tests: false, full: false, detail: false };
   const words = raw.split(/\s+/).filter(Boolean);
   const gone = [];
   const removed = [];
@@ -58,6 +59,17 @@ function parseArgs(argv = '') {
     if (w === '--tests') { opts.tests = true; continue; }
     // The long form is still here; it stopped being the DEFAULT for a person.
     if (w === '--full' || w === '--long') { opts.full = true; continue; }
+    // ---- WHERE THE `detail` PANE WENT --------------------------------------
+    //
+    // CONTEXT and DETAIL were two renderings of THIS survey, drawn as two of
+    // the nine workspace panes (ui/contextview.js). CONTEXT carried identity,
+    // state and counts; DETAIL carried the rows behind those counts — every
+    // finding with its explanation, every changed file, what was NOT measured.
+    //
+    // The panes are gone, the renderings are not: `/brief` is CONTEXT and
+    // `/brief detail` is DETAIL, off the same pass, so the two still cannot
+    // describe the project differently.
+    if (w === 'detail' || w === '--detail') { opts.detail = true; continue; }
     if (w.startsWith('--gone=')) { gone.push(...w.slice(7).split(',').filter(Boolean)); continue; }
     if (w.startsWith('--removed=')) { removed.push(...w.slice(10).split(',').filter(Boolean)); continue; }
     if (w.startsWith('--present=')) { present.push(...w.slice(10).split(',').filter(Boolean)); continue; }
@@ -161,7 +173,7 @@ function register({ define, C }) {
     // `flashMs: 0` because this is read rather than glanced at.
     surface: true,
     flashMs: 0,
-    args: '[--tests] [--dead] [--gone=A,B] [--removed=path] [--present=C]',
+    args: '[detail] [--tests] [--dead] [--full]',
     desc: 'Full engineering briefing: health on five axes, findings with ids and evidence, root causes',
     async run(app, ctx) {
       // `rest`, not `args`: the dispatcher hands `args` over as an ARRAY of
@@ -185,6 +197,13 @@ function register({ define, C }) {
       // `engineering_brief` tool returns to the model.
       if (out.opts.full) {
         app.render.write(`${out.text}\n`);
+      } else if (out.opts.detail) {
+        // THE EVIDENCE BEHIND THE COUNTS — what the DETAIL pane used to draw.
+        // Same survey, second rendering; see `parseArgs`.
+        const width = (app.render && app.render.width) || 80;
+        app.render.write(`${require('./ui/contextview').render('detail', out.survey, {
+          width, session: app.session, cwd: app.session && app.session.cwd,
+        }).join('\n')}\n`);
       } else {
         const view = require('./ui/briefview');
         const width = (app.render && app.render.width) || 80;

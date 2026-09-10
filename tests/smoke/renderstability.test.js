@@ -30,11 +30,21 @@ function frames(out) { return String(out).split('\x1b[?25l'); }
  * plain idle one. `> ` (inputbox.js's `lead` for the first visible row) is
  * the one marker that is the same in all of them.
  */
+/**
+ * WHICH TERMINAL ROW THE INPUT WAS DRAWN ON, or null.
+ *
+ * It used to be found by `│ > ` — the box edge and the prompt symbol. The region
+ * has neither: it is a grey fill inset by the content frame's gutter
+ * (ui/inputbox.js).
+ *
+ * THE CARET IS THE ANSWER NOW, and a better one: `draw()` ends every frame by
+ * parking the cursor on the row being edited, so the row it names IS the input's
+ * row by construction rather than by recognising how it happens to be drawn.
+ */
 function inputRow(frame) {
-  for (const m of frame.matchAll(/\x1b\[(\d+);1H([^\x1b]*)/g)) {
-    if (/│\s*>\s/.test(m[2].replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ''))) return Number(m[1]);
-  }
-  return null;
+  const marks = [...String(frame).matchAll(/\x1b\[(\d+);(\d+)H/g)];
+  if (!marks.length) return null;
+  return Number(marks[marks.length - 1][1]);
 }
 
 module.exports = async function () {

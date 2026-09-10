@@ -235,7 +235,7 @@ module.exports = async function () {
     // The chat path read no cache figures at all, so LAIN reported 0 on a route
     // that was serving 5,740 of 7,752 prompt tokens from cache. The saving was
     // already happening and was invisible — which is why `cache served` is now
-    // a line in `/tokens`.
+    // a line in `/token`.
     assert.strictEqual(promptcache.usageFrom({ prompt_tokens_details: { cached_tokens: 5740 } }).cacheReadTokens, 5740);
   });
 

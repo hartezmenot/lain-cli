@@ -37,7 +37,7 @@ const MAX_ENTRIES = 40;
  *
  * TWELVE of a hundred and fifty-six modules. Everything after `b` was
  * invisible — so a model asked for "a helper that formats byte sizes" had no
- * way to see that `numfmt.js` was already sitting there, and the cheapest
+ * way to see that such a module was already sitting there, and the cheapest
  * answer to "does this already exist" was a search it had no reason to run.
  *
  * That is the failure this brief exists to prevent: the model rebuilding

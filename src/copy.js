@@ -43,7 +43,7 @@ const MAX_CHARS = 200_000;
  * `width()` can count columns. Everything else LAIN or a subprocess emits went
  * straight through it:
  *
- *   OSC          `\x1b]0;LAIN — proj\x07`   termtitle.js writes one per session
+ *   OSC          `\x1b]0;proj\x07`         termtitle.js writes the window title
  *   CSI          `\x1b[K`, `\x1b[2J`        erase and cursor motion
  *   PASTE MARKS  `\x1b[200~` / `\x1b[201~`  bracketed paste
  *   ZERO WIDTH   U+200B, U+FEFF             invisible, a parse error each

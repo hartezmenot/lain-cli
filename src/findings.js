@@ -3,11 +3,13 @@
 /**
  * ONE VOCABULARY FOR EVERY ENGINEERING FINDING, whatever produced it.
  *
- * A parse error, a dangling symbol, a leftover from a half-done migration, a
- * console exception from a real browser and a test that did not run are five
- * completely different observations. What they have in common is what a person
+ * A parse error, a dangling symbol, a leftover from a half-done migration and a
+ * test that did not run are four completely different observations. What they
+ * have in common is what a person
  * needs in order to act on them: WHERE it is, WHAT it is, HOW SURE we are, WHAT
- * SAW IT, and WHETHER IT IS STILL OPEN.
+ * SAW IT, and WHETHER IT IS STILL OPEN. (A console exception from a real
+ * browser was a fifth once; it went with the browser in 2026-09, and the
+ * vocabulary that read it with it.)
  *
  * Without a shared shape, each producer invents its own — and the report
  * becomes a pile of differently-formatted paragraphs that a reader has to
@@ -55,8 +57,10 @@ const CATEGORY = Object.freeze({
   CONFIGURATION: 'CONFIGURATION',
   PATH: 'PATH',
   PERMISSION: 'PERMISSION',
-  FRONTEND_CONSOLE: 'FRONTEND_CONSOLE',
-  FRONTEND_LAYOUT: 'FRONTEND_LAYOUT',
+  // (FRONTEND_CONSOLE and FRONTEND_LAYOUT — categories for findings read off a
+  // running page — were removed with the browser in 2026-09. Their only
+  // producer was the browser console, and the static front-end boundary
+  // detection in audit.js reports through categories that never needed it.)
   GIT: 'GIT',
   ENVIRONMENT: 'ENVIRONMENT',
   UNVERIFIED: 'UNVERIFIED',
@@ -122,8 +126,8 @@ const SOURCE = Object.freeze({
   RESIDUE_SCANNER: 'Migration residue scanner',
   RUNTIME: 'Runtime',
   TEST_RUNNER: 'Test runner',
-  BROWSER_CONSOLE: 'Browser console',
-  DOM_MEASUREMENT: 'DOM measurement',
+  // (BROWSER_CONSOLE and DOM_MEASUREMENT — sources that read a running page —
+  // were removed with the browser in 2026-09; nothing can produce them now.)
   STATIC_ANALYSIS: 'Static analysis',
   FILESYSTEM: 'Filesystem',
   EXECUTION_ENGINE: 'Execution engine',
@@ -163,8 +167,6 @@ const LABEL_BY_CATEGORY = Object.freeze({
   [CATEGORY.SYMBOL]: 'SYMBOL',
   [CATEGORY.RUNTIME]: 'RUNTIME',
   [CATEGORY.TEST]: 'TEST',
-  [CATEGORY.FRONTEND_CONSOLE]: 'UI',
-  [CATEGORY.FRONTEND_LAYOUT]: 'UI',
   [CATEGORY.GIT]: 'GIT',
   [CATEGORY.DEAD_CODE]: 'DEAD',
   [CATEGORY.LINT]: 'LINT',

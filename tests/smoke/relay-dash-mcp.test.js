@@ -62,65 +62,56 @@ function get(port, p, headers = {}) {
 module.exports = async function () {
   // ---------------------------------------------------------------- relay ---
 
-  await test('RELAY: /troubleshoot runs LAIN → EXTERNAL → LAIN, and names why it stopped', async () => {
-    const { cwd, configDir } = probot({ externalTroubleshoot: { enabled: true, model: 'mock-model', maxRounds: 2 } });
-    const r = await runCli([], {
-      cwd, configDir,
-      stdin: '/troubleshoot errors are silently dropped in the dashboard\n/exit\n',
-      script: [REVIEW_1, { text: 'Patching it.', tool_calls: [{ name: 'run_bash', input: { command: 'echo patched' } }] }, { text: 'Done.' }, REVIEW_2],
-      timeoutMs: 60000,
-    });
-    const out = plain(r.out);
-    assert.strictEqual(r.code, 0);
-    // The local pass, before anything was asked of anyone.
-    assertIncludes(out, 'TROUBLESHOOT —');
-    assertIncludes(out, 'dashboard.py');
-    // The rounds, each labelled, in order.
-    assertIncludes(out, 'round 1/2');
-    assertIncludes(out, 'EXTERNAL');
-    assertIncludes(out, 'FACT');
-    assertIncludes(out, 'RECOMMENDATION');
-    assertIncludes(out, 'LAIN  acting on the recommendation');
-    assertIncludes(out, 'round 2/2');
-    // And a NAMED exit — never a silent stop.
-    assertIncludes(out, 'STOPPED —');
-    assertIncludes(out, 'EXTERNAL REVIEW', 'the report keeps the second opinion visibly separate');
+  // ---- THE RELAY IS ORPHANED, AND THAT IS THE FINDING --------------------
+  //
+  // These three tests drove `/troubleshoot` — removed from the command surface
+  // by the 2026-09 UX subtraction pass — and asserted the bounded external
+  // review it started: rounds, FACT/RECOMMENDATION, a NAMED exit, and the
+  // NOT CONFIGURED path when no reviewer exists.
+  //
+  // `investigation.relay` is called from exactly one place, `troubleshoot.js`
+  // `runCommand`, and NO registered command reaches that any more. The relay is
+  // therefore unreachable from the CLI: the machinery is intact and nothing can
+  // start it. Rewording these tests to pass would hide that, and deleting them
+  // would erase the only record of what the code can still do — so what is
+  // asserted here is the REACHABILITY fact itself, in the tier that can see it.
+  //
+  // This is reported as a known limitation rather than repaired, because the
+  // repair is a product decision: either give the relay a door (a command, or a
+  // model-facing tool) or retire it with its module. Both are larger than a
+  // test fix, and neither is this pass's to make silently.
+
+  await test('RELAY: the external-review relay has no entry point from the CLI', () => {
+    // Structural, not behavioural — there is nothing to drive. Proven the way
+    // the reachability guard proves anything: by reading who calls it.
+    const fsx = require('fs');
+    const path = require('path');
+    const root = path.join(__dirname, '..', '..', 'src');
+    const callers = fsx.readdirSync(root)
+      .filter((f) => f.endsWith('.js'))
+      .filter((f) => /require\(['\"]\.\/investigation['\"]\)/.test(fsx.readFileSync(path.join(root, f), 'utf8')));
+    assert.deepStrictEqual(callers, ['troubleshoot.js'],
+      'if this changed, the relay gained or lost a caller — update the limitation');
+    // And the only thing that calls INTO troubleshoot.runCommand was the
+    // command that no longer exists.
+    const { REGISTRY } = require('../../src/commands');
+    assert.ok(!REGISTRY.has('/troubleshoot'), '/troubleshoot is not a command');
   });
 
-  await test('RELAY: with no reviewer it says NOT CONFIGURED and does the local work', async () => {
+  await test('RELAY: the reviewer setting still reads and writes, with no relay to run', async () => {
+    // `/external` is a live command and is what a person would use to point at
+    // a reviewer. It must keep working — the setting is not what broke.
     const { cwd, configDir } = probot({});
     const r = await runCli([], {
       cwd, configDir,
-      stdin: '/troubleshoot the dashboard drops errors\n/exit\n',
-      script: [{ text: 'Finding: the handlers are bare.' }],
+      stdin: '/external\n/exit\n',
+      script: [{ text: 'unused' }],
       timeoutMs: 40000,
     });
     const out = plain(r.out);
-    // EXTERNAL ACTOR, not EXTERNAL LLM: a reviewer is no longer necessarily a
-    // model. The assertion is the same one it always was — the absence must be
-    // NAMED on screen and never left silent — only the name of the thing changed.
-    assertIncludes(out, 'EXTERNAL ACTOR');
+    assert.strictEqual(r.code, 0);
+    assertIncludes(out, 'External actor');
     assertIncludes(out, 'NOT CONFIGURED');
-    assertIncludes(out, 'FINDING', 'and the local investigation still happened');
-    assert.ok(!/round 1\//.test(out), 'no rounds may be claimed when there was no reviewer');
-  });
-
-  await test('RELAY: a DISABLED reviewer means no review is claimed, and local work still runs', async () => {
-    // The other half — a model named but served by nothing — resolves through
-    // the ordinary catalog and is covered by the unit tier; it cannot be shown
-    // here, because the scripted provider answers to any model name by design.
-    const { cwd, configDir } = probot({ externalTroubleshoot: { enabled: false, model: 'mock-model' } });
-    const r = await runCli([], {
-      cwd, configDir,
-      stdin: '/troubleshoot something is wrong\n/exit\n',
-      script: [{ text: 'Finding: nothing conclusive.' }],
-      timeoutMs: 40000,
-    });
-    const out = plain(r.out);
-    assertIncludes(out, 'NOT CONFIGURED');
-    assert.ok(!/EXTERNAL REVIEW/.test(out), 'no review may be reported when none happened');
-    assert.ok(!/round 1\//.test(out), 'and no rounds either');
-    assertIncludes(out, 'FINDING', 'the local investigation still ran');
   });
 
   await test('EXTERNAL: /external shows, sets and disables the reviewer', async () => {
@@ -181,7 +172,7 @@ module.exports = async function () {
     const { spawn } = require('child_process');
     const env = { ...process.env };
     for (const k of Object.keys(env)) if (k.startsWith('LAIN_')) delete env[k];
-    Object.assign(env, { LAIN_CONFIG_DIR: configDir, LAIN_NO_COLOR: '1', NO_COLOR: '1', LAIN_PROVIDER: 'mock' });
+    Object.assign(env, { LAIN_CONFIG_DIR: configDir, LAIN_HOME: path.join(configDir, 'supervisor-home'), LAIN_NO_COLOR: '1', NO_COLOR: '1', LAIN_PROVIDER: 'mock', LAIN_SUPERVISOR_BIN: process.env.LAIN_SUPERVISOR_BIN || '', LAIN_SUPERVISOR_LEASE_PORT: process.env.LAIN_SUPERVISOR_LEASE_PORT || '' });
     const child = spawn(process.execPath, [path.join(__dirname, '..', '..', 'bin', 'lain.js')], { cwd, env, windowsHide: true });
     let out = '';
     child.stdout.on('data', (d) => { out += d; });
@@ -259,7 +250,7 @@ module.exports = async function () {
     const { spawn } = require('child_process');
     const env = { ...process.env };
     for (const k of Object.keys(env)) if (k.startsWith('LAIN_')) delete env[k];
-    Object.assign(env, { LAIN_CONFIG_DIR: configDir, LAIN_NO_COLOR: '1', NO_COLOR: '1', LAIN_PROVIDER: 'mock' });
+    Object.assign(env, { LAIN_CONFIG_DIR: configDir, LAIN_HOME: path.join(configDir, 'supervisor-home'), LAIN_NO_COLOR: '1', NO_COLOR: '1', LAIN_PROVIDER: 'mock', LAIN_SUPERVISOR_BIN: process.env.LAIN_SUPERVISOR_BIN || '', LAIN_SUPERVISOR_LEASE_PORT: process.env.LAIN_SUPERVISOR_LEASE_PORT || '' });
     const child = spawn(process.execPath, [path.join(__dirname, '..', '..', 'bin', 'lain.js')], { cwd, env, windowsHide: true });
     let out = '';
     child.stdout.on('data', (d) => { out += d; });
@@ -373,14 +364,14 @@ ${plain(out).slice(0, 400)}`);
 
   // ---------------------------------------------------------------- title ---
 
-  await test('TITLE: the tab reads LAIN — <project>, from the real binary', async () => {
+  await test('TITLE: the tab names the project, from the real binary', async () => {
     const dir = tmpdir('scalpbot-');
     const r = await runCli([], { cwd: dir, env: { LAIN_FORCE_TUI: '1', COLUMNS: '96', LINES: '30' }, stdin: '/exit\n', script: [] });
     const titles = [...r.out.matchAll(/\x1b\]0;([^\x07]*)\x07/g)].map((m) => m[1]).filter(Boolean);
     assert.ok(titles.length, 'the binary must emit the OSC sequence');
     const folder = path.basename(dir);
-    assert.ok(titles.some((x) => x === `LAIN — ${folder}` || x === `● LAIN — ${folder}`),
-      `expected "LAIN — ${folder}", saw ${JSON.stringify(titles)}`);
+    assert.ok(titles.some((x) => x === folder),
+      `expected the idle project title "${folder}", saw ${JSON.stringify(titles)}`);
   });
 
   // --------------------------------------------------------------- resume ---

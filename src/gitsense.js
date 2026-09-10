@@ -57,18 +57,20 @@ async function git(cwd, args) {
   return { ok: r.ok, out: String(r.stdout || ''), err: String(r.stderr || ''), code: r.exitCode };
 }
 
-/** Is this a git repository at all? Everything else depends on the answer. */
-async function isRepo(cwd) {
-  const r = await git(cwd, ['rev-parse', '--is-inside-work-tree']);
-  return r.ok && /true/.test(r.out);
-}
-
 /**
  * The working tree, from `--porcelain`, which is the machine-readable form and
  * is stable across git versions in a way the human output is not.
+ *
+ * `-- .`: the tree AS SEEN FROM cwd. Unscoped, git reports the whole
+ * repository's state — so a session rooted in one directory of a monorepo
+ * would be briefed on every other directory's changes. The pathspec scopes
+ * the answer to the session's own subtree. The names stay repo-root-relative
+ * regardless: porcelain v1 ignores `status.relativePaths` on purpose
+ * (git-status(1): "paths shown will always be relative to the repository
+ * root"), and review() is where that base is converted.
  */
 async function status(cwd) {
-  const r = await git(cwd, ['status', '--porcelain=v1', '-uall']);
+  const r = await git(cwd, ['status', '--porcelain=v1', '-uall', '--', '.']);
   if (!r.ok) return { ok: false, error: r.err.trim() || 'git status failed' };
   const files = [];
   for (const line of r.out.split('\n')) {
@@ -100,7 +102,16 @@ async function status(cwd) {
  */
 async function numstat(cwd) {
   const totals = new Map();
-  for (const args of [['diff', '--numstat'], ['diff', '--numstat', '--staged']]) {
+  for (const args of [
+    // --no-relative: numstat's names must sit in the same frame as status's.
+    // Both default to repo-root-relative, but a user's `diff.relative` config
+    // can flip diff's frame (git-diff(1) --relative), which would silently
+    // desync the two halves of the join in review(). Pinning it here makes
+    // the frame a property of the code, not of the machine's config.
+    // `-- .`: same subtree scoping as status().
+    ['diff', '--numstat', '--no-relative', '--', '.'],
+    ['diff', '--numstat', '--staged', '--no-relative', '--', '.'],
+  ]) {
     const r = await git(cwd, args);
     if (!r.ok) continue;
     for (const line of r.out.split('\n')) {
@@ -130,12 +141,37 @@ function countLines(abs) {
  *   same as wrong: the tree may have been dirty before the session started.
  */
 async function review(cwd, { expected = [] } = {}) {
-  if (!await isRepo(cwd)) {
+  // One rev-parse answers both entry questions at once: is cwd inside a work
+  // tree at all, and — the fact the frame conversion below turns on — how cwd
+  // sits under the repository root. This replaces the separate isRepo probe,
+  // because review() runs once per request on the per-turn path and a git
+  // spawn on Windows is not free.
+  const pf = await git(cwd, ['rev-parse', '--is-inside-work-tree', '--show-prefix']);
+  const pfl = String(pf.out || '').split('\n');
+  if (!pf.ok || pfl[0].trim() !== 'true') {
     return { ok: false, error: 'not a git repository, so there is nothing to compare against' };
   }
   const st = await status(cwd);
   if (!st.ok) return { ok: false, error: st.error };
   const stats = await numstat(cwd);
+
+  // ---- THE TWO FRAMES, JOINED IN ONE PLACE --------------------------------
+  //
+  // status() and numstat() both report names relative to the REPOSITORY ROOT
+  // (porcelain v1 ignores status.relativePaths on purpose; --no-relative pins
+  // numstat the same way), while everything downstream of here — the expected
+  // list, countLines, the names a model reads back — is in the CWD frame. When
+  // cwd is the repo root the two coincide and none of this matters; when it is
+  // a subdirectory they diverge on every file, and before this join existed a
+  // subdirectory session had EVERY file flagged `unexpected` (its expected
+  // paths, normalized cwd-relative, could never equal git's root-relative
+  // names) while countLines probed paths that did not exist. The second line
+  // of the rev-parse above is git's own answer for how cwd sits under the
+  // root: 'sub/dir/' from inside one, '' at the root — where the conversion
+  // is the identity, so a root-level session's answers are byte-for-byte
+  // what they always were.
+  const prefix = (pfl[1] || '').trim();
+  const inCwd = (name) => (prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name);
 
   const want = new Set(expected.map((p) => {
     const rel = path.isAbsolute(p) ? path.relative(cwd, p) : p;
@@ -143,12 +179,18 @@ async function review(cwd, { expected = [] } = {}) {
   }));
 
   const files = st.files.map((f) => {
+    // The stats join happens in git's root frame — both sides as git reported
+    // them — and only then is the name converted to the cwd frame for
+    // everything LAIN does with it.
     const s = stats.get(f.file) || { added: 0, removed: 0, binary: false };
     const total = s.added + s.removed;
-    const lines = f.deleted ? null : countLines(path.join(cwd, f.file));
-    const generated = GENERATED.find(([re]) => re.test(f.file));
+    const file = inCwd(f.file);
+    const lines = f.deleted ? null : countLines(path.join(cwd, file));
+    const generated = GENERATED.find(([re]) => re.test(file));
     return {
       ...f,
+      file,
+      from: f.from ? inCwd(f.from) : f.from,
       added: s.added,
       removed: s.removed,
       binary: s.binary,
@@ -160,7 +202,7 @@ async function review(cwd, { expected = [] } = {}) {
         && s.removed >= lines * REWRITE_FRACTION && s.added >= lines * REWRITE_FRACTION,
       big: total >= BIG_FILE_LINES,
       generated: generated ? generated[1] : null,
-      unexpected: want.size > 0 && !want.has(f.file),
+      unexpected: want.size > 0 && !want.has(file),
     };
   });
 
@@ -222,8 +264,13 @@ function describe(r) {
         + 'last commit but are not files LAIN wrote. They may have been dirty before this session started.');
     }
     if (r.missing.length) {
-      notes.push(`WRITTEN BUT NOT DIFFERENT: ${r.missing.join(', ')} — LAIN wrote these and git sees no change, `
-        + 'so the write produced the same bytes that were already there.');
+      // "No change" is two observations, not one: the write matched the
+      // committed bytes, or git never looks at the path at all (ignored, or
+      // outside the reviewed subtree). Only the first was being stated — a
+      // false inference whenever the second was the case.
+      notes.push(`WRITTEN BUT NOT DIFFERENT: ${r.missing.join(', ')} — LAIN wrote these and git reports no change `
+        + 'for them: either the write produced the same bytes that were already there, or the path is not one '
+        + 'git tracks (ignored, or outside this directory).');
     }
   }
   if (notes.length) lines.push('', 'WORTH A SECOND LOOK', ...notes.map((n) => `  ${n}`));
@@ -231,6 +278,6 @@ function describe(r) {
 }
 
 module.exports = {
-  review, describe, status, numstat, isRepo,
+  review, describe, status, numstat,
   GENERATED, BIG_FILE_LINES, BIG_TOTAL_LINES, REWRITE_FRACTION,
 };

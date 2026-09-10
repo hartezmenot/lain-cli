@@ -24,6 +24,9 @@ const { wrapIndented, MAX_WRAPPED_ROWS } = require('./doc');
 const {
   pushAction, pushModel, pushUser, pushExternal, pushMcp, pushNote, pushLines, renderFeed, compactRuns, spokenCount,
 } = require('./feed');
+// WHICH CALLS LEAVE A ROW BEHIND - policy, in its own file, because this one
+// draws. See ui/durable.js.
+const { keepers } = require('./durable');
 
 const clip = T.clip;
 
@@ -252,9 +255,9 @@ function activity({ session, current = null, width = 80, transcript = null, live
 
   const lines = [];
 
-  // The task objective and its progress are PINNED above this feed by the
-  // screen (see taskBanner), so they are not repeated here — the feed is the
-  // scrolling account of the plan and what happened.
+  // THE PLAN, when there is one. The objective is not repeated here as a
+  // heading: it is the first thing the user said, and the feed below draws it
+  // as such.
   if (plan && plan.steps.length) {
     for (const st of plan.steps) {
       if (st.status === 'dropped') continue;
@@ -332,20 +335,27 @@ function activity({ session, current = null, width = 80, transcript = null, live
     // happens to carry the task objective. Their second sentence, and every one
     // after it, existed in the session and on the wire and nowhere on screen.
     //
-    // ...EXCEPT THE ONE THE PINNED BANNER IS ALREADY SHOWING. The task
-    // objective IS the first message, so drawing both put it on screen twice,
-    // three rows apart, for the whole task:
+    // ---- AND THE FIRST ONE IS DRAWN LIKE EVERY OTHER --------------------
+    //
+    // IT USED TO BE SUPPRESSED. The task objective IS the first message, and
+    // the PINNED BANNER above the feed was already showing it, so drawing both
+    // put the same sentence on screen twice, three rows apart, for the whole
+    // task:
     //
     //     TASK  find the bug
     //       USER
     //         ❯ find the bug
     //
-    // Only the FIRST turn can collide. A later message that happens to repeat
-    // the objective is the user saying it again, which is real and stays.
-    if (!(ti === 0 && sameText(t.userInput, session && session.task && session.task.objective))) {
-      sayInput(said, t.userInput, t.from);
-    }
+    // The banner is gone with the panes, and the suppression went with it —
+    // otherwise the objective would vanish from the surface entirely: the feed
+    // would be withholding the first message in favour of a region that no
+    // longer exists. Every message the user sent is drawn, including the first.
+    sayInput(said, t.userInput, t.from);
     const actions = Array.isArray(t.actions) ? t.actions : [];
+    // WHICH OF THEM LEAVE A ROW BEHIND. Computed once over the WHOLE turn,
+    // because one of the rules — the turn's standing verdict — cannot be decided
+    // from a single call. See ui/feed.js `keepers`.
+    const kept = keepers(actions);
     const narration = Array.isArray(t.narration) ? t.narration : null;
 
     // WHAT THE USER SAID WHILE IT WAS WORKING —.
@@ -375,10 +385,10 @@ function activity({ session, current = null, width = 80, transcript = null, live
         for (const n of narration.filter((x) => x.step === st)) {
           pushModel(said, settled(t, n), { last: n === lastSaid });
         }
-        for (const a of actions.filter((x) => x.step === st)) pushAction(said, a);
+        for (const a of actions.filter((x) => x.step === st && kept.has(x))) pushAction(said, a);
       }
       // Calls from a turn recorded before steps were tracked.
-      for (const a of actions.filter((x) => x.step === undefined)) pushAction(said, a);
+      for (const a of actions.filter((x) => x.step === undefined && kept.has(x))) pushAction(said, a);
     } else {
       for (const s of steers) pushUser(said, s.text);
       // ONE CALL, so a turn recorded before narration existed is laid out by
@@ -386,7 +396,10 @@ function activity({ session, current = null, width = 80, transcript = null, live
       // away the blank lines between paragraphs — the same formatting loss,
       // arrived at from the other direction.
       pushModel(said, t.text);
-      if (actions.length) for (const a of actions) pushAction(said, a);
+      if (actions.length) for (const a of actions.filter((x) => kept.has(x))) pushAction(said, a);
+      // A TURN RECORDED BEFORE ACTIONS EXISTED has only names, and a name
+      // cannot say whether the call succeeded — so there is nothing to classify
+      // and they are all kept, exactly as they were.
       else for (const n of t.toolNames || []) said.push({ kind: 'action', text: `${MARK.done} ${phrase(n, '')}` });
     }
     // ---- WHAT IT THOUGHT, WHEN IT SAID NOTHING AT ALL --------------------
@@ -404,7 +417,22 @@ function activity({ session, current = null, width = 80, transcript = null, live
     // Drawn ONLY when nothing was said and nothing was done. Thinking is not
     // speech: a turn with a real answer must not have its working-out replayed
     // underneath, which would bury the answer in the reasoning that led to it.
-    if (!said.length && String(t.reasoning || '').trim()) pushModel(said, t.reasoning);
+    //
+    // ---- "NOTHING WAS SAID" MEANS THE MODEL, NOT THE LIST ----------------
+    //
+    // This was `!said.length`, and it broke the moment the feed started drawing
+    // the FIRST user message. That message used to be suppressed — the pinned
+    // task banner was showing it — so for a reasoning-only first turn the list
+    // really was empty and the fallback fired. With the banner gone the feed
+    // draws every message, so `said` held the user's own words, the length was
+    // one, and a model that streams only `reasoning` produced a conversation
+    // with the question in it and no answer: exactly the blank-pane defect this
+    // fallback exists to prevent, reintroduced from the other side.
+    //
+    // The question is whether LAIN said or did anything, so that is what is
+    // asked. A user message is not LAIN speaking.
+    const lain = said.some((e) => e.kind === 'model' || e.kind === 'action');
+    if (!lain && String(t.reasoning || '').trim()) pushModel(said, t.reasoning);
     // A failed CALL is already in the feed, in order, as `✗ Read a.js` with its
     // reason. Replaying `t.errors` here appended a second, differently-worded
     // copy of the same failure at the end of the turn — the same event told
@@ -435,6 +463,12 @@ function activity({ session, current = null, width = 80, transcript = null, live
   // The message being worked on RIGHT NOW, which has no turn record yet.
   sayInput(said, liveUser, liveFrom);
 
+  // WHICH LIVE CALLS LEAVE A ROW. The standing verdict is the last clean command
+  // SO FAR, which is what a verdict is while the work is still going: as the next
+  // command lands it becomes the verdict and the previous one recedes into the
+  // live row it came from. See ui/feed.js `keepers`.
+  const liveKept = keepers(liveActions);
+
   // THE TURN IN FLIGHT. `session.turns` only gains an entry when a turn ENDS,
   // so without this the feed was empty for the entire time the work was
   // happening — a ten-call turn showed a status line above nothing until the
@@ -442,7 +476,19 @@ function activity({ session, current = null, width = 80, transcript = null, live
   for (let i = 0; i < liveActions.length; i++) {
     for (const n of liveNarration.filter((x) => x.after === i)) say(said, n);
     for (const n of liveNotes.filter((x) => x.after === i)) pushNote(said, n.text, n.level);
-    pushAction(said, liveActions[i]);
+    // ---- THE SAME RULE WHILE IT IS STILL HAPPENING ---------------------
+    //
+    // A routine call must not appear in the feed and then vanish from it when
+    // the turn ends — the conversation would visibly rewrite itself at the
+    // moment of settlement, which reads as a bug whichever version is right.
+    // So the live pass and the recorded pass ask the same question. The call in
+    // flight is still shown, in the one live row above the caret, which is
+    // where §6 puts it. See ui/feed.js `durable`.
+    //
+    // THE INDEX STILL ADVANCES for every action, durable or not: `liveNarration`
+    // and `liveNotes` are positioned by it, so skipping one would move the
+    // paragraphs that were said around it.
+    if (liveKept.has(liveActions[i])) pushAction(said, liveActions[i]);
   }
   for (const n of liveNarration.filter((x) => x.after >= liveActions.length)) say(said, n);
   for (const n of liveNotes.filter((x) => x.after >= liveActions.length)) pushNote(said, n.text, n.level);

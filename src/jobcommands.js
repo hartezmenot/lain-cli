@@ -7,10 +7,11 @@
  * WHAT THESE ARE FOR, and it is one question in four spellings: what is
  * happening that I am not looking at?
  *
- *     what is running?          /jobs
+ *     what is running?          /bg          (a glance)  ·  /jobs (the account)
  *     what is #1 doing?         /jobs 1
- *     did it finish? fail?      /jobs 1
- *     stop it                   /cancel 1
+ *     did it finish? fail?      /bg          ·  /jobs 1
+ *     what processes is it?     /ps
+ *     stop it                   /bg stop 1   ·  /cancel 1
  *     start another one         /bg <request>
  *
  * DELIBERATELY NOT A JOB MANAGER. There is no pause, no resume, no priority, no
@@ -51,10 +52,26 @@ function mark(job, C) {
   return job.waiting ? C.yellow('◒') : C.cyan('●');
 }
 
-function secs(ms) {
-  const s = Math.round((Number(ms) || 0) / 1000);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
-}
+/**
+ * HOW LONG A JOB HAS BEEN AT IT — `00:03:18`, the same shape as everything else.
+ *
+ * IT WAS `3m18s`, AND THAT WAS A SECOND VOCABULARY FOR ONE IDEA. The foreground
+ * work clock above the caret reads `HH:MM:SS` (ui/workclock.js); a background job
+ * read `3m18s`; both are elapsed time on the same screen, and a person comparing
+ * "how long has this taken" against "how long has that taken" had to convert
+ * between two formats to do it.
+ *
+ * SO IT IS THE SAME FUNCTION, not merely the same shape. `hhmmss` is imported
+ * rather than reimplemented, which is what stops the two drifting the day one of
+ * them grows an hours field and the other does not.
+ *
+ * THE CLOCKS THEMSELVES STAY SEPARATE. A job owns its own `elapsedMs` and the
+ * foreground owns its own accumulator; this is only how both are spelled. A
+ * background job running for an hour must not put an hour on the foreground row,
+ * and it does not — see ui/projection.js on why a `/bg` task never holds the
+ * spinner.
+ */
+const elapsedOf = (ms) => require('./ui/workclock').hhmmss(ms);
 
 /** One row per job: what it is, what it is doing, how long it has been at it. */
 function rows(app, C) {
@@ -68,7 +85,7 @@ function rows(app, C) {
           : j.waiting ? C.yellow('WAITING') : C.cyan('RUNNING');
     const what = String(j.request).replace(/\s+/g, ' ').slice(0, 46);
     const where = j.primary ? '' : C.dim(' ·bg');
-    return `  ${mark(j, C)} ${id} ${state}  ${what}${where}  ${C.dim(secs(j.elapsedMs))}`;
+    return `  ${mark(j, C)} ${id} ${state}  ${what}${where}  ${C.dim(elapsedOf(j.elapsedMs))}`;
   });
 }
 
@@ -81,7 +98,7 @@ function detail(app, id, C) {
     '',
     `  ${C.dim('request  ')} ${String(j.request).replace(/\s+/g, ' ').slice(0, 200)}`,
     `  ${C.dim('doing    ')} ${j.activity}`,
-    `  ${C.dim('elapsed  ')} ${secs(j.elapsedMs)}`,
+    `  ${C.dim('elapsed  ')} ${elapsedOf(j.elapsedMs)}`,
   ];
   if (j.needsInput) {
     out.push('', `  ${C.yellow('NEEDS INPUT')}  ${j.question.question}`);
@@ -233,20 +250,88 @@ define('/steer', {
     },
   });
 
+  /**
+   * `/bg` — LAIN'S BACKGROUND WORK.
+   *
+   * ------------------------------------------------------------------------
+   * IT CREATES NO SECOND EXECUTION SYSTEM. Every form below delegates:
+   *
+   *     /bg <instruction>   app.startBackground  ->  src/jobrunner.js
+   *     /bg                 app.jobs             ->  src/agentjob.js
+   *     /bg stop <id>       job.cancel           ->  the same cooperative stop
+   *                                                  `/cancel` has always used
+   *
+   * `startBackground` opens an AgentJob with its own session and its own steer
+   * queue, running the ordinary turn loop. Whether the work it then does
+   * becomes a JOB or a SERVICE is decided by the tools it reaches for, using
+   * semantics that already exist and are not re-implemented here:
+   *
+   *     `run the integration suite`   -> run_background  -> jobs.js
+   *                                      a command that ENDS and yields a
+   *                                      RESULT. QUEUED -> RUNNING -> SUCCEEDED
+   *                                      / FAILED / CANCELLED / TIMED_OUT.
+   *     `start the dev server`        -> service_start   -> harness/processes.js
+   *                                      a process that STAYS UP and has a
+   *                                      HEALTH, a port and an owning task.
+   *
+   * That distinction is spelled out at length in harness/processes.js and this
+   * command does not get a vote in it. LAIN classifies by doing.
+   *
+   * ------------------------------------------------------------------------
+   * `/bg` AND `/ps` ARE TWO ALTITUDES OF ONE THING.
+   *
+   *     /bg   LOGICAL work — what you asked for, what it is doing, whether it
+   *           finished, and whether the finish was proved.
+   *     /ps   PHYSICAL processes — the pids and services that work is currently
+   *           made of.
+   *
+   * One request can be several processes, or none yet, or none any more. Which
+   * is exactly why they are separate commands rather than one list.
+   *
+   * ------------------------------------------------------------------------
+   * BACKGROUND IS NOT UNVERIFIED. A `/bg` task runs under the same harness
+   * contract as the conversation: execution, then verification, then
+   * settlement. A process exiting zero is not a verdict — the task reaches
+   * PASSED only when its verification contract has the evidence, which is
+   * harness/state.js's rule and not something this command can shortcut.
+   * `/verify` and `/tasks` show the settled state.
+   *
+   * ------------------------------------------------------------------------
+   * IT DOES NOT SPAM THE CONVERSATION. Starting one prints a single line and
+   * hands the prompt straight back; the running account lives in the job's own
+   * session and is reached with `/jobs <n>`. Progress and completion surface as
+   * ONE ROW in the background region above the input (ui/jobsview.js), which is
+   * event-driven — `app.jobs.changed()` redraws, nothing polls.
+   */
   define('/bg', {
     surface: true,
-    args: '<request>',
-    desc: 'Start a SECOND piece of work alongside the conversation',
+    args: '[<instruction>]  ·  stop <id>',
+    desc: 'Background work: start some, or see what is running',
     run(app, { rest }) {
       const w = (s) => app.render.write(s + '\n');
-      if (!rest || !rest.trim()) {
-        w(C.dim('  Usage: /bg inspect the README and summarise it'));
-        w(C.dim('  Plain text starts the conversation working; /bg starts a job beside it.'));
-        return;
-      }
-      const job = app.startBackground(rest.trim());
-      w(C.green(`  ✓ background job #${job.id} started`) + C.dim(`  ${String(rest).slice(0, 60)}`));
-      w(C.dim('    /jobs to watch it · /cancel ' + job.id + ' to stop it'));
+      const arg = String(rest || '').trim();
+
+      // ---- BARE `/bg` IS A SUMMARY, NOT A USAGE MESSAGE -------------------
+      //
+      // It used to print `Usage: /bg inspect the README…`, which is the one
+      // thing somebody typing `/bg` on its own almost never wants: they are
+      // asking what is running, and being told how to start more is an answer
+      // to a question they did not ask. The usage line is still here — it is
+      // what an EMPTY list says, where it is the only useful thing to say.
+      if (!arg) return void summary(app, C, w);
+
+      const words = arg.split(/\s+/);
+      if (words[0].toLowerCase() === 'stop') return void stop(app, C, w, words[1]);
+
+      // ---- ANYTHING ELSE IS THE WORK ITSELF -------------------------------
+      //
+      // No parsing, no classification, no keyword table deciding "server" means
+      // a service. The instruction goes to the model and the model reaches for
+      // the tool that fits, which is the only classifier in this program that
+      // has ever been right about an arbitrary sentence.
+      const job = app.startBackground(arg);
+      w(C.green(`  Background #${job.id} started`) + C.dim(`  ·  ${arg.replace(/\s+/g, ' ').slice(0, 60)}`));
+      w(C.dim(`  Keep talking — /bg to check on it · /bg stop ${job.id} to end it`));
     },
   });
 
@@ -300,6 +385,139 @@ define('/steer', {
 }
 
 /**
+ * BARE `/bg` — the LOGICAL background work, one row each.
+ *
+ *     Background
+ *     #17  RUNNING   run the integration suite            2m14s
+ *     #18  PASSED    start the frontend dev server          41s
+ *
+ * ------------------------------------------------------------------------
+ * DELIBERATELY NOT `/ps`, AND DELIBERATELY NOT `/jobs`.
+ *
+ * `/ps` is the processes this work is currently MADE OF — pids, ports,
+ * services. One row here can be several rows there, or none.
+ *
+ * `/jobs` is the full account, including the conversation itself and the whole
+ * of what each job did and said. This is the glance: what did I ask for, is it
+ * still going, and did it work.
+ *
+ * THE CONVERSATION IS NOT A ROW. `job.primary` is the work you are watching —
+ * the feed IS its output and the live row above the input says what it is
+ * doing. Repeating it here would be a fourth copy of the one thing hardest to
+ * miss. Only work you are NOT looking at earns a row, which is the same rule
+ * ui/jobsview.js follows for the same reason.
+ *
+ * ------------------------------------------------------------------------
+ * `COMPLETED` IS NOT `PASSED`, AND THIS COLUMN NEVER CONFLATES THEM.
+ *
+ * The state column is the JOB's own lifecycle: the turn ended, or it failed, or
+ * you stopped it. That is a fact this code has.
+ *
+ * Whether the WORK IS PROVED is a different question with a different owner.
+ * The harness settles a task PASSED or FAILED from evidence — `settle()` is the
+ * only thing in harness/runtime.js that can reach PASSED, and it only takes a
+ * verification result. A background task that ran to completion has proved
+ * nothing by doing so, and printing PASSED off a clean exit is precisely the
+ * shortcut harness/state.js exists to refuse.
+ *
+ * So the verdict rides BESIDE the row, in the harness's own words, and only
+ * once the task it belongs to is terminal: `COMPLETED  task PASSED`. With no
+ * verdict yet, the row says COMPLETED and stops there — which is the honest
+ * answer and the one that sends somebody to `/verify`.
+ */
+function summary(app, C, w) {
+  const all = app.jobs.all().filter((j) => !j.primary);
+  if (!all.length) {
+    w(C.dim('  Nothing is running in the background.'));
+    w('');
+    w(C.dim('  /bg run the integration suite      a job — it ends and yields a result'));
+    w(C.dim('  /bg start the frontend dev server  a service — it stays up'));
+    w(C.dim('  Plain text works the conversation; /bg works beside it.'));
+    return;
+  }
+  w('');
+  w(C.bold('  Background'));
+  for (const j of all) {
+    const word = j.state === STATE.SUCCEEDED ? 'COMPLETED'
+      : j.state === STATE.FAILED ? 'FAILED'
+        : j.state === STATE.CANCELLED ? 'CANCELLED'
+          : j.needsInput ? 'NEEDS INPUT' : j.waiting ? 'WAITING' : 'RUNNING';
+    const state = word === 'COMPLETED' ? C.green(word)
+      : word === 'FAILED' ? C.yellow(word)
+        : word === 'CANCELLED' ? C.dim(word)
+          : word === 'RUNNING' ? C.cyan(word) : C.yellow(word);
+    const pad = ' '.repeat(Math.max(2, 13 - word.length));
+    const verdict = settledState(app, j);
+    const proof = verdict ? '  ' + tone(C, `task ${verdict}`) : '';
+    w(`  ${mark(j, C)} ${C.dim(`#${j.id}`)}  ${state}${pad}${String(j.request).replace(/\s+/g, ' ').slice(0, 44)}  ${C.dim(elapsedOf(j.elapsedMs))}${proof}`);
+    if (j.needsInput && j.question) w(C.dim(`         ${String(j.question.question).slice(0, 60)}`));
+  }
+  w('');
+  w(C.dim('  /jobs <n> — the whole account · /bg stop <n> — end one · /ps — its processes'));
+}
+
+/**
+ * The harness's verdict for the task this background work belongs to, or ''.
+ *
+ * READ, NEVER DERIVED. `job.taskId` is the task that was already open when the
+ * work started (see jobrunner.startBackground — it reads `activeId` and never
+ * opens one, because opening one would move the conversation's own task). The
+ * state comes straight from the runtime, and only `settle()` puts a task in a
+ * terminal state.
+ *
+ * A NON-TERMINAL TASK YIELDS NOTHING. RUNNING and VERIFYING are not verdicts,
+ * and rendering them beside a finished job would read as one.
+ */
+function settledState(app, job) {
+  try {
+    const h = require('./harnesslink').existing(app);
+    if (!h || !job.taskId) return '';
+    const t = h.runtime.get(job.taskId);
+    return t && t.terminal ? String(t.state) : '';
+  } catch { return ''; }
+}
+
+function tone(C, state) {
+  if (state === 'PASSED') return C.green(state);
+  if (state === 'FAILED' || state === 'INCONCLUSIVE') return C.yellow(state);
+  return C.dim(state);
+}
+
+/**
+ * `/bg stop <id>` — the same cooperative stop `/cancel` has always performed.
+ *
+ * NOT A SECOND LIFECYCLE. It resolves the same AgentJob and calls the same
+ * `cancelOne` below, so "stopped" means exactly what it has always meant: the
+ * job ends at its next safe point, and anything it owns is taken down by the
+ * process manager's cleanup for its task rather than by this command reaching
+ * for pids.
+ *
+ * `/bg logs`, `/bg resume` and `/bg restart` are deliberately absent. They are
+ * the parts of a job manager that exist because a job manager exists.
+ */
+function stop(app, C, w, id) {
+  const running = app.jobs.running().filter((j) => !j.primary);
+  if (!id) {
+    // ONE RUNNING TASK NEEDS NO NUMBER — naming it is precision nobody needs
+    // when there is only one thing it could mean. `/answer` reads the same way.
+    if (running.length === 1) return void cancelOne(app, running[0], C, w);
+    w(C.dim(running.length ? '  Which one? /bg to see them, then /bg stop <n>.' : '  Nothing is running in the background.'));
+    return;
+  }
+  const j = app.jobs.get(id);
+  if (!j) { w(C.dim(`  No background task #${id}. /bg to see what there is.`)); return; }
+  if (j.primary) {
+    // THE CONVERSATION IS NOT BACKGROUND WORK, and stopping it is Ctrl+C —
+    // which is the key a person already has their hand on. Silently cancelling
+    // the turn they are watching because they typed a number would be the
+    // worst possible reading of an ambiguous command.
+    w(C.dim('  #' + j.id + ' is the conversation, not background work. Ctrl+C stops the turn.'));
+    return;
+  }
+  cancelOne(app, j, C, w);
+}
+
+/**
  * COOPERATIVE, and it says which. A job that had already finished is not an
  * error to report — it is a race the user lost by a second, and telling them it
  * "failed to cancel" would be describing their timing as a fault.
@@ -311,4 +529,4 @@ function cancelOne(app, job, C, w) {
   w(C.dim(`  ■ #${job.id} cancelled`) + C.dim(' — it stops at its next safe point'));
 }
 
-module.exports = { register, rows, detail, secs };
+module.exports = { register, rows, detail, elapsedOf, summary, stop, settledState };

@@ -5,7 +5,7 @@
  *
  * A view of the CODEBASE the user is working on. Not of LAIN: LAIN's own
  * readiness is a different question with a different answer, and it lives in
- * health.js behind `/rc`. Running `/health` in scalpbot and being told about
+ * health.js behind `/ready`. Running `/health` in scalpbot and being told about
  * LAIN's provider, context window and connections is an answer to a question
  * nobody asked — the project is what the user came here to understand.
  *

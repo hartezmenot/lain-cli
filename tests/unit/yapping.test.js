@@ -221,7 +221,10 @@ module.exports = async function () {
     }
     // And the tool account is still there — suppressing prose must not suppress
     // the record of what actually happened.
-    assert.ok(/Patched src\/serializer\.js/.test(prose), 'the edit must still be reported');
-    assert.ok(/Ran npm test/.test(prose), 'the command must still be reported');
+    assert.ok(/patched · src\/serializer\.js/.test(prose), 'the edit must still be reported');
+    // `verb · subject`, and the verb of a shell command is its PROGRAM - the word
+    // `Ran` said only that something ran, which every row on the screen shares.
+    // See ui/phrasing.js.
+    assert.ok(/npm · test/.test(prose), 'the command must still be reported');
   });
 };

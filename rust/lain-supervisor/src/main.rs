@@ -53,6 +53,8 @@ mod projects;
 mod providers;
 mod remote;
 mod telegram;
+mod bot;
+mod bot_media;
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
@@ -137,6 +139,9 @@ fn existing() -> Option<(u32, u16)> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--home") {
+        if let Some(root) = args.get(i + 1) { std::env::set_var("LAIN_HOME", root); }
+    }
     let cmd = args.get(1).map(String::as_str).unwrap_or("serve");
     match cmd {
         // Print where a supervisor is, if one is. Used by the Node client to
@@ -145,6 +150,7 @@ fn main() {
             match existing() {
                 Some((pid, port)) => {
                     let mut v = Value::obj();
+                    v.set("lifetime", Value::s("lease-v1"));
                     v.set("running", Value::Bool(true));
                     v.set("pid", Value::n(pid as i64));
                     v.set("port", Value::n(port as i64));
@@ -153,6 +159,7 @@ fn main() {
                 None => {
                     let mut v = Value::obj();
                     v.set("running", Value::Bool(false));
+                    v.set("lifetime", Value::s("lease-v1"));
                     println!("{}", json::write(&v));
                 }
             }
@@ -162,6 +169,17 @@ fn main() {
 }
 
 fn serve() {
+    let dir = state_dir();
+    if std::fs::create_dir_all(&dir).is_err() { return; }
+    // OS lock survives no crash and serializes discovery AND publication.
+    // Keep this file handle for the entire server lifetime. The file is inert
+    // after exit; deleting lock files would allow two different locks.
+    let lock = match std::fs::OpenOptions::new().create(true).truncate(false)
+        .read(true).write(true).open(dir.join("serve.lock")) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    if lock.try_lock().is_err() { return; }
     // ALREADY RUNNING IS A SUCCESS, not an error. Two LAINs starting at once
     // must converge on one supervisor rather than race to own the file.
     if let Some((pid, port)) = existing() {
@@ -173,9 +191,6 @@ fn serve() {
         println!("{}", json::write(&v));
         return;
     }
-
-    let dir = state_dir();
-    let _ = std::fs::create_dir_all(&dir);
 
     let listener = match TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)) {
         Ok(l) => l,
@@ -193,8 +208,24 @@ fn serve() {
     ep.set("version", Value::s(VERSION));
     ep.set("started_at", Value::n(jobs::now() as i64));
     let tmp = dir.join("endpoint.tmp");
-    if std::fs::write(&tmp, json::write(&ep).as_bytes()).is_ok() {
-        let _ = std::fs::rename(&tmp, endpoint_file());
+    if std::fs::write(&tmp, json::write(&ep).as_bytes())
+        .and_then(|_| std::fs::rename(&tmp, endpoint_file())).is_err() { return; }
+
+    // A test scope explicitly owns its supervisors. Production has no owner
+    // marker and retains durable jobs across client exits. The runner's
+    // loopback lease closes on success, timeout, SIGINT and hard process death.
+    if let Ok(port) = std::env::var("LAIN_SUPERVISOR_LEASE_PORT") {
+        let lease = port.parse::<u16>().ok().and_then(|p|
+            TcpStream::connect(SocketAddrV4::new(Ipv4Addr::LOCALHOST, p)).ok());
+        let Some(mut lease) = lease else { return; };
+        thread::spawn(move || {
+            let mut byte = [0u8; 1];
+            use std::io::Read;
+            while matches!(lease.read(&mut byte), Ok(n) if n > 0) {}
+            // Includes test workers; a test scope cannot leave durable work.
+            jobs::kill_tree(process::id());
+            process::exit(0);
+        });
     }
 
     // Announced on stdout so a parent that wants to wait for readiness can, and
@@ -723,6 +754,7 @@ fn project_op(op: &str, req: &Value, p: &mut Projects) -> Value {
 /// and a dashboard later — reaches the identical bounded vocabulary the remote
 /// surface reaches. One vocabulary, one validation, several windows.
 fn remote_op(op: &str, req: &Value, kernel: &Arc<Kernel>) -> Value {
+    if op.starts_with("remote_gateway_") { return bot::op(op, req, kernel); }
     let lock = || match kernel.remote.lock() {
         Ok(g) => g,
         Err(e) => e.into_inner(),

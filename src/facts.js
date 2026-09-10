@@ -51,7 +51,6 @@ const AREA = Object.freeze({
   PATH: 'PATH',
   CWD: 'CWD',
   CLI: 'CLI',
-  PROBE: 'PROBE',
   MEMORY: 'MEMORY',
   SOURCE_LOCATION: 'SOURCE_LOCATION',
   DATA: 'DATA',

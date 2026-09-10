@@ -79,7 +79,18 @@ module.exports = async function () {
     // A person who has just watched a turn die and typed a sentence must be
     // told it was caught. Silence here is indistinguishable from the sentence
     // being lost, which is the complaint this whole mechanism came from.
-    assertIncludes(out, 'held', 'LAIN says the sentence was held rather than sent');
+    //
+    // IT IS AN OPERATION NOW, NOT A PARAGRAPH. It used to be a `notice`, which
+    // put "held — the last turn did not finish. Recovering with what LAIN
+    // observed rather than sending that on its own." into the CONVERSATION, where
+    // it stayed between two real exchanges for the rest of the session. It is one
+    // transient row above the caret instead — see ui/operation.js. The
+    // requirement is unchanged and is what is asserted: the person is told.
+    assertIncludes(out, 'Recovering interrupted turn',
+      'LAIN says the sentence was caught rather than sent');
+    // AND IT IS NOT PROSE. The old sentence must not come back.
+    assert.ok(!/Recovering with what LAIN observed rather than sending/.test(out),
+      'the recovery paragraph must not be glued into the conversation again');
 
     // ---- AND IT CONTINUED ------------------------------------------------
     //

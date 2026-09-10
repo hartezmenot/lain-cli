@@ -172,25 +172,28 @@ module.exports = async function () {
     assert.ok(!/┌─ src[\\/]parser\.js/.test(last), 'and it did not stay open to the end');
   });
 
-  await test('TIMELINE: switching panes mid-animation does not disturb the work', async () => {
-    // Presentation must not be load-bearing. Navigating away while the timeline
-    // is playing has to leave the edit, the file and the session exactly as they
-    // would have been.
+  await test('TIMELINE: scrolling and stray keys mid-animation do not disturb the work', async () => {
+    // Presentation must not be load-bearing. It used to say "switching panes"
+    // and press Alt+N; there are no panes, so what it presses now is the keys
+    // that DO move the view (PgUp, Home, End) plus the ones that no longer do
+    // anything at all (Tab, Alt+3) — and the property is unchanged: the edit,
+    // the file and the session must be exactly as they would have been if
+    // nobody had touched the keyboard.
     const { dir, cfg } = project();
-    const VIEWS = require('../../src/ui/tabs').VIEWS;
-    const other = `\x1b${VIEWS.indexOf('plan') + 1}`;
-    const back = `\x1b${VIEWS.indexOf('activity') + 1}`;
+    const PGUP = '\x1b[5~';
+    const HOME = '\x1b[H';
+    const END = '\x1b[F';
     const r = await runCli([], {
       cwd: dir, configDir: cfg, env: tui, script: SCRIPT,
-      stdinSteps: ['fix the empty case' + CR, other, back, other, back, '', '/exit' + CR],
+      stdinSteps: ['fix the empty case' + CR, PGUP, HOME, '\t', '\x1b3', END, '', '/exit' + CR],
       stepDelayMs: 3000, timeoutMs: 80000,
     });
-    assert.strictEqual(r.code, 0, `the session died while navigating:\n${plain(r.out).slice(-900)}`);
+    assert.strictEqual(r.code, 0, `the session died while scrolling:\n${plain(r.out).slice(-900)}`);
     const out = plain(r.out);
     assert.ok(!/ReferenceError|TypeError|Cannot read|is not a function/.test(out),
       `an error reached the screen:\n${out.slice(-900)}`);
     const after = fs.readFileSync(path.join(dir, 'src', 'parser.js'), 'utf8');
-    assert.match(after, /raw\.trim\(\)/, 'the edit survived being navigated away from');
+    assert.match(after, /raw\.trim\(\)/, 'the edit survived being scrolled away from');
   });
 
   await test('TIMELINE: an interrupt ends the work, not the screen', async () => {
@@ -278,14 +281,14 @@ module.exports = async function () {
         return seen;
       };
 
-      const last = statesFor(/console\.log\(3\)|Ran node|Running node/);
+      const last = statesFor(/console\.log\(3\)|node · /);
       assert.ok(last.length >= 3,
         `the final operation collapsed to ${last.length} state(s) — it teleported:${CR}${last.join(CR)}`);
       // And it really does pass through a RUNNING state before its result, which
       // is the difference between animating and appearing finished.
-      assert.ok(last.some((s) => /RUNNING/.test(s)),
+      assert.ok(last.some((s) => /RUNNING/i.test(s)),
         'the last operation must be seen running, not only completed');
-      assert.ok(last.some((s) => /Ran node -e "console\.log\(3\)"/.test(s)),
+      assert.ok(last.some((s) => /node · -e "console\.log\(3\)"/.test(s)),
         'and must be seen completed');
     })();
   });

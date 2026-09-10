@@ -38,7 +38,7 @@ module.exports = async function () {
     const st = { pending: ['also check the backend'] };
     assert.strictEqual(pending.rows(st), 2);
     const rows = pending.draw(st, 60, 2).map(strip);
-    assert.match(rows[0], /PENDING USER INPUT/);
+    assert.match(rows[0], /Waiting to send/);
     assert.match(rows[1], /also check the backend/);
   });
 
@@ -261,11 +261,11 @@ module.exports = async function () {
     // both would make the second Enter invisible, which is the whole feature.
     const pending = require('../../src/ui/pending');
     const waiting = pending.draw({ pending: [{ text: 'later', mode: 'WAIT' }] }, 60, 3).join('\n');
-    assert.match(waiting, /PENDING USER INPUT/);
+    assert.match(waiting, /Waiting to send/);
     assert.match(waiting, /later/);
 
     const now = pending.draw({ pending: [{ text: 'right away', mode: 'NOW' }] }, 60, 3).join('\n');
-    assert.match(now, /STEERING NOW/, 'a promoted steer says so');
+    assert.match(now, /Steering now/, 'a promoted steer says so');
     assert.match(now, /right away/);
   });
 

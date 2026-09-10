@@ -4,7 +4,7 @@
  * DELIVERED IS NOT ACCEPTED — the unit half of the OS-input audit.
  *
  * Audited against the real lain-probe on 2026-08-21, with a TARGET PROCESS that
- * wrote every event it received to a file. That file, not the Probe's return
+ * wrote every event it received to a file. That file, not the far side's return
  * value, was the verdict:
  *
  *     window.focus        SUCCEEDED   (the foreground really changed)
@@ -18,55 +18,28 @@
  *   input.mouse.*     SendInput at ABSOLUTE SCREEN COORDINATES. It lands on
  *                     whatever pixel is there, focus or no focus.
  *
- * And the Probe's own permission prompt is a TOPMOST window: granting keyboard
- * permission puts the Probe in front, so the keystroke that follows the grant
- * goes to the Probe. That is the reported "input only affects the Probe's own
- * window", exactly — not a broken input engine, an unaimed keystroke.
+ * THE SEQUENCE the audit produced — permission first, then focus, then a
+ * second foreground check immediately before the key, and NOTHING sent when it
+ * cannot be aimed — has exactly one home, keyboarddelivery.js, and its order
+ * and refusals are pinned by that suite (keyboarddelivery.test.js) driving the
+ * sequence with a transport double. It speaks the Probe dialect because that is
+ * the dialect the audit measured; the transport that carried it was removed
+ * from LAIN CLI with the Probe integration in 2026-09, and the sequence is kept
+ * for whatever transport can verify the foreground next — until one exists,
+ * computer.js refuses keyboard input outright rather than send an unverified
+ * keystroke through the desktop bridge.
  *
- * THEY DRIVE `computer`, NOT `probe`, and that is the point rather than an
- * incidental detail. Screen and input used to be reachable under two names;
- * only one of them carried this sequence, so the model could aim a keystroke
- * or not depending on which spelling it guessed. There is one name now, and
- * these tests exercise it. The Probe still sees `window.focus` and
- * `input.keyboard.tap` on the wire — computer.js translates — so every
- * assertion below about ORDER, and about what was NOT sent, means what it
- * always meant. See unit/onecomputer.test.js for the subtraction itself.
- *
- * These pin the two things LAIN is responsible for: never sending a keystroke
- * it could not aim, and never calling an accepted injection a delivery.
+ * What is pinned HERE is the EVIDENCE VOCABULARY that audit made necessary:
+ * the states that tell a refused aim from an unwatched delivery, and the
+ * envelope fields that keep `accepted` and `delivered` from collapsing into
+ * one word. Machine delivery is proven only by a target that logs what it
+ * received — see live/wininput.test.js — and nothing here may claim it.
  */
 
 const assert = require('assert');
 const { test } = require('../helpers');
 
 const cap = require('../../src/capability');
-const probeTool = require('../../src/tools/probe').tools.probe;
-const computerTool = require('../../src/tools/computer').tools.computer;
-
-/** A Probe double that records what LAIN asked it to do, and in what order. */
-function fakeProbe({ focusOk = true, calls = [] } = {}) {
-  return {
-    state: 'CONNECTED',
-    capabilities: ['input.keyboard.tap', 'window.focus'],
-    calls,
-    async call(op, params) {
-      calls.push({ op, params });
-      if (op === 'permission.state') {
-        // BOTH GRANTS. Aiming needs `screen.capture` as well as the key needing
-        // `keyboard.press` — window.focus lives in the Probe's VISION engine, so
-        // it is gated behind screen capture. Measured live on 2026-08-21:
-        // FOCUS_FAILED, "permission to screen.capture is not granted", with the
-        // keyboard already allowed. See keyboarddelivery.AIM_CAPABILITY.
-        return { ok: true, result: { capabilities: { 'keyboard.press': { granted: true }, 'screen.capture': { granted: true } }, prompter: true } };
-      }
-      if (op === 'target.status') return { ok: true, result: { authorized: false, reason: 'NO_AUTHORIZED_TARGET' } };
-      if (op === 'window.focus') return { ok: true, result: { focused: focusOk, note: focusOk ? null : 'Windows refused the foreground change' } };
-      return { ok: true, result: { tapped: params && params.key, summary: 'pressed' } };
-    },
-  };
-}
-
-const inputOnly = (calls) => calls.filter((c) => !['permission.state', 'target.status'].includes(c.op));
 
 module.exports = async function () {
   // ------------------------------------------------- the five states apart --
@@ -87,67 +60,7 @@ module.exports = async function () {
     assert.strictEqual(cap.aim('input.mouse.click'), 'SCREEN');
   });
 
-  // --------------------------------------- focus before input, or no input --
-
-  await test('FOCUS: a named window is focused BEFORE the keys, and verified again after', async () => {
-    // WAS `['window.focus', 'input.keyboard.tap']` — one focus, then the key.
-    // That was not enough: focusing establishes the foreground at the moment of
-    // the call, and the reported failure happened in the gap AFTER it, when the
-    // Probe's own topmost permission prompt took the foreground and the key
-    // landed on the prompt. So the foreground is checked a SECOND time
-    // immediately before the injection, and that check is what catches it.
-    // See src/keyboarddelivery.js.
-    const calls = [];
-    const app = { _probe: fakeProbe({ focusOk: true, calls }) };
-    const r = await computerTool.run({ op: 'key', key: 'a', window: 'TEST TARGET' }, { app });
-    const seq = inputOnly(calls).map((c) => c.op);
-    assert.deepStrictEqual(seq, ['window.focus', 'window.focus', 'input.keyboard.tap'],
-      `focus must come first, and be re-checked immediately before the key: ${JSON.stringify(seq)}`);
-    assert.ok(!r.isError, r.output);
-  });
-
-  await test('FOCUS: if the OS refuses the focus, NOTHING IS SENT', async () => {
-    // The safety requirement. An unaimed keystroke goes into whatever the
-    // person is looking at, which may be their editor.
-    const calls = [];
-    const app = { _probe: fakeProbe({ focusOk: false, calls }) };
-    const r = await computerTool.run({ op: 'key', key: 'a', window: 'TEST TARGET' }, { app });
-    assert.strictEqual(r.isError, true);
-    assert.strictEqual(r.meta.state, 'FOCUS_FAILED');
-    assert.match(r.output, /NOTHING WAS SENT/);
-    assert.ok(!inputOnly(calls).some((c) => c.op === 'input.keyboard.tap'),
-      `the key was sent anyway: ${JSON.stringify(inputOnly(calls).map((c) => c.op))}`);
-  });
-
-  await test('FOCUS: `window` is LAIN\'s argument and is not forwarded to the Probe', async () => {
-    // Passing it on would be an unknown argument to an operation that never
-    // had one — which the Probe would reject, turning a fix into a failure.
-    const calls = [];
-    const app = { _probe: fakeProbe({ calls }) };
-    await computerTool.run({ op: 'key', key: 'a', window: 'TEST TARGET' }, { app });
-    const tap = calls.find((c) => c.op === 'input.keyboard.tap');
-    assert.ok(tap, 'the key was sent');
-    assert.strictEqual(tap.params.window, undefined, `window leaked to the Probe: ${JSON.stringify(tap.params)}`);
-    assert.strictEqual(tap.params.key, 'a', 'and the real arguments survived');
-  });
-
-  await test('FOCUS: a mouse click is NOT focus-gated — it is aimed by coordinate', async () => {
-    const calls = [];
-    const app = { _probe: fakeProbe({ focusOk: false, calls }) };
-    const r = await computerTool.run({ op: 'click', x: 10, y: 20 }, { app });
-    assert.ok(!r.isError, 'a click must not be refused for a focus it does not use');
-    assert.ok(!calls.some((c) => c.op === 'window.focus'), 'and no focus is attempted for it');
-  });
-
   // --------------------------------------------- accepted is not delivered --
-
-  await test('EVIDENCE: an injected keystroke comes back SENT_UNCONFIRMED, never SUCCEEDED', async () => {
-    const app = { _probe: fakeProbe({}) };
-    const r = await computerTool.run({ op: 'key', key: 'a', window: 'T' }, { app });
-    assert.strictEqual(r.meta.state, 'SENT_UNCONFIRMED');
-    assert.match(r.output, /NOBODY OBSERVED THE TARGET RECEIVE IT/);
-    assert.ok(!/SUCCEEDED/.test(r.output), 'the word SUCCEEDED must not appear for an unobserved delivery');
-  });
 
   await test('EVIDENCE: injection and delivery are separate fields, and delivery is false', () => {
     const e = cap.envelope({
@@ -164,15 +77,7 @@ module.exports = async function () {
     assert.strictEqual(e.evidence.delivery.reason, 'FOCUS_FAILED');
   });
 
-  await test('EVIDENCE: an operation that is not input still reports plainly', async () => {
-    // The new states must not leak onto everything: `probe.status` succeeded,
-    // and saying its delivery is unconfirmed would be nonsense.
-    const app = { _probe: fakeProbe({}) };
-    const r = await probeTool.run({ op: 'probe.status', params: {} }, { app });
-    assert.ok(!/SENT_UNCONFIRMED|delivery/.test(r.output), r.output);
-  });
-
-  await test('CLAIM: the Probe reporting ok is never by itself evidence of delivery', () => {
+  await test('CLAIM: the far side reporting ok is never by itself evidence of delivery', () => {
     // The rule the audit exists to enforce, held as an assertion rather than a
     // comment: `{"ok":true}` from the far side maps to an UNCONFIRMED delivery.
     const e = cap.envelope({

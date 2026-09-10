@@ -18,8 +18,9 @@ const fs = require('fs');
 const path = require('path');
 const { test, runCli, tmpdir, assertIncludes } = require('../helpers');
 
-const PASTE_START = '\x1b[200~';
-const PASTE_END = '\x1b[201~';
+const ESC = String.fromCharCode(27);
+const PASTE_START = ESC + '[200~';
+const PASTE_END = ESC + '[201~';
 const plain = (s) => String(s).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 
 /** The newest session file written under an isolated config dir. */
@@ -49,7 +50,16 @@ module.exports = async function () {
     });
     const out = plain(r.out);
     assert.ok(!/should never run/.test(out), 'the paste submitted a turn on its own');
-    assertIncludes(out, '1,200 lines', 'the screen must say what was pasted');
+    // ---- WHAT THE COMPOSER SAYS ABOUT IT ------------------------------
+    //
+    // It was a SUMMARY ROW under the input box — `⎘ 1,200 lines · 28.4 KB` —
+    // drawn because the box showed the whole paste and a person could not tell
+    // how much of it there was. The composer collapses the paste instead
+    // (ui/composer.js), so the marker IS the statement and the size rides
+    // beside it. One row instead of a wall plus a row about the wall.
+    assertIncludes(out, '<pasted text>', 'the composer must collapse it');
+    assert.ok(/\d+(\.\d+)? ?KB/.test(out), `and say how much is behind the marker:
+${out.slice(-400)}`);
   });
 
   await test('PASTE LIVE: the summary states the paste, and Enter sends every byte of it', async () => {
@@ -65,15 +75,28 @@ module.exports = async function () {
       timeoutMs: 45000,
     });
     const out = plain(r.out);
-    // The screen summarised rather than painted 1,200 rows.
-    assertIncludes(out, '1,200 lines');
-    assert.ok(!out.includes('const line600 = 600;'), 'the paste itself must not be painted into the frame');
+    // ---- THE COMPOSER COLLAPSED IT RATHER THAN PAINTING 1,200 ROWS -----
+    //
+    // Asserted on the frames BEFORE Enter: once the prompt is submitted the
+    // CONVERSATION draws it in full, which is the record and is the point of
+    // the other half of this test. What must never happen is the COMPOSER
+    // painting a wall you cannot see your own sentence in front of.
+    const composing = String(r.out).split(ESC + '[?25l')
+      .filter((f) => /<pasted text>/.test(plain(f)));
+    assert.ok(composing.length, `the composer must collapse it:
+${out.slice(0, 400)}`);
+    for (const f of composing) {
+      assert.ok(!plain(f).includes('const line600 = 600;'),
+        'the paste must not be painted into the composer');
+    }
 
     // …and the model still got the whole thing.
     const session = latestSession(configDir);
     assert.ok(session, 'a session should have been saved');
     const user = (session.messages || []).find((m) => m.role === 'user');
     assert.ok(user, 'the pasted prompt must reach the conversation');
+    assert.ok(!/<pasted text>/.test(String(user.content)),
+      'the placeholder is purely visual and must never reach the model');
     for (const needle of ['const line0 = 0;', 'const line600 = 600;', `const line${LINES - 1} = ${LINES - 1};`]) {
       assertIncludes(user.content, needle, 'the buffer lost part of the paste');
     }

@@ -48,7 +48,21 @@
  * is a number rather than an impression.
  */
 
-const CHARS_PER_TOKEN = 3.6;
+/**
+ * THE ESTIMATOR, FROM THE ONE MODULE THAT OWNS IT.
+ *
+ * This file used to declare a constant of its own holding the same ratio as
+ * src/session.js - one number, written twice. Two definitions of one constant are
+ * two things free to drift, and the day one of them moved, the header's live
+ * figure, compaction's budget arithmetic and this breakdown would have been
+ * reporting the same conversation in two currencies while all three looked
+ * authoritative.
+ *
+ * IMPORTED, NOT RE-DERIVED. There is no cycle: session.js has never needed this
+ * module, because measuring the transmitted array is something only the request
+ * path does.
+ */
+const { CHARS_PER_TOKEN } = require('./session');
 
 /** Characters of a message's content, whatever shape the content is in. */
 function charsOf(m) {

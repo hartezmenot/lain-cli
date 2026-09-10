@@ -248,41 +248,18 @@ module.exports = async function () {
     assert.deepStrictEqual(computer.channelsOf(app).closed(), [], 'and nothing was closed');
   });
 
-  await test('AIM: a read named at a window asks for THAT window\'s rectangle', async () => {
-    // THE REPORTED FAILURE: "OCR keeps reading the whole desktop — the game
-    // window is partly covered by LAIN panels." The aiming information was
-    // already there — `window.list` returns rectangles — and nothing asked for
-    // it. Asserted on the ARGUMENTS the transport received, because a capture
-    // of the wrong area looks exactly like a capture of the right one.
-    const computer = require('../../src/computer');
-    let asked = null;
-    const app = { _probe: { state: 'CONNECTED', call: async (op, params) => {
-      if (op === 'window.list') {
-        return { ok: true, result: { windows: [
-          { title: 'LAIN', rect: { x: 0, y: 0, width: 800, height: 600 } },
-          { title: 'RuneScape Client', rect: { x: 900, y: 100, width: 1000, height: 700 } },
-        ] } };
-      }
-      if (op === 'vision.ocr') { asked = params; return { ok: true, result: { text: 'minigame indicator' } }; }
-      return { ok: false, error: `unexpected ${op}` };
-    } } };
-
-    const r = await computer.perform(app, 'ocr', {}, { window: 'RuneScape' });
-    assert.strictEqual(r.stage, require('../../src/capability').STAGE.SUCCEEDED);
-    assert.deepStrictEqual(asked.region, { x: 900, y: 100, width: 1000, height: 700 },
-      'the OCR must be aimed at the game, not at the desktop');
-    assert.strictEqual(r.aimedAt, 'RuneScape Client', 'and it reports which window it looked at');
-  });
-
   await test('AIM: an exact title beats a partial one', () => {
     // A game called "Client" must not lose to a browser tab that mentions it.
+    // The transport double is the desktop bridge (the Probe transport that
+    // these were first written against was removed in 2026-09); the resolution
+    // rule being pinned is LAIN's own and sits above the dialect either way.
     const computer = require('../../src/computer');
-    const app = { _probe: { state: 'CONNECTED', call: async (op) => (op === 'window.list'
+    const app = { desktop: () => ({ bridge: { call: async (op) => (op === 'window.list'
       ? { ok: true, result: { windows: [
         { title: 'Notes about Client — Chrome', rect: { x: 0, y: 0, width: 100, height: 100 } },
         { title: 'Client', rect: { x: 500, y: 500, width: 640, height: 480 } },
       ] } }
-      : { ok: false, error: 'no' }) } };
+      : { ok: false, error: 'no' }) } }) };
     return computer.regionOf(app, 'Client').then((r) => {
       assert.strictEqual(r.ok, true);
       assert.strictEqual(r.title, 'Client');
@@ -294,16 +271,22 @@ module.exports = async function () {
     // Silently substituting a whole-desktop capture is how "what does the game
     // show" came back as LAIN's own panels: an answer that looks like an answer
     // and is about something else.
+    //
+    // Pinned at regionOf, where the rule lives. It cannot go through the full
+    // perform path on the desktop bridge — the only transport now — because the
+    // bridge cannot take a region at all, and the capability-gate refusal that
+    // fires there is the NEXT test's subject. Driven directly, the capture
+    // counter still proves resolution itself looks at nothing.
     const computer = require('../../src/computer');
-    let ocrCalls = 0;
-    const app = { _probe: { state: 'CONNECTED', call: async (op) => {
+    let captures = 0;
+    const app = { desktop: () => ({ bridge: { call: async (op) => {
       if (op === 'window.list') return { ok: true, result: { windows: [{ title: 'LAIN', rect: { x: 0, y: 0, width: 10, height: 10 } }] } };
-      if (op === 'vision.ocr') { ocrCalls += 1; return { ok: true, result: { text: 'everything on screen' } }; }
+      if (op === 'screen.capture') { captures += 1; return { ok: true, result: { path: 'all.png' } }; }
       return { ok: false, error: 'no' };
-    } } };
-    const r = await computer.perform(app, 'ocr', {}, { window: 'RuneScape' });
-    assert.strictEqual(r.stage, require('../../src/capability').STAGE.NO_TARGET);
-    assert.strictEqual(ocrCalls, 0, 'nothing may be captured when the aim could not be established');
+    } } }) };
+    const r = await computer.regionOf(app, 'RuneScape');
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(captures, 0, 'nothing may be captured when the aim could not be established');
     assert.match(r.why, /no window titled/);
     assert.match(r.why, /LAIN/, 'and it says what IS open, so the next call can be right');
   });
@@ -323,12 +306,17 @@ module.exports = async function () {
   });
 
   await test('AIM: an UNAIMED read is still allowed — the whole screen is a valid question', async () => {
+    // No window named means no region — deliberately. The whole screen is a
+    // valid question, and the refusal above is only for a window that was
+    // NAMED and could not be found. (This used to ride the Probe dialect's OCR,
+    // which could read text; the bridge carries screenshots, so the unaimed
+    // read it can actually perform is a capture with no region.)
     const computer = require('../../src/computer');
     let asked = 'nothing';
-    const app = { _probe: { state: 'CONNECTED', call: async (op, params) => {
-      asked = params; return { ok: true, result: { text: 'whatever' } };
-    } } };
-    const r = await computer.perform(app, 'ocr', {}, {});
+    const app = { desktop: () => ({ bridge: { call: async (op, params) => {
+      asked = params; return { ok: true, result: { path: 'all.png' } };
+    } } }) };
+    const r = await computer.perform(app, 'screenshot', {}, {});
     assert.strictEqual(r.stage, require('../../src/capability').STAGE.SUCCEEDED);
     assert.deepStrictEqual(asked, {}, 'no window named means no region — that is the whole screen, on purpose');
   });

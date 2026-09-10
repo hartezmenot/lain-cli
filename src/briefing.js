@@ -119,8 +119,9 @@ function environmentSection(s) {
  * UNKNOWN FACTS ARE PRINTED AS LOUDLY AS KNOWN ONES. The instinct is to hide
  * what could not be established; that is exactly backwards, because those are
  * the ones somebody is about to spend requests on. Where several unknowns share
- * one reason — everything the Probe owns, for instance — the reason is stated
- * once and the names are listed under it, so honesty does not become repetition.
+ * one reason — everything a transport that is not connected would own, for
+ * instance — the reason is stated once and the names are listed under it, so
+ * honesty does not become repetition.
  */
 function factsSection(facts, changed) {
   const out = [rule('PROJECT FACTS / OPERATIONAL CONTRACT')];
@@ -186,20 +187,20 @@ function gitSection(s) {
 // ------------------------------------------------------------------ health ---
 
 /**
- * FIVE AXES, FIVE LINES, AND A SENTENCE THAT REFUSES TO LET THEM MERGE.
+ * FOUR AXES, FOUR LINES, AND A SENTENCE THAT REFUSES TO LET THEM MERGE.
  *
  * The sentence is not decoration. `BUILD: PASS` next to `ENGINEERING: DEGRADED`
  * is the single most misread pair in any report of this kind, and the reflex to
  * read the first line and stop is strong enough to be worth interrupting in
- * words.
+ * words. (A fifth axis, FRONTEND — the running page's own console, read by the
+ * Chromium LAIN owned — was removed with the browser in 2026-09.)
  */
 function healthSection(s) {
   const h = s.health;
-  const out = [rule('HEALTH — FIVE SEPARATE AXES')];
+  const out = [rule('HEALTH — FOUR SEPARATE AXES')];
   out.push(`BUILD        ${h.build}`);
   out.push(`TESTS        ${h.test}`);
   out.push(`RUNTIME      ${h.runtime}`);
-  out.push(`FRONTEND     ${h.frontend}`);
   out.push(`ENGINEERING  ${h.engineering}`);
   out.push('');
   if (h.build === HEALTH.PASS && h.engineering !== HEALTH.CLEAN) {
@@ -214,7 +215,6 @@ function healthSection(s) {
   const unverified = [
     h.test === HEALTH.UNVERIFIED ? 'TESTS' : null,
     h.runtime === HEALTH.UNVERIFIED ? 'RUNTIME' : null,
-    h.frontend === HEALTH.UNVERIFIED ? 'FRONTEND' : null,
     h.build === HEALTH.UNVERIFIED ? 'BUILD' : null,
   ].filter(Boolean);
   if (unverified.length) {

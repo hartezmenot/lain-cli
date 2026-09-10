@@ -75,7 +75,7 @@ module.exports = async function () {
     });
     const out = plain(r.out);
     // The file was read ONCE. A restart would read it again.
-    const reads = (out.match(/Read src[\\/]a\.js/g) || []).length;
+    const reads = (out.match(/read · src[\\/]a\.js/g) || []).length;
     assert.ok(reads <= 1, `the work was repeated after the wait (${reads} reads):\n${out.slice(-900)}`);
     assert.match(out, /FINISHED/);
   });

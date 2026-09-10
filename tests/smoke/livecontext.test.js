@@ -53,7 +53,13 @@ function scan(out, objective, marker) {
   let blank = -1;
   let checked = 0;
   fr.forEach((f, i) => {
-    if (!f.includes(`TASK  ${objective}`)) return;
+    // ---- THE FRAME IS IDENTIFIED BY THE OBJECTIVE, not by a banner -------
+    //
+    // It was `TASK  <objective>` — the pinned task banner, which is gone with
+    // the panes. The objective IS the first thing the user said, so the frames
+    // this test is about are the ones where the CONVERSATION carries it, which
+    // is the same set of frames identified by the same string.
+    if (!f.includes(objective)) return;
     checked += 1;
     const populated = marker.test(f);
     if (populated) { seen = true; return; }

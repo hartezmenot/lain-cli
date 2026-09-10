@@ -29,16 +29,15 @@ const panelMod = require('../../src/ui/panel');
 
 const strip = (lines) => T.strip([].concat(lines).join('\n'));
 
-function screenWithTask(rows = 24, objective = 'the dashboard has been stale since Aug 14', view = 'context') {
+function screenWithTask(rows = 24, objective = 'the dashboard has been stale since Aug 14') {
   let wrote = '';
   const s = new Screen({ out: { columns: 100, rows, isTTY: true, write(x) { wrote += x; }, on() {}, removeListener() {} } });
   s.active = true;
-  // WHICH PANE, EXPLICITLY. These phases are about two different surfaces: the
-  // pinned task banner lives over CONTEXT, and the transcript lives in
-  // ACTIVITY — which used to be the same pane and no longer is. A fixture that
-  // leaves it to the default asks the conversation's rules of a report.
-  s.view = view;
-  s.stickToBottom = require('../../src/ui/tabs').followsLive(view);
+  // ONE SURFACE, so there is nothing to select. This fixture used to take a
+  // pane name, because the pinned task banner lived over CONTEXT and the
+  // transcript lived in ACTIVITY — two surfaces with two sets of rules. Both
+  // are the conversation now, and it follows live.
+  s.stickToBottom = true;
   s.state = {
     cwd: 'C:\\work\\scalpbot',
     session: { cwd: 'C:\\work\\scalpbot', task: { objective }, turns: [{ userInput: 'it stopped updating', text: 'I found the writer.', actions: [], errors: [] }] },
@@ -52,16 +51,30 @@ function screenWithTask(rows = 24, objective = 'the dashboard has been stale sin
 module.exports = async function () {
   // ------------------------------------------------- A — context / chrome --
 
-  await test('PHASE A: the objective is on screen ONCE, not in the header as well', () => {
+  await test('PHASE A: the objective is on screen ONCE, and the conversation owns it', () => {
+    // ------------------------------------------------------------------
+    // IT USED TO BE ON SCREEN TWICE. The header carried it, the pinned banner
+    // carried it, and a 24-row terminal spent two of its rows printing the same
+    // sentence three lines apart.
+    //
+    // It is now in exactly one place, and that place is the CONVERSATION, where
+    // it has always genuinely lived: the objective IS the first thing the user
+    // said. The banner is gone, and with it the suppression in
+    // ui/conversation.js that stopped the feed drawing the first message
+    // because the banner was showing it.
+    // ------------------------------------------------------------------
     const objective = 'the dashboard has been stale since Aug 14';
-    const { out } = screenWithTask(24, objective);
-    const text = T.strip(out).split('\x1b').join('');
+    const { screen } = screenWithTask(24, objective);
+    // Drawn with the objective as the first user message, which is how a real
+    // session arrives at one.
+    screen.state.session.turns = [{ userInput: objective, text: 'Found the writer.', actions: [], errors: [] }];
+    const text = T.strip(screen.workspaceLines(100, 20).join(String.fromCharCode(10)));
     const hits = text.split(objective).length - 1;
-    assert.strictEqual(hits, 1, `the objective appears ${hits} times; the header used to repeat the banner`);
+    assert.strictEqual(hits, 1, `the objective appears ${hits} times; it must be said once, by the feed`);
   });
 
-  await test('PHASE A: the CONTEXT pane does not print its own name inside itself', () => {
-    // The tab strip one row above already reads `[1 context]`.
+  await test('PHASE A: the surface does not print its own name inside itself', () => {
+    // It never needed to — and there is no strip above it to name it either.
     const lines = views.activity({
       session: { turns: [{ userInput: 'do it', text: 'Working.', actions: [], errors: [] }] },
       width: 90,
@@ -82,21 +95,31 @@ module.exports = async function () {
     // new line shunted the whole exchange upward, so a short answer looked like
     // a screen that had already scrolled away.
     //
-    // FOLLOWING NEW OUTPUT IS A SEPARATE RULE and is unchanged — ACTIVITY still
-    // scrolls itself to the newest line once there is more than a paneful. See
-    // ui/tabs.js, where the two rules stopped sharing one flag.
-    const { screen, out } = screenWithTask(24, undefined, 'activity');
+    // FOLLOWING NEW OUTPUT IS A SEPARATE RULE and is unchanged — the surface
+    // still scrolls itself to the newest line once there is more than a
+    // screenful. The two rules used to share one flag; they no longer do.
+    const { screen, out } = screenWithTask(24, undefined);
     const rows = {};
-    const re = new RegExp('\\x1b\\[(\\d+);1H([^\\x1b]*)', 'g');
+    // ANY COLUMN: every region is drawn inside the content frame now (ui/frame.js
+    // `contentBounds`), so the address carries the frame's left edge, not 1.
+    const re = new RegExp('\\x1b\\[(\\d+);\\d+H([^\\x1b]*)', 'g');
     let m;
-    while ((m = re.exec(out))) rows[Number(m[1])] = T.strip(m[2]).trimEnd();
+  // THE CARET PARK IS A CURSOR MOVE WITH NO TEXT, and it is the LAST address in
+    // every frame. Letting it win blanks whatever row the caret is on — which,
+    // now that the composer centres its text, is the row the text is ON.
+    while ((m = re.exec(out))) {
+      const row = Number(m[1]);
+      const text = T.strip(m[2]).trimEnd();
+      if (!text.trim() && rows[row] !== undefined) continue;
+      rows[row] = text;
+    }
     const feed = screen.rowMap.feedStart;
     const feedEnd = feed + screen.rowMap.feedRows - 1;
     const filled = [];
     for (let r = feed; r <= feedEnd; r++) if ((rows[r] || '').trim()) filled.push(r);
     assert.ok(filled.length, 'the conversation must be drawn somewhere');
     assert.strictEqual(screen.rowMap.feedPad, 0,
-      'ACTIVITY must not pad above its content — that is what glued it to the floor');
+      'the conversation must not pad above its content — that is what glued it to the floor');
     assert.ok(filled[0] <= feed + 1,
       `the conversation should start at the top of the feed (first filled ${filled[0]}, feed begins ${feed})`);
   });
@@ -122,27 +145,28 @@ module.exports = async function () {
       progress: { known: true, current: 3, total: 5, percent: 60 },
       recent: [],
     }, 100, 1)[0]);
-    assert.match(line, /READING/, 'the verb, not a generic RUNNING');
+    assert.match(line, /Reading/, 'the verb, not a generic RUNNING');
     assert.match(line, /dashboard\.py/, 'and what it is reading');
     assert.ok(!/STEP 3\/5/.test(line), 'the step count belongs to the banner, not to both');
     assert.ok(!/[█░]{6,}/.test(line), 'and so does the bar — one indicator per measurement');
   });
 
-  await test('PHASE B: the bar is still drawn, once, by the task banner', () => {
-    // The measurement did not disappear; it stopped being drawn twice.
-    const session = {
-      task: { objective: 'wire the dashboard to the live feed' },
-      plan: {
-        steps: [
-          { status: 'done' }, { status: 'done' }, { status: 'done' },
-          { status: 'active' }, { status: 'todo' },
-        ],
-      },
+  await test('PHASE B: the bar is still drawn, once, and `/plan` is where', () => {
+    // The measurement did not disappear; it stopped being drawn twice, and
+    // then the surface that drew it went with the panes. `/plan` is where the
+    // progress a person asks for is rendered now.
+    const plan = {
+      steps: [
+        { status: 'done', text: 'a' }, { status: 'done', text: 'b' }, { status: 'done', text: 'c' },
+        { status: 'active', text: 'd' }, { status: 'todo', text: 'e' },
+      ],
     };
-    const rows = views.taskBanner({ session, width: 100 }).map(T.strip).join('\n');
-    assert.match(rows, /STEP 4\/5/, 'where in the plan');
+    const rows = views.planView({ plan, width: 100 }).map(T.strip).join(String.fromCharCode(10));
     assert.match(rows, /[█░]{6,}/, 'a bar you can read at a glance');
     assert.match(rows, /60%/, 'and how much is finished');
+    const p = views.progressOf(plan);
+    assert.strictEqual(p.current, 4, 'where in the plan');
+    assert.strictEqual(p.percent, 60);
   });
 
   await test('PHASE B: the strip reports tokens, and never invents an output figure', () => {
@@ -180,28 +204,27 @@ module.exports = async function () {
         usage: { inputTokens: 42118, outputTokens: 1234, cacheReadTokens: 31400 },
         recent: [],
       }, w, 1)[0]);
-      assert.match(line, /RUNNING/, `the live row proves LAIN is alive at ${w}`);
+      assert.match(line, /Running/, `the live row proves LAIN is alive at ${w}`);
       assert.ok(T.width(line) <= w, `the strip overflowed at ${w}: ${T.width(line)}`);
       if (w < 56) assert.ok(!/↑/.test(line), `accounting is shed rather than mangled at ${w}`);
     }
   });
 
   await test('PHASE B: a finished PLAN is never reported as the task being done', () => {
-    const line = T.strip(statusStrip({
-      progress: { known: true, current: 4, total: 4, percent: 100 },
-      pendingCompletion: 'nothing has been run to check the change',
-      recent: [],
+    // A full bar is a full PLAN. The task is done when the harness settles it
+    // from evidence, and a progress indicator that says DONE beside a task
+    // still verifying is lying about the one thing it must never lie about.
+    const plan = { steps: [{ status: 'done', text: 'a' }, { status: 'done', text: 'b' }] };
+    const rows = views.planView({ plan, width: 100 }).map(T.strip).join(String.fromCharCode(10));
+    assert.match(rows, /100%/);
+    assert.ok(!/\bDONE\b/.test(views.progressCompact(views.progressOf(plan), 60)),
+      'a full plan is not a finished task');
+    // The one place entitled to say a turn finished cleanly is the live row,
+    // and only from the turn record.
+    const strip1 = T.strip(statusStrip({
+      phase: null, lastTurn: { toolCalls: 2, filesChanged: 1, stopReason: 'end' }, recent: [],
     }, 100, 1)[0]);
-    assert.match(line, /VERIFYING/, 'the task is not finished');
-    assert.ok(!/\bDONE\b/.test(line), 'the strip must not say DONE over unverified work');
-    // And the banner, which is where 100% now lives, still does not claim it.
-    const session = {
-      task: { objective: 'ship it' },
-      plan: { steps: [{ status: 'done' }, { status: 'done' }, { status: 'done' }, { status: 'done' }] },
-    };
-    const rows = views.taskBanner({ session, width: 100 }).map(T.strip).join('\n');
-    assert.match(rows, /100%/, 'the plan really is finished');
-    assert.ok(!/\bDONE\b/.test(rows), 'and a full bar is still not a completion claim');
+    assert.match(strip1, /DONE/, 'which it does say, in the one place that owns it');
   });
 
   // ------------------------------------------------------------- E — diff --
@@ -302,7 +325,7 @@ module.exports = async function () {
       options: ['Minimal — only the essential controls', 'Chat-style — reads like a conversation'],
     }));
     const body = strip(p.render(64, 12));
-    assert.match(body, /LAIN NEEDS YOUR INPUT/);
+    assert.match(body, /Lain needs your input/i);
     // WAS `[A] Minimal`. The label is now `A.  Minimal` — see ui/answer.js: it
     // is a thing you can TYPE, so it has to read the same for a letter and for
     // a number, and the brackets were noise around it.
@@ -326,7 +349,7 @@ module.exports = async function () {
     const at = p.cursor;
     assert.strictEqual(p.escape(), true, 'Escape is claimed by the MCQ');
     const details = strip(p.render(64, 16));
-    assert.match(details, /QUESTION DETAILS/);
+    assert.match(details, /Question details/i);
     assert.match(details, /only the essential controls/, 'the full reasoning is here');
     assert.match(details, /reads like a conversation/);
     assert.strictEqual(p.escape(), true, 'and Escape comes back');
@@ -382,13 +405,16 @@ module.exports = async function () {
 
   // ------------------------------------------------- M — visual inspection --
 
-  await test('PHASE M: visual readiness answers for EITHER transport, and for refusals', () => {
+  await test('PHASE M: visual readiness answers for the transport, and for refusals', () => {
     // MOVED OUT OF inspection.js, where it asked `app.desktop()` and nothing
     // else — so a machine with a Probe running and no MCP bridge was told "no
     // desktop bridge is configured, so nothing can look at the screen" while
     // `computer{op:"screenshot"}` was working perfectly through the Probe. It
     // was answering about ONE transport in a program that has two. It lives in
-    // computer.js now, which is the module that knows both.
+    // computer.js now, which is the one module that knows the transports —
+    // which since 2026-09 is the desktop bridge alone (the Probe transport was
+    // removed with the Probe integration; see the historical note in
+    // computer.js's transports()).
     const { visualReadiness, channelsOf } = require('../../src/computer');
     const { CHANNEL } = require('../../src/channels');
 
@@ -396,21 +422,18 @@ module.exports = async function () {
     assert.strictEqual(off.ok, false);
     assert.match(off.why, /nothing is connected/);
 
-    // A PROBE ALONE IS ENOUGH, which is the case the old version got wrong.
-    const probeOnly = { _probe: { state: 'CONNECTED', call: async () => ({ ok: true }) } };
-    const viaProbe = visualReadiness(probeOnly);
-    assert.strictEqual(viaProbe.ok, true, 'a Probe can see the screen');
-    assert.strictEqual(viaProbe.transport, 'probe');
-
-    // A BRIDGE ALONE IS ALSO ENOUGH.
-    const bridgeOnly = { desktop: () => ({ bridge: { call: async () => ({ ok: true }) } }) };
-    assert.strictEqual(visualReadiness(bridgeOnly).transport, 'desktop');
+    // A BRIDGE IS ENOUGH — which is the case the old version, in inspection.js,
+    // answered wrongly by not asking at all.
+    const bridged = { desktop: () => ({ bridge: { call: async () => ({ ok: true }) } }) };
+    const via = visualReadiness(bridged);
+    assert.strictEqual(via.ok, true, 'the bridge can see the screen');
+    assert.strictEqual(via.transport, 'desktop');
 
     // AND A REFUSAL CLOSES IT, however connected the transport is. Reporting
     // POSSIBLE here is the "it says CONNECTED, why did nothing happen"
     // complaint in its original form.
-    channelsOf(probeOnly).deny(CHANNEL.SCREEN, 'you said no');
-    const refused = visualReadiness(probeOnly);
+    channelsOf(bridged).deny(CHANNEL.SCREEN, 'you said no');
+    const refused = visualReadiness(bridged);
     assert.strictEqual(refused.ok, false, 'connected is not the same as allowed to look');
     assert.match(refused.why, /SCREEN DENIED/);
   });

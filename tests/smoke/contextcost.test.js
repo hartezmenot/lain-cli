@@ -171,14 +171,14 @@ module.exports = async function () {
     }
   });
 
-  await test('COST LIVE: /tokens explains the growth instead of merely reporting it', async () => {
+  await test('COST LIVE: /token explains the growth instead of merely reporting it', async () => {
     // The reported condition was 330,000 tokens with nothing able to say of
     // what. This is the answer to that, on screen, in the real binary.
     const { cwd, script } = fixture();
     const r = await runCli([], {
       cwd,
       env: { LAIN_FORCE_TUI: '1', COLUMNS: '100', LINES: '46' },
-      stdinSteps: ['audit these modules, raise the limit, and run the tests' + NL, '/tokens' + NL, '/exit' + NL],
+      stdinSteps: ['audit these modules, raise the limit, and run the tests' + NL, '/token' + NL, '/exit' + NL],
       stepDelayMs: 15000,
       script,
       timeoutMs: 200000,

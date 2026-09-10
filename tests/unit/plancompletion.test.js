@@ -209,7 +209,7 @@ module.exports = async function () {
       pendingCompletion: '1 file(s) changed but nothing has been run to check them',
       lastTurn: { toolCalls: 3, filesChanged: 1 },
     }, 100, 1, 1000).join('');
-    assert.match(line, /VERIFYING/);
+    assert.match(line, /Verifying/i);
     assert.match(line, /nothing has been run/);
     assert.ok(!/DONE/.test(line), 'DONE beside outstanding work is the most misleading thing it could say');
   });

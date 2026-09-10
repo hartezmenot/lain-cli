@@ -190,6 +190,12 @@ function lineForRow(rowMap, scroll, y) {
  */
 
 /** Begin a selection at a screen position. False when it is not over text. */
+/** The screen column the feed's first character sits on. 1 before the frame. */
+function feedCol(screen) {
+  const c = screen && screen.rowMap && Number(screen.rowMap.feedCol);
+  return Number.isFinite(c) && c > 0 ? c : 1;
+}
+
 function beginAt(screen, x, y) {
   const lines = screen.lastFeedLines;
   if (!lines || !lines.length) return false;
@@ -197,7 +203,14 @@ function beginAt(screen, x, y) {
   if (lineIndex == null || lineIndex >= lines.length) return false;
   const m = measure(lines);
   screen.selectionLines = lines;
-  screen.textSelection.from(offsetAt(m, lineIndex, x - 1), m.total);
+  // ---- THE FEED NO LONGER STARTS AT COLUMN 1 -------------------------------
+  //
+  // It is drawn inside the content frame (ui/views.js `contentBounds`), so the
+  // origin is `rowMap.feedCol` rather than 1. Read from what the frame RECORDED
+  // as it drew rather than recomputed here: a second copy of that arithmetic is
+  // how a click starts landing a few characters off on a wide terminal and
+  // nowhere else.
+  screen.textSelection.from(offsetAt(m, lineIndex, x - feedCol(screen)), m.total);
   return true;
 }
 
@@ -222,7 +235,7 @@ function extendTo(screen, x, y) {
   } else {
     const lineIndex = lineForRow(screen.rowMap, screen.workspaceScroll, y);
     if (lineIndex == null) return false;
-    at = offsetAt(m, lineIndex, x - 1);
+    at = offsetAt(m, lineIndex, x - feedCol(screen));
   }
   screen.textSelection.to(at, m.total);
   return true;

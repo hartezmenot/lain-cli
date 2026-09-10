@@ -101,6 +101,21 @@ function absorb(r) {
   // Remembered so the eventual submit can still say it came from a paste;
   // downstream never has to guess that from the content.
   r.pastedInLine = r.pastedInLine || Boolean(text);
+  // ---- AND THE PAYLOAD ITSELF, FOR THE COMPOSER'S DRAWING ---------------
+  //
+  // THIS IS THE PATH REAL PASTES TAKE. `Input.insertText` records it too, and
+  // that covers a Ctrl+V arriving as a key — but a bracketed paste from the
+  // terminal lands HERE, writing `line` directly (see the note above on the
+  // undo step and the selection), so a record kept only in `insertText` would
+  // have missed every paste that came from actually pasting.
+  //
+  // WHAT was pasted, never WHERE: ui/composer.js finds it by searching the
+  // buffer, so nothing here has to move when the line is edited around it.
+  // The buffer is untouched and is the whole of what gets sent.
+  if (text && Array.isArray(r.pastesInLine)) {
+    r.pastesInLine.push(text);
+    if (r.pastesInLine.length > 16) r.pastesInLine.shift();
+  }
   r.histIndex = r.history.length;
   r.emit('edit', r.line, { pasted: true });
   return true;

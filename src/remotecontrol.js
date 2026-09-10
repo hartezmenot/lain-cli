@@ -66,8 +66,8 @@ async function ask(msg, { timeoutMs = TIMEOUT_MS, start = false } = {}) {
 /**
  * WHAT IS CONNECTED, WITHOUT STARTING ANYTHING.
  *
- * Reading must not spawn a supervisor: a person who types `/rc` to check
- * whether they ever set this up has not asked to start a background process.
+ * Reading must not spawn a supervisor: a person who checks whether they ever
+ * set this up has not asked to start a background process.
  */
 async function status() {
   const r = await ask({ op: 'remote_status' });
@@ -104,8 +104,8 @@ async function connect(token) {
  *
  * A base URL and a model name, which is how LAIN has always described a place a
  * model lives — see connections.js. Nothing new is invented here and no second
- * provider system exists: `/rc` picks one of the connections the user already
- * has, and only a local one.
+ * provider system exists: the caller picks one of the connections the user
+ * already has, and only a local one.
  */
 async function setBrain({ baseUrl, model, key = '' }) {
   if (key) require('./redact').register(key);

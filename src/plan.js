@@ -232,10 +232,28 @@ function runCommand(app, { args = [], rest = '' } = {}, { C } = {}) {
       w(C.dim(`  dropped step ${tail} (completed steps are never dropped)\n`));
       return;
     }
+    // ---- THIS IS WHERE THE PLAN PANE WENT --------------------------------
+    //
+    // `/plan show` printed `p.digest()` — one line per step, no progress, no
+    // evidence — because the PLAN PANE was one keystroke away and carried the
+    // rest: the bar, the percentage that comes from COMPLETED work rather than
+    // the active index, and the Why/Files/Status behind each step.
+    //
+    // There is no pane. So the command renders what the pane rendered, using
+    // the pane's own function (ui/views.js `planView`), and the measurement
+    // has one implementation rather than two that can disagree about whether
+    // a started step counts as a finished one.
     const p = app.session.plan;
     if (!p || !p.steps.length) { w(C.dim('  No plan. Plans are optional; add one with /plan step <text>.\n')); return; }
-    w('\n' + C.bold('Plan') + C.dim(`  ${p.completed.length}/${p.steps.length} done`) + '\n');
-    w('  ' + p.digest(1200).split('\n').join('\n  ') + '\n');
+    const width = (app.render && app.render.width) || 80;
+    for (const line of require('./ui/views').planView({
+      plan: p, width, evidence: app.session.evidence,
+      // EVERY STEP THAT HAS SOMETHING TO SHOW, SHOWS IT. See planView's note on
+      // `detail`: expansion used to be a keystroke in a pane, and a completed
+      // step's NOTE — the evidence of what was actually done — went dark with
+      // the pane that had the keystroke.
+      detail: true,
+    })) w(line + '\n');
 }
 
 module.exports = { runCommand, Plan, STATUS };

@@ -44,7 +44,10 @@ function register({ define, REGISTRY, C }) {
   define('/external', {
     // MACHINERY: about LAIN, not about the work. Goes to the command panel.
     surface: true,
-    args: '[<what you want> | send | show | cancel | api <model> | browser | human | off | rounds <n>]',
+    // (`browser` was listed here as a subcommand until the actor it named was
+    // removed with the browser in 2026-09; a typed `/external browser` now
+    // falls through to the request path like any other words.)
+    args: '[<what you want> | send | show | cancel | api <model> | human | off | rounds <n>]',
     desc: 'Ask something outside LAIN — drafted here first, sent only when you say so',
     async run(app, { args, rest }) {
       const externalMod = require('./external');
@@ -63,7 +66,7 @@ function register({ define, REGISTRY, C }) {
           if (a.chosen && a.model) app.render.write(C.dim(`    model ${a.model} · via ${a.connection || 'the route that serves it'}\n`));
           if (a.chosen) app.render.write(C.dim(`    ${a.automated ? 'automated' : 'you hand the packet over yourself'} · ${a.maxRounds} rounds\n`));
         }
-        app.render.write(C.dim('  /external api <model> · browser · human · rounds <n> · off\n'));
+        app.render.write(C.dim('  /external api <model> · human · rounds <n> · off\n'));
       };
 
       /** Record a chosen actor and say what it now means. */
@@ -74,18 +77,7 @@ function register({ define, REGISTRY, C }) {
         config.save(app.cfg);
         const s = actorsMod.status(app).actors.find((a) => a.kind === kind) || {};
         app.render.write(C.green('  ✓ external actor: ') + C.bold(s.label || kind) + '\n');
-        if (kind === actorsMod.KIND.BROWSER) {
-          // WHAT IT ACTUALLY DOES NOW. This said "LAIN opens the page and puts
-          // the packet on your clipboard — LAIN does not read the page", which
-          // described the architecture that BrowserActor replaced. It drives
-          // LAIN's own Chromium: it types the packet in, waits for the reply to
-          // settle, and reads it back off the page. The clipboard survives only
-          // as the fallback for when that browser is not running, so it is
-          // named as the fallback rather than as the behaviour.
-          app.render.write(C.dim(`    LAIN's own Chromium opens ${next.url || actorsMod.DEFAULT_BROWSER_URL}, types the packet\n`));
-          app.render.write(C.dim('    and reads the reply back off the page. Its profile is LAIN\'s, never yours.\n'));
-          app.render.write(C.dim('    If that browser is not running it falls back to the clipboard and says so.\n'));
-        } else if (kind === actorsMod.KIND.HUMAN) {
+        if (kind === actorsMod.KIND.HUMAN) {
           app.render.write(C.dim('    The packet goes to your clipboard. Paste the reply back when you have it.\n'));
         }
         return next;
@@ -151,17 +143,15 @@ function register({ define, REGISTRY, C }) {
       // AN ACTOR BY NAME, for a pipe and for anyone who would rather type.
       //
       // WITH WORDS AFTER IT, THE NAME IS AN ADDRESS RATHER THAN A SETTING.
-      // `/external browser` chooses the browser actor; `/external browser this
+      // `/external human` chooses the human actor; `/external human this
       // looks like a bug` chooses it AND drafts that request for it. Both go
       // through LAIN — the second one still draws the packet, still shows it,
       // and still sends nothing until it is confirmed. That is what keeps the
-      // arrow User -> LAIN -> browser rather than User -> browser.
+      // arrow User -> LAIN -> reviewer rather than User -> reviewer.
+      // (A `browser` branch lived here — the Chromium-driving actor — removed
+      // with the browser in 2026-09 per the browser-ownership ruling. A typed
+      // `/external browser` now falls through to the request path below.)
       const after = rest.slice(String(args[0] || '').length).trim();
-      if (sub === 'browser' || sub === 'chatgpt') {
-        choose(actorsMod.KIND.BROWSER);
-        if (after) await request.runRequest(app, after, { C, actorKind: actorsMod.KIND.BROWSER });
-        return;
-      }
       if (sub === 'human' || sub === 'paste' || sub === 'relay') {
         choose(actorsMod.KIND.HUMAN);
         if (after) await request.runRequest(app, after, { C, actorKind: actorsMod.KIND.HUMAN });

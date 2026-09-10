@@ -32,11 +32,16 @@ function sources() {
 }
 
 function stripComments(t) {
-  return t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  return t.replace(/\r\n?/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
 module.exports = async function () {
   const files = sources();
+  await test('ARCH: source comment guards agree for LF and CRLF', () => {
+    const source = '// forbidden() is only a comment\nconst actual = true;\n';
+    assert.strictEqual(stripComments(source), stripComments(source.replace(/\n/g, '\r\n')));
+    assert.ok(!stripComments(source.replace(/\n/g, '\r\n')).includes('forbidden'));
+  });
 
   await test('ARCH: the test run cannot touch the user real config home', () => {
     // A test that writes the user's config is not a failing test — it is damage
@@ -340,7 +345,7 @@ module.exports = async function () {
     // waiting to happen again at the next split.
     const HELPERS = [
       'repl.js', 'completion.js', 'identify.js', 'interrupt.js', 'turnevents.js',
-      'companion.js', 'computer.js', 'keyboarddelivery.js',
+      'computer.js', 'keyboarddelivery.js',
     ];
     for (const f of HELPERS) {
       // COMMENTS **AND STRINGS** ARE STRIPPED FIRST. These files explain
@@ -382,7 +387,7 @@ module.exports = async function () {
     const codemodel = require('../../src/codemodel');
     const EXTRACTED = [
       'repl.js', 'completion.js', 'identify.js', 'interrupt.js', 'turnevents.js',
-      'companion.js', 'computer.js', 'keyboarddelivery.js', 'ratelimit.js', 'failover.js',
+      'computer.js', 'keyboarddelivery.js', 'ratelimit.js', 'failover.js',
       'ui/reports.js', 'ui/contextview.js',
     ];
     const offenders = [];
@@ -415,7 +420,7 @@ module.exports = async function () {
       // a subdirectory by its parent path was reported as an orphan — and, far
       // worse, a genuinely dead module reachable only that way would have been
       // reported as live. The guard was under-matching in both directions.
-      for (const m of f.text.matchAll(/require\('(\.\.?\/[^']+)'\)/g)) {
+      for (const m of f.text.matchAll(/require(?:\.resolve)?\('(\.\.?\/[^']+)'\)/g)) {
         const target = path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1]));
         visit(target.endsWith('.js') ? target : target + '.js');
         visit(target + '/index.js');

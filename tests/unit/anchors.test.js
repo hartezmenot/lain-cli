@@ -43,7 +43,12 @@ module.exports = async function () {
           userInput: `question ${i}`,
           text: 'a',
           narration: [{ step: 0, text: `Answer paragraph ${i} with enough length to push the pane down.` }],
-          actions: [{ name: 'read_file', target: `f${i}.js`, ok: true }],
+          // AN EDIT, NOT A READ. A successful read is live state and no longer
+          // takes a row in the conversation (ui/feed.js `durable`), so building
+          // the feed out of reads made it short enough that there was barely
+          // anything to scroll — and this test is about SCROLLING to anchors.
+          // A change to the project is exactly the kind of row that persists.
+          actions: [{ name: 'edit_file', target: `f${i}.js`, ok: true }],
         });
       }
       screen.state = { session: { turns }, transcript: [], liveActions: [], liveNarration: [] };
@@ -106,17 +111,31 @@ module.exports = async function () {
     assert.ok(rows.includes('proceed'), 'and the decision itself is still there');
   });
 
-  await test('ANCHOR: a paste is labelled and drawn as its marker, payload intact', () => {
-    require('../../src/ui/pasted').reset();
-    const payload = Array.from({ length: 40 }, (_, i) => `line ${i} of a long pasted log`).join('\n');
+  await test('ANCHOR: a paste is LABELLED as a request, and drawn in full', () => {
+    // ------------------------------------------------------------------
+    // TWO PROPERTIES, AND ONLY ONE OF THEM CHANGED.
+    //
+    // The LABEL still comes from the bulk: `isPaste` is what tells this row
+    // apart from a sentence, so a pasted log is a USER REQUEST and Alt+↑ can
+    // jump to it. That is what anchors are for and it is untouched.
+    //
+    // What changed is the DRAWING. This used to assert that the feed showed
+    // `[pasted text #1]` and NOT the payload. The collapse moved to the
+    // composer (ui/composer.js) — where a wall of text actually destroys
+    // something — and the transcript now shows what was sent, because a
+    // transcript that cannot be read back is a transcript nobody can trust.
+    // ------------------------------------------------------------------
+    const NL = String.fromCharCode(10);
+    const payload = Array.from({ length: 40 }, (_, i) => `line ${i} of a long pasted log`).join(NL);
     const out = [];
     feed.pushUser(out, payload);
     const lines = feed.renderFeed(out, 80);
-    const text = lines.join('\n');
+    const text = lines.join(NL);
     assert.ok(text.includes('USER REQUEST'), text.slice(0, 200));
-    assert.ok(/\[pasted text #\d+\]/.test(text), 'drawn as a marker');
-    assert.ok(!text.includes('line 30 of a long pasted log'), 'not as four hundred rows');
-    // AND THE PAYLOAD STILL TRAVELS, so a click brings back the whole thing.
+    assert.ok(!/pasted text/.test(text), 'the record is not collapsed');
+    assert.ok(text.includes('line 30 of a long pasted log'), 'the payload is drawn');
+    // AND IT STILL TRAVELS WITH EVERY ROW, so a click brings back the whole
+    // message rather than the one line under the pointer.
     const at = lines.userAt;
     const carried = Object.keys(at).map((k) => at[k]);
     assert.ok(carried.some((v) => String(v).includes('line 30 of a long pasted log')),

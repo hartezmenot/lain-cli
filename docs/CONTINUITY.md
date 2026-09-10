@@ -1,11 +1,16 @@
 # CONTINUITY — the implementation record
 
 Mission: **implement deterministic continuity, not Claude Code cloning.** The
-measured inefficiency: provider interruptions → resumed turns → lost cache
-locality → manual re-grounding → runtime facts reconstructed through model
-narration. The constraint: fix that without weakening the existing
-deterministic evidence, verification, lifecycle, cache, or completion
-machinery — by composing it, not by building parallel state systems.
+measured inefficiency: provider interruptions → lost momentum at turn
+boundaries → manual re-grounding → runtime facts reconstructed through model
+narration. (The cache half of the original framing — "resumed turns lose
+cache locality" — was falsified by the 2026-09-07 corpus extraction; see
+CONTROL-LOOP §2a: five of the seven caching turns were themselves resumed
+turns, and the dead-cache phase is late-session with a confirmed fold-regime
+ceiling and an unexplained literal-0 floor.) The constraint: fix that without
+weakening the existing deterministic evidence, verification, lifecycle,
+cache, or completion machinery — by composing it, not by building parallel
+state systems.
 
 This is the §17 report: what was traced, what already existed, what was
 adapted, what is new, and what was proved — with the verification state of
@@ -157,12 +162,13 @@ claimed.**
   and the volatile tail changes only at re-entry boundaries — which is what
   C2 requires. No volatile timestamps or health reports were added to the
   prefix.
-- **MEASURED baseline** (docs/CONTROL-LOOP.md:88-105, :173-177):
-  cacheReadTokens = 0 on every resumed turn in the observed run, while those
-  turns sent an estimated 90–110k tokens against an 86–109k stable prefix;
-  turn 1 of that run cached 2.08M across 98 requests. Cause unisolated
-  (gateway TTL vs session restart vs marker placement — the last already
-  measured irrelevant on that route).
+- **MEASURED baseline** (docs/CONTROL-LOOP.md §2a, full-corpus extraction
+  2026-09-07): the earlier "cacheReadTokens = 0 on every resumed turn"
+  reading is corrected — five of the seven caching turns WERE resumed turns;
+  dead cache is a late-session phase change (Sep 5 evening, turns 20+) with
+  the fold regime bounding cache at the ~18k head and t23/t24/t26's
+  literal-0 unexplained pending per-request model/connection recording
+  (the reqtrace sink was off in that run).
 - **UNKNOWN / not attempted**: provider cache survival across a resume is
   not fully controllable by LAIN. This mission does not rewrite the cache
   architecture (§8) and does not claim the digest improves cache survival —

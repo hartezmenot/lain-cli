@@ -19,7 +19,6 @@ const { runTurn } = require('./turn');
 const turnEvents = require('./turnevents');
 const { Renderer, C } = require('./render');
 const { Input } = require('./input');
-const prompt = require('./prompt');
 const providerMod = require('./provider');
 const toolRegistry = require('./tools');
 const commands = require('./commands');
@@ -44,6 +43,7 @@ class App {
     // of the surfaces that could leak.
     require('./redact').registerFrom(this.cfg);
     this.interactive = opts.interactive !== false;
+    this.interaction = opts.interaction || null;
     this.render = new Renderer(opts.out || process.stdout);
     this.cwd = opts.cwd || process.cwd();
     this.wantExit = false;
@@ -74,13 +74,11 @@ class App {
     this.jobs = new (require('./agentjob').AgentJobs)({
       onChange: () => { if (this.ui && this.ui.enabled) this.ui.refresh(); },
     });
-    /**
-     * Per-App, never module scope. TWO HALVES WITH DIFFERENT LIFETIMES: the
-     * breaker is still in-memory by design, because a restart legitimately knows
-     * nothing about whether a server is up; a rate limit is not, because "retry
-     * in 4 hours" is a fact whose future outlasts this process. See
-     * availability.hydrate and providerhealth.js.
-     */
+    // Per-App, never module scope. TWO HALVES WITH DIFFERENT LIFETIMES: the
+    // breaker is still in-memory by design, because a restart legitimately knows
+    // nothing about whether a server is up; a rate limit is not, because "retry
+    // in 4 hours" is a fact whose future outlasts this process. See
+    // availability.hydrate and providerhealth.js.
     this.availability = new Availability(this.cfg.availability || {});
     /** Durable provider rows, refreshed off the hot path. */
     this._supervisedProviders = [];
@@ -111,21 +109,18 @@ class App {
     // unconditionally, but only ENABLED on a TTY (see start()). On a pipe the
     // linear renderer runs and every command falls back to plain text — which
     // is what keeps `lain -p ... | grep` and the whole test suite working.
-    /**
-     * WHAT IS HAPPENING, AS NAMED FACTS — the contract a companion renders.
-     *
-     * LAIN owns this and nothing else does. A companion (the Probe window, the
-     * dashboard) SUBSCRIBES; it never computes a second version of the same
-     * state from prose, which is what the design forbids and what the
-     * Probe was previously reduced to doing. See src/events.js.
-     */
+    // WHAT IS HAPPENING, AS NAMED FACTS — the contract a companion renders.
+    // LAIN owns this and nothing else does: a companion (the dashboard — and
+    // the Probe window, before the Probe integration was removed in 2026-09)
+    // SUBSCRIBES; it never computes a second version of the same state from
+    // prose, which is what the design forbids and what the Probe was
+    // previously reduced to doing. See src/events.js.
     this.events = new (require('./events').EventBus)();
     this.ui = new UI(this);
   }
 
   /**
    * Bind a session to this App, with everything that hangs off it.
-   *
    * THE ONE PLACE a session becomes current. `/resume` and `/new` previously
    * assigned `this.session` directly and left `checkpoints` pointing at the
    * PREVIOUS session — so `/undo` after `/resume` reverted the other session's
@@ -153,6 +148,8 @@ class App {
     // WHY THE NEXT TURN IS A RECOVERY, or null. One turn's lifetime; see
     // inputgate.js, which is the only thing that sets it.
     this._handover = null;
+    // WHAT GIT SAYS ABOUT THIS TREE — reset for the same reason as the brief. See gitsnapshot.js.
+    require('./gitsnapshot').reset(this);
     this.refreshSupervisedJobs();
     // AND WHICH ROUTES ARE SHUT. Read, never re-adopted — see the constructor.
     // Without this the handover's route section would be whatever was true when
@@ -166,6 +163,10 @@ class App {
   // build prompts and draw frames. Fire-and-forget; see runtimefacts.js for why
   // it may never be awaited on the hot path, and for the one caller that does.
   refreshSupervisedJobs() { return require('./runtimefacts').jobs(this); }
+
+  // THE FILES THIS SESSION HAS WRITTEN — the checkpoint ledger's answer, the
+  // same source pretest.js and /changes read. See gitsnapshot.touched.
+  gitTouched() { return require('./gitsnapshot').touched(this); }
 
   // THE SHALLOW VIEW OF THIS SESSION'S PROJECT — memoised, and cleared by
   // `adopt` alongside everything else that is per-session. Lives in
@@ -182,55 +183,13 @@ class App {
   catalog() { return require('./appcatalog').catalog(this); }
   ensureCatalog(opts) { return require('./appcatalog').ensureCatalog(this, opts); }
 
-  systemPrompt(from = null) {
-    const pc = providerMod.resolve({ ...this.cfg, _evidence: this.connectionEvidence });
-    let sys = prompt.build({
-      cwd: this.session.cwd, platform: process.platform, model: pc.model,
-      // The workflow this request implies — what to do FIRST. Costs nothing:
-      // it was decided locally when the input arrived.
-      mode: this.session.mode,
-      // What is already established: decisions, files touched, the last check,
-      // what has been read. See prompt.workingContext.
-      session: this.session,
-      // THE ONLY SOURCE THAT CAN CONTRADICT THE PREVIOUS MODEL. When the turn
-      // being started is a handover — a different model, or a turn that died —
-      // prompt.build re-measures the checkpoints against disk rather than
-      // repeating what the tools reported. See handover.js.
-      checkpoints: this.checkpoints,
-      // Work the supervisor owns, which no amount of reading the session or the
-      // transcript would recover — it may have finished while LAIN was not
-      // running. Cached; see refreshSupervisedJobs.
-      jobs: this._supervisedJobs || [],
-      // WHICH ROUTES ARE SHUT, from the same place and for the same reason: a
-      // handover is very often caused by a rate limit, so the model taking over
-      // must not plan around a road that is closed. Cached; see
-      // providerhealth.refresh.
-      providers: this._supervisedProviders || [],
-      // WHY THIS TURN IS A RECOVERY, when it is — set for one turn by
-      // inputgate.js. It carries the two things the session file cannot: what
-      // the runtime OBSERVED about the failure, and the sentences the person
-      // typed that never reached a model. Without it a handover is inferred
-      // from `session.turns`, which is blind to the case that matters most: a
-      // process that died mid-turn wrote no ending, so the transcript reads as
-      // a turn still happily in flight.
-      runtime: this._handover || null,
-    });
-    // Built ONCE per session and capped. Orientation, not an index — the model
-    // has list_dir, read_file and a shell for anything deeper.
-    if (this._projectBrief === undefined) {
-      try { this._projectBrief = require('./project').brief(this.session.cwd); } catch { this._projectBrief = ''; }
-    }
-    if (this._projectBrief) sys += `\n\n# This project\n${this._projectBrief}`;
-    // ONLY this session's plan can ever reach the prompt: it is a field on this
-    // session object, so there is no other plan it could pick up.
-    if (this.session.plan) sys += `\n\n# Plan (this session)\n${this.session.plan.digest()}`;
-    return require('./probeskill').decorate(this, sys, from);
-  }
+  // THE SYSTEM PROMPT. Assembled in appprompt.js, for the reason every other
+  // seam in this file exists: app.js is the REPL shell, and what goes into a
+  // request changes for entirely different reasons than how input is read.
+  systemPrompt() { return require('./appprompt').build(this); }
 
-  /**
-   * Decide what this input MEANS. The decision lives in identify.js; this is
-   * the seam, so app.js stays the REPL shell.
-   */
+  // Decide what this input MEANS. The decision lives in identify.js; this is
+  // the seam, so app.js stays the REPL shell.
   identify(text, isPaste, forceMode = null, sameTask = false) {
     return require('./identify').identify(this, text, isPaste, forceMode, sameTask);
   }
@@ -244,6 +203,11 @@ class App {
     if (this.ui.enabled && (!verdict.sameTask || !this.ui.startedAt)) this.ui.startedAt = Date.now();
 
     this.abort = new AbortController();
+    // GIT STATE, measured while the request is assembled. Fire-and-forget: the
+    // section it feeds rides the volatile tail (gitsnapshot.js) and may never
+    // delay the request that carries it — a turn that outruns the measurement
+    // renders no section. Same shape as refreshSupervisedJobs.
+    require('./gitsnapshot').prefetch(this, this.gitTouched());
     // THE RUNTIME IS TOLD A TURN IS STARTING, AND WHICH PROCESS OWNS IT — the
     // only evidence that will later prove nobody is going to finish it. Free
     // with no supervisor, never awaited. See turnauthority.js.
@@ -260,6 +224,9 @@ class App {
         turns: (this.session.turns || []).length,
         from: from || 'user',
       });
+      // AND THE TASK RECORD, which outlives this session. The same verdict, no
+      // second classification: see src/harnesslink.js.
+      require('./harnesslink').beginTurn(this, verdict, text);
     }
     // Whatever was outstanding last time is no longer the news; this turn will
     // decide again when it ends.
@@ -270,13 +237,14 @@ class App {
     // preceded, and the finished record when it arrives. See turnevents.js.
     const ctx = { liveText: '', record: null };
     try {
+      if (this.interaction) text = await require('./interaction').prepareInput(this, text);
       for await (const ev of runTurn(this.session, text, require('./jobrunner').turnOptions(this, {
         session: this.session,
         signal: this.abort.signal,
         from,
         // Absent when there is no interactive UI, so ask_user reports that
         // rather than returning a null the model reads as a dismissal.
-        ask: this.ui.enabled ? (q) => this.ui.askUser(q) : null,
+        ask: this.interaction ? (q) => require('./interaction').ask(this, q) : this.ui.enabled ? (q) => this.ui.askUser(q) : null,
         // THE LIVENESS SIGNAL, and now also the PRIMARY JOB'S current activity.
         // turn.js computes this immediately before every provider call and
         // every tool; it is a local callback with no request and no token
@@ -362,7 +330,9 @@ class App {
     // turnauthority.js, which is where the one interesting case lives — a
     // cancellation is not a failure and must not arm a recovery.
     require('./turnauthority').end(this, record);
-    require('./probe').mirrorTurn(this, record);   // the Probe sees the same turn
+    // AND THE TASK RECORD IS TOLD THE SAME THING. `DONE` becomes VERIFYING —
+    // a model that stopped has stopped, not proved anything. See harnesslink.js.
+    require('./harnesslink').endTurn(this, record);
     try { this.session.save(); } catch (e) { this.render.notice('warn', `could not save session: ${e.message}`); }
 
     // ---- WHAT YOU TYPED WHILE IT WORKED, NOW THAT IT HAS FINISHED ---------
@@ -383,7 +353,15 @@ class App {
     const waiting = this.wantExit ? [] : this.drainSteers();
     if (waiting.length) {
       const joined = waiting.join('\n');
-      if (this.ui.enabled) this.ui.noteActor('note', `⚑ delivering what you typed while it worked: ${joined}`);
+      // ---- AN ACKNOWLEDGEMENT, NOT A RECORD -----------------------------
+      //
+      // This was a durable row. What the user typed IS durable and is drawn where
+      // they typed it (turn.js records `steerTexts` and the feed replays them at the
+      // step they reached); saying a second time that it was handed over is LAIN
+      // confirming its own plumbing. One transient row, and then it is over.
+      if (this.ui.enabled) {
+        require('./ui/operation').note(this.ui, `Delivered what you typed · ${joined}`);
+      }
       return await this.submit(joined, { sameTask: true, from: 'steer' });
     }
 
@@ -432,7 +410,6 @@ class App {
 
   /**
    * A LONG RATE LIMIT IS A DECISION, and the decision lives in ratelimit.js.
-   *
    * Moved out whole when this file crossed the god-object guard. It is not a
    * wrapper with logic in it: the module already owned the threshold, the
    * question and the resume prompt, and the flow that asks the question was the
@@ -446,7 +423,6 @@ class App {
 
   /**
    * IS SOMETHING WAITING FOR AN ANSWER? Then this line is it.
-   *
    * ONE implementation, because there are two moments it can arrive at: the
    * REPL loop when nothing is running, and the input handler when something is.
    * The second one is not an optimisation — it is the only way the answer can
@@ -685,7 +661,23 @@ class App {
   async once(text) {
     this.interactive = false;
     await this.prepare();
-    await this.handle(text);
+    try {
+      await this.handle(text);
+    } finally {
+      // ---- A ONE-SHOT MUST TEAR DOWN WHAT IT STARTED ---------------------
+      //
+      // FOUND BY A HANGING TEST, which is the only way this shows up. `-p`
+      // never goes through repl.start(), so it never reached the teardown
+      // there — and the moment a turn could start a MANAGED SERVICE, that
+      // stopped being a tidiness question: a dev server holds the event loop
+      // open, so `lain -p "start the server"` simply never exited, and the
+      // service outlived it as an orphan on a port nobody recorded. That is
+      // the exact failure this repository already paid ninety processes for.
+      //
+      // In the `finally` so a thrown turn cleans up too, and awaited so the
+      // process is genuinely free to exit when this returns.
+      await require('./harnesslink').shutdown(this);
+    }
     try { this.session.save(); } catch { /* best effort */ }
     // /resume is the ONLY way state crosses a session boundary, so a one-shot
     // run that never names its own session leaves no way back to it.

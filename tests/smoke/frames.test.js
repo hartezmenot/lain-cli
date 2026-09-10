@@ -92,8 +92,9 @@ function capture({ files, script, stdin, cols = 118, rows = 44, gap = 1800, time
     LAIN_MOCK_SCRIPT: sp,
   };
   delete env.NO_COLOR;
-  const keep = ['LAIN_CONFIG_DIR', 'LAIN_FORCE_TUI', 'LAIN_FORCE_COLOR', 'LAIN_PROVIDER', 'LAIN_MOCK_SCRIPT'];
+  const keep = ['LAIN_CONFIG_DIR', 'LAIN_FORCE_TUI', 'LAIN_FORCE_COLOR', 'LAIN_PROVIDER', 'LAIN_MOCK_SCRIPT', 'LAIN_SUPERVISOR_BIN', 'LAIN_SUPERVISOR_LEASE_PORT'];
   for (const k of Object.keys(env)) if (k.startsWith('LAIN_') && !keep.includes(k)) delete env[k];
+  env.LAIN_HOME = path.join(cfg, 'supervisor-home');
   return new Promise((done) => {
     const child = spawn(process.execPath, [BIN], { cwd, env, windowsHide: true });
     let out = '';
@@ -119,7 +120,8 @@ function framesOf(out) {
   // and fails an overflow check about text that was never in the pane.
   const body = String(out).split(`${ESC}[?1049l`)[0];
   return body.split(new RegExp(`${ESC}\\[\\?25l`)).map((f) => {
-    const parts = String(f).split(new RegExp(`${ESC}\\[(\\d+);1H`));
+    // ANY COLUMN: the content frame moved every region off column 1.
+    const parts = String(f).split(new RegExp(`${ESC}\\[(\\d+);\\d+H`));
     const rows = [];
     for (let i = 1; i < parts.length; i += 2) rows[Number(parts[i]) - 1] = parts[i + 1];
     return rows.map((r) => (r === undefined ? '' : r));
@@ -265,10 +267,29 @@ module.exports = async function () {
 
   const reads = await capture({
     files: FILES,
+    // ---- READS FOR THE LIVE ROW, WRITES FOR THE ACCOUNT ----------------
+    //
+    // The reads are what the live-position tests below are about, and they still
+    // hold that row while they run. But a successful read leaves NO row in the
+    // conversation afterwards (ui/durable.js), so a capture made only of reads
+    // has no finished-call rows for the recede test to compare. A write persists,
+    // and two runs of them separated by prose is exactly the shape that test needs.
     script: [
-      { tool_calls: [{ name: 'read_file', input: { path: 'router.js' } }] },
-      { text: 'The runtime never dispatches to connect().',
-        tool_calls: [{ name: 'read_file', input: { path: 'python.js' } }] },
+      {
+        tool_calls: [
+          { name: 'read_file', input: { path: 'router.js' } },
+          { name: 'write_file', input: { path: 'gen/one.js', content: '// one' } },
+          { name: 'write_file', input: { path: 'gen/two.js', content: '// two' } },
+        ],
+      },
+      {
+        text: 'The runtime never dispatches to connect().',
+        tool_calls: [
+          { name: 'read_file', input: { path: 'python.js' } },
+          { name: 'write_file', input: { path: 'gen/three.js', content: '// three' } },
+          { name: 'write_file', input: { path: 'gen/four.js', content: '// four' } },
+        ],
+      },
       { text: 'Done.' },
     ],
     stdin: [`investigate${CR}`, `/exit${CR}`],
@@ -345,7 +366,9 @@ module.exports = async function () {
     let sawFaint = false;
     let sawNormalRun = false;
     for (const rows of readFrames) {
-      const calls = rows.filter((r) => /✓ (?:Read|Ran|Searched)/.test(plain(r)));
+      // `verb · subject` in lower case — the verb of a shell command is its
+      // program, and `Ran` is gone (ui/phrasing.js).
+      const calls = rows.filter((r) => /✓ [a-z_]+ · /.test(plain(r)));
       if (calls.length < 2) continue;
       if (calls.some((r) => r.indexOf(FAINT) >= 0)) sawFaint = true;
       if (calls.some((r) => r.indexOf(FAINT) < 0)) sawNormalRun = true;
@@ -373,7 +396,7 @@ module.exports = async function () {
 
   await test('FRAMES: /api <credential> asks which provider it belongs to', () => {
     const asked = apiFrames.some((rows) => rows.map(plain)
-      .some((r) => /WHICH PROVIDER IS THIS CREDENTIAL FOR/.test(r)));
+      .some((r) => /which provider is this credential for/i.test(r)));
     assert.ok(asked, 'the provider question is drawn');
     // AND IT OFFERS THE KNOWN ENDPOINTS, from the one table.
     const providers = require('../../src/providers');
@@ -396,10 +419,19 @@ module.exports = async function () {
     // written into the FEED, the PANEL or an ERROR message, where it would
     // outlive the keystroke and end up in a screenshot or a copied transcript.
     // What is shown back instead is its shape — `sk-…alue`.
-    const inputRow = (rows) => {
-      const i = rows.map(plain).findIndex((r) => /^│ >/.test(r));
-      return i;
-    };
+    // WHICH ROW IS THE ONE BEING TYPED ON. It used to be found by the input's
+    // border and prompt (`│ >`); the region is a grey fill with neither
+    // (ui/inputbox.js), so the row is identified by what is on it — the command
+    // as it was typed. That is a tighter test than the border was: it exempts
+    // exactly the row carrying the typed line and nothing else, so a credential
+    // echoed anywhere else, INCLUDING elsewhere in the input region, fails.
+    // `\s*`, NOT `\s?`. This allowed exactly ONE leading space, which was the
+    // composer's inset when that inset was one column. It is two now, so the row
+    // being typed on stopped matching and the test reported the typed line itself
+    // as a leak. The assertion is unchanged in strength: the exempt row is still
+    // the one whose ENTIRE content is the typed command, and a credential echoed
+    // anywhere else - including elsewhere in the input region - still fails.
+    const inputRow = (rows) => rows.map(plain).findIndex((r) => /^\s*\/api sk-test-credential-value\s*$/.test(r));
     for (const rows of apiFrames) {
       const at = inputRow(rows);
       rows.forEach((row, n) => {
@@ -424,7 +456,9 @@ module.exports = async function () {
     for (const rows of apiFrames) {
       for (const r of rows) {
         const t = plain(r);
-        if (!/│ ❯ /.test(t)) continue;
+        // THE MENU IS A LIST, NOT A BOX: the selected row is the menu's own indent
+        // and the `❯`, with no border beside it (ui/panel.js `render`).
+        if (!/❯ /.test(t)) continue;
         const label = t.replace(/^.*❯ /, '').trim();
         if (label && marked[marked.length - 1] !== label) marked.push(label);
         // THE WHOLE ROW IS ON THE SURFACE, not just the words: a highlight that

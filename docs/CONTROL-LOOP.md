@@ -88,11 +88,19 @@ Who owns what — the answer to "is it the loop or the model?":
   not strategy-level:
   - **Fragmentation**: 23 turns, 12+ of them "continue" handovers after
     rate-limit endings (stopReason "provider" on most turns).
-  - **Cache**: turn 1 cached (98 requests, cacheRead 2.08M); every later,
-    resumed turn shows **cacheReadTokens = 0** while sending 90–110k est
-    tokens/request — the stable prefix (86–109k est, measured by LAIN's own
-    audit) was re-sent uncached all day. This is the largest single measured
-    inefficiency in the corpus.
+  - **Cache — corrected 2026-09-07 by full-corpus extraction; see §2a.** The
+    earlier claim in this file — "every later, resumed turn shows
+    cacheReadTokens = 0" — is contradicted by the corpus it cites: five of the
+    seven turns that read cache (t3 78,912; t12 767,936; t13 628,800;
+    t14 733,184; t19 3,228,643) were themselves resumed turns. Dead cache is
+    not a resume property and not a TTL property (t12: 2h13m gap → 767k
+    cached; t23: 1h52m gap → 0). It is a **late-session phase change**: turns
+    through t19 (Sep 5, ≤15:00) cached; from t20 onward nearly everything
+    reads 0, against requests that are 98–99% stable prefix by LAIN's own
+    audit. This is still the largest single measured inefficiency in the
+    corpus — but its cause splits into one confirmed LAIN-side ceiling (§2a,
+    fold regime) and one unexplained floor that per-request instrumentation
+    (reqtrace, sink off in this run) exists to catch.
   - **Re-grounding ritual**: 12+ turns open with the model manually rebuilding
     its trust-state in narration ("Re-grounded on the verified state: 9 files
     changed, routing suite 9/12, three pinned failures…") — the model paying
@@ -115,6 +123,88 @@ Who owns what — the answer to "is it the loop or the model?":
   they changed nothing (promptcache.js header: marked and unmarked requests
   cached identically). So "LAIN forgot caching" is false; "caching silently
   stops helping after a resume on this route" is what the receipts show.
+
+### 2a. The corrected cache finding (full-corpus extraction, 2026-09-07)
+
+Every number below was read directly from
+`sessions/20260905-112051-o2pn.json` (765 requests; turn-level `usage` and
+per-request `audits`). The turn table, verified by sum: the seven turns that
+read cache account for exactly the session's total cacheReadTokens of
+7,538,787 (2,083,200 + 78,912 + 767,936 + 628,800 + 733,184 + 3,228,643 +
+18,112).
+
+| turn | window (2026-) | req | est-tok/req | cacheRead | stop |
+|------|----------------|-----|------------|-----------|------|
+| t1   | 09-05 03:21 | 98  | ~48k avg | 2,083,200 | provider |
+| t2   | 09-05 06:38 | 74  | 90–110k | 0 | provider |
+| t3   | 09-05 08:56 | 5   | ~89k | 78,912 | provider |
+| t12  | 09-05 11:19 | 62  | 90k+ | 767,936 | aborted |
+| t13  | 09-05 11:45 | 19  | 90k+ | 628,800 | provider |
+| t14  | 09-05 13:26 | 77  | 90k+ | 733,184 | provider |
+| t19  | 09-05 14:37 | 141 | 90k+ | 3,228,643 | provider |
+| t23  | 09-05 18:36 | 64  | ~90k | 0 | end |
+| t24  | 09-06 05:30 | 19  | ~90k | 0 | provider (429) |
+| t25  | 09-06 11:48 | 101 | ~120k | 18,112 | provider |
+| t26  | 09-06 16:20 | 4   | ~135k | 0 | provider |
+
+**FALSIFIED:** "resume kills cache" (t3/t12/t13/t14/t19 all resumed turns and
+all cached); "TTL gap kills cache" (t12 resumed after a 2h13m gap and cached
+767,936; t23 resumed after 1h52m and read 0).
+
+**What the dead turns actually look like.** The per-request `audits` carry
+`chars.stablePrefix` — the size of the part of the request that did not change
+since the previous request. t26's four requests show it growing monotonically
+(480,749 → 481,237 → 483,042 → 484,231 chars, i.e. each request shared
+~120k est tokens of head with its predecessor — the ideal append-only cache
+shape) with a constant head, and read 0 on all four.
+
+**Confirmed LAIN-side cause 1 — head drift at turn boundaries.** The stable
+half's own size changed repeatedly across the session: system 12,714 (t1) →
+12,732 (t2–t3) → 12,716 (t4) → 12,720 (t5–t18) → 12,721 (t19) → 12,731
+(t20–t22) → 12,732 (t23–t24) → 12,721 (t25–t26); toolSchemas 39,276 (t1) →
+45,351 (t2+) → 45,521 (t~20+) → 45,616 (t25+). Any byte change at the head
+re-prices everything behind it. The system drift has an identified mechanism:
+the stable half carries the project brief, whose tree listing reacts to the
+target tree's own mutations — a session that edits its own cwd rewrites its
+own cache head at every turn boundary. The schema drift has a candidate
+mechanism only: the tool list is conditional on live state (tools/index.js —
+probe/connection, browser runtime, MCP config), so an environment change
+adds/removes tools mid-session.
+
+**Confirmed LAIN-side cause 2 — the fold regime (explains t25's 18,112).**
+t25's only cache read ≈ the head: est system 3,534 + toolSchemas 12,671 +
+first user (objective) message ≈ 18k tokens — cache served tools + system +
+messages[0] and diverged at messages[1]. `_foldOldest` (session.js) does
+`messages.splice(1, gone.length, summary)`: every fold rewrites messages[1].
+At the message cap this session ran at (753–755 messages, 286–363 elided per
+request), every append past the cap triggers a fold, so **every request
+re-prices from index 1 onward** — the conversation body never caches, only
+the head does. This is a structural ceiling: as long as the session sits at
+the message cap with folding active, cache is bounded at the head (~18k),
+not the conversation. It is also the one cause with a cheap, isolated
+candidate fix on LAIN's side (fold into the TAIL's stable position less
+often, or hold messages[1] stable across folds — see §6).
+
+**Unexplained floor — turns t23/t24/t26 read 0 against ideal shape.** t26's
+head was byte-identical to t25's (system 12,721, toolSchemas 45,616; t25
+still got its head-only 18,112 read 17 seconds earlier) and t26 read 0. t24
+held a constant 12,732 head across its requests and read 0 for its whole 19
+requests. These point at something per-request that the session JSON does
+not record: model/connection failover (t24's own transcript narrates
+omniroute upstream auth-verify timeouts and mid-turn 401/429s — a route
+change is a cache-namespace change), or gateway-side upstream eviction.
+`cacheCreationTokens: 0` on every one of the 765 requests — including turn
+1, which read 2.08M — means this gateway never reports cache writes at all,
+so creation-0 is evidence of nothing.
+
+**The instrument already exists.** `src/reqtrace.js` records per request:
+model, connection, reason (STEP/REFIT/RETRY), ms, and the usage receipt with
+cacheReadTokens, and `LAIN_REQTRACE=<path>` appends the ledger as JSONL —
+one line per request. The corpus ran with the sink off; that is the only
+gap. The §5 experiment therefore needs zero code changes: run live with the
+sink on, and the model/connection column either confirms or eliminates the
+failover hypothesis directly. bench/run.js already sets `LAIN_REQTRACE` for
+mock runs (line 250), so benchmark comparisons get the same ledger for free.
 
 **CONFIRMED-by-introspection (I am running under it):**
 
@@ -170,11 +260,16 @@ harness's continuity, not the model's strategy.**
   transcript. This is the direct candidate for a "verified-state digest at
   handover" — but see §6: not implemented, not yet justified for
   implementation.
-- **P1 — Cache after resume.** cacheReadTokens = 0 on resumed turns with an
-  86–109k stable prefix. Evidence: usage receipts in the live session. Cause
-  unisolated (gateway TTL vs session restart vs marker placement — the last
-  already measured irrelevant on this route). This is measurement-first work:
-  the receipts already capture everything needed.
+- **P1 — Cache after resume → re-scoped 2026-09-07: the late-session cache
+  phase change.** The original framing ("cacheReadTokens = 0 on resumed
+  turns") is falsified by the corpus (§2a): five of the seven caching turns
+  were themselves resumed turns. Dead cache begins Sep 5 evening (turns 20+)
+  and has two confirmed LAIN-side contributors — head drift at turn
+  boundaries and the fold regime bounding cache at the ~18k head — plus an
+  unexplained literal-0 floor (t23/t24/t26) that per-request
+  model/connection recording (reqtrace) exists to catch. This is
+  measurement-first work: run live with the `LAIN_REQTRACE` sink on (§5); the
+  receipts already capture everything needed.
 - **P2 — Test-feedback tool attractiveness.** run_tests/discover_tests 0/914
   uses; the model self-served via run_bash. The loop worked; the tool did not
   get used. Cause UNKNOWN. Any change here needs a live A/B before it is
@@ -204,24 +299,45 @@ finish with green tests to count. Then:
   controlled).
 - Live LAIN shows the GLOBAL pattern → the user's theory survives and the
   harness explanation weakens.
-- Separately, one config A/B (`promptCache: true` vs default, 2 runs each):
-  if cacheReadTokens moves, a small real fix exists; if it stays 0 (the
-  honest prediction, per promptcache.js's measurement), the fragmentation
-  cost is structural — session restart or gateway TTL — which reframes the
-  fix target entirely.
+- Separately, one config A/B (`promptCache: true` vs default, 2 runs each),
+  **with `LAIN_REQTRACE=<file>` set in both arms** — the sink was off in the
+  corpus run, and it is the only instrument that records model/connection per
+  request, which is what the §2a unexplained floor (t23/t24/t26) needs. Read
+  the ledger per request, not per turn: the fold regime (§2a, confirmed)
+  predicts head-only reads (~18k) on every request past the message cap;
+  route failover predicts literal-0 requests clustered around errors; a
+  literal-0 with no route change and ideal stablePrefix shape points at the
+  gateway. If the promptCache arms move cacheReadTokens, a small real fix
+  exists; if they stay at the head-only/0 pattern (the honest prediction, per
+  promptcache.js's measurement), the cost is structural and the fix target is
+  the fold regime (§6), not the markers.
 
 ## 6. If a code change is justified (not implemented)
 
-**None is justified today.** The evidence is strong for diagnosis, not yet
-overwhelming-plus-isolated for any single change. The candidates, in the order
-the evidence points, each still behind the bar:
+**One cause is now confirmed and has a candidate fix; the rest remain behind
+the bar.** Per §2a: the fold regime (every fold rewrites `messages[1]`,
+bounding cache at the head) is confirmed from the corpus; head drift from the
+project brief reacting to the session's own mutations is confirmed as a
+mechanism; turns t23/t24/t26's literal-0 remains unexplained pending the
+reqtrace-backed live run. The candidates, in the order the evidence points:
 
-1. A verified-state digest served at handover (replaces the re-grounding
+1. **Fold-regime cache ceiling (the §2a confirmed cause).** The candidate:
+   `_foldOldest` splices at index 1 — every fold changes the byte content at
+   messages[1], so the conversation body never caches at the message cap.
+   Options: fold into a position that leaves messages[1] byte-stable across
+   folds (a fixed fold summary slot), or cap fold frequency (batch folds so
+   a fold happens every N steps, not every append). Touches session.js
+   `_foldOldest` only; unit-testable without a provider (assert the bytes of
+   messages[1] across folds). **Requirement: the live reqtrace run first** —
+   if the gateway serves head-only reads even for ideal payloads, fixing the
+   fold changes nothing on this route, and per the mission's §23 rule the
+   fix would not survive measurement.
+2. A verified-state digest served at handover (replaces the re-grounding
    ritual; touches identify/turnclose; small, isolated).
-2. Keeping a turn alive across provider rate-limit endings instead of closing
+3. Keeping a turn alive across provider rate-limit endings instead of closing
    it (touches turn.js endings; larger; only if the cache A/B proves the cost
    is structural, not marker-related).
-3. Trim/reshape test tool output (touches tools/tests.js; only after a live
+4. Trim/reshape test tool output (touches tools/tests.js; only after a live
    A/B shows the bypass is about the tool, not the context).
 
 ## 7. Benchmark plan (baseline vs candidate, without corrupting the baseline)
@@ -246,13 +362,18 @@ a metric.
 - **Falsified:** "GLM-5.3 through LAIN works globally-greedy." The one deep
   live trace shows the opposite. The A2 pattern is real but priced by
   construction, not observed.
+- **Falsified 2026-09-07 (§2a):** "caching dies after resume" and "TTL gap
+  kills cache" — both contradicted by the corpus's own resumed-turn reads
+  (t12: 2h13m gap, 767,936 cached).
 - **Survived and sharpened:** "The harness is the difference." But the
   difference is not the write/verify loop (LAIN has it, and it works); it is
-  continuity across interruptions — caching after resume, state carry, and
-  context pressure under elision.
+  continuity across interruptions — the late-session cache phase change
+  (§2a: fold-regime ceiling confirmed, t23/t24/t26 floor unexplained pending
+  reqtrace), state carry, and context pressure under elision.
 - **Unknown and honestly so:** Claude Code's wire-side cache/retry/sampling;
   why the live model bypassed run_tests; whether harness-rendered task
-  tracking is intrinsically more coherent than a model-re-emitted plan.
+  tracking is intrinsically more coherent than a model-re-emitted plan; the
+  per-request cause of t23/t24/t26's literal-0 reads.
 
 ### Separate note
 

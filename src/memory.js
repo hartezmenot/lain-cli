@@ -15,8 +15,8 @@
  * them should have to re-derive:
  *
  *     DECISION    External JSON is the source of truth for enemy data.
- *     FACT        lain-probe takes decimal PIDs.
- *     LIMITATION  Browser verification needs a Chromium that is not installed.
+ *     FACT        The dashboard binds 127.0.0.1 only.
+ *     LIMITATION  Mock token figures validate accounting only.
  *     NOTE        The context summary still feels compressed.
  *
  * None of those survive compaction as conversation. All of them are still true

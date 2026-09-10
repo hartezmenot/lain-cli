@@ -26,68 +26,86 @@ const tui = (cols = 100, rows = 30) => ({ LAIN_FORCE_TUI: '1', COLUMNS: String(c
 /** The row the INPUT box's text sits on, for a given geometry. */
 function inputRowOf(frame) {
   const rows = frame.replace(/(.{100})/g, '$1\n').split('\n');
-  return rows.findIndex((r) => /^│ > /.test(r)) + 1;    // 1-based, as the terminal counts
+  return rows.findIndex((r) => /Ask LAIN|ANSWER — /.test(r)) + 1;   // 1-based, as the terminal counts
 }
 
-module.exports = async function () {
-  // -------------------------------------------------------------- the tabs --
+/**
+ * WHERE THE FIRST CHARACTER OF THE INPUT SITS.
+ *
+ * The region has no border and no `> ` prompt any more — it is a grey fill
+ * (ui/inputbox.js) — so the text starts at the content frame's inset rather than
+ * four. Everything that used to be found by `│ > ` is found by the CARET now,
+ * which is a better anchor: every frame ends with the cursor parked on the row
+ * being edited, so a test reading that row cannot be reading a different row
+ * from the one the user types into.
+ */
+/**
+ * COMPUTED, NOT WRITTEN DOWN. It was the literal 2, which was right while the
+ * composer started one column in from the terminal's edge. It starts at the
+ * content frame's inset plus the composer's own padding now, and a test that knows
+ * the number breaks every time the frame does. See ui/frame.js `contentBounds`.
+ */
+const INPUT_COL = require('../../src/ui/frame').contentBounds(100).left
+  + 1 + require('../../src/ui/inputbox').PAD;
 
-  await test('TABS LIVE: every pane is reachable and DIFFERENT', async () => {
-    // The complaint was that tabbing "behaves as if the tabs do not change".
-    // This is the check that they do: each pane must draw content of its own,
-    // not merely flip a name in the strip.
+module.exports = async function () {
+  // ---------------------------------------------------------- the surface --
+
+  await test('SURFACE LIVE: Tab walks nowhere, because there is one surface', async () => {
+    // ------------------------------------------------------------------
+    // THIS TEST USED TO WALK EVERY PANE AND ASSERT THEY WERE DIFFERENT.
     //
-    // THE ORDER IS READ FROM ui/tabs.js, NOT COPIED HERE. This test used to
-    // hard-code seven names including `audit` and `health`. Those panes were
-    // deliberately retired — they are evidence GENERATORS wearing a pane, and
-    // their engines are still reachable as /audit and /health — and the test
-    // went on asserting the old list, so it failed for describing a contract
-    // the product had intentionally changed. A test that copies a list it does
-    // not own goes stale the day that list moves; asking the owner cannot.
-    const VIEWS = require('../../src/ui/tabs').VIEWS;
-    const tabs = Array.from({ length: VIEWS.length - 1 }, () => '\t');
+    // The complaint it was written for was that tabbing "behaves as if the tabs
+    // do not change", and the check was that each pane drew content of its own
+    // rather than merely flipping a name in the strip. It was a good test of a
+    // design that has been removed: nine surfaces is nine places a person can
+    // decide they are in the wrong one, and every one of them was reachable as
+    // a command anyway.
+    //
+    // The inverted property is what has to hold now, and it is the one a
+    // removal most easily gets wrong: pressing Tab must change NOTHING, and
+    // must do so without throwing, scrolling, or typing stray bytes into the
+    // prompt.
+    // ------------------------------------------------------------------
     const r = await runCli([], {
       cwd: tmpdir('tabs-'), env: tui(),
-      stdinSteps: [...tabs, '/exit\n'],
+      stdinSteps: ['\t', '\t', '\t', '\t', '/exit\n'],
       stepDelayMs: 600,
       script: [],
       timeoutMs: 60000,
     });
-    const seen = [];
+    assert.strictEqual(r.code, 0, 'the session survived every press');
+    // NO PANE LABEL, EVER — the strip is what a returning pane would show up as.
+    assert.ok(!/\[\d [a-z]+\]/.test(r.out),
+      `a numbered pane label was drawn:\n${r.out.slice(-800)}`);
+    // AND THE SURFACE IS UNMOVED. Every frame draws the same regions.
     for (const f of frames(r.out)) {
-      const m = f.match(/\[\d ([a-z]+)\]/);
-      if (m && seen[seen.length - 1] !== m[1]) seen.push(m[1]);
+      if (!f.includes('Ask LAIN')) continue;
+      assert.ok(f.includes('LAIN'), 'the header is on every frame');
     }
-    assert.deepStrictEqual(seen, [...VIEWS],
-      `Tab must walk every pane in order, saw: ${seen.join(' -> ')}`);
-    assert.strictEqual(r.code, 0);
   });
 
-  await test('TABS LIVE: the panes that READ THE PROJECT finish reading', async () => {
-    // CONTEXT and DETAIL are rendered from a survey that reads the tree, so
-    // they say "reading…" until the first pass lands. A pane that says it for
-    // ever is indistinguishable from a hang — which is the property this has
-    // always been about, whichever panes happen to be the asynchronous ones.
-    const tabsMod = require('../../src/ui/tabs');
-    const VIEWS = tabsMod.VIEWS;
-    const REPORT = tabsMod.REPORT_VIEWS;
+  await test('SURFACE LIVE: the project survey is a COMMAND, and it finishes', async () => {
+    // CONTEXT and DETAIL were rendered from a survey that reads the tree, so
+    // they said "reading…" until the first pass landed — and a pane that says
+    // it forever is indistinguishable from a hang. That was the property, and
+    // it outlived the panes: `/brief` runs the same survey, and the same
+    // failure would be a command that never answers.
     const cwd = tmpdir('rep-');
     require('fs').writeFileSync(require('path').join(cwd, 'package.json'), '{"name":"x"}');
     const r = await runCli([], {
       cwd, env: tui(),
-      stdinSteps: [...Array.from({ length: VIEWS.length - 1 }, () => '\t'), '/exit\n'],
-      stepDelayMs: 900,
+      stdinSteps: ['/brief\n', '/exit\n'],
+      stepDelayMs: 6000,
       script: [],
       timeoutMs: 90000,
     });
+    assert.strictEqual(r.code, 0);
     const all = frames(r.out);
-    for (const view of REPORT) {
-      const n = VIEWS.indexOf(view) + 1;
-      const last = all.filter((f) => new RegExp(`\\[${n} ${view}\\]`).test(f)).pop() || '';
-      assert.ok(last, `the ${view.toUpperCase()} pane was never drawn`);
-      assert.ok(!/reading the project/.test(last),
-        `${view.toUpperCase()} never finished:\n${last.slice(0, 300)}`);
-    }
+    const last = all.filter((f) => /PROJECT/.test(f)).pop() || '';
+    assert.ok(last, `the briefing was never drawn:\n${r.out.slice(-800)}`);
+    assert.ok(!/reading the project/.test(last),
+      `the survey never finished:\n${last.slice(0, 400)}`);
   });
 
   // ------------------------------------------------------------ the mouse --
@@ -113,7 +131,7 @@ module.exports = async function () {
      * next keystrokes append to the same line, which would move the caret.
      */
     const lastCursor = (out, needle) => {
-      const chunks = String(out).split(ESC + '[?25l').filter((c) => plain(c).includes('> ' + needle + ' '));
+      const chunks = String(out).split(ESC + '[?25l').filter((c) => plain(c).includes(needle + ' '));
       const frame = chunks[chunks.length - 1] || '';
       const all = [...frame.matchAll(/\x1b\[(\d+);(\d+)H/g)];
       const m = all[all.length - 1];
@@ -125,7 +143,7 @@ module.exports = async function () {
     });
     const a = lastCursor(base.out, typed);
     assert.ok(a, 'the frame must park the cursor somewhere');
-    assert.strictEqual(a.col, 5 + typed.length,
+    assert.strictEqual(a.col, INPUT_COL + typed.length,
       'with nothing clicked the caret sits after the last character typed');
 
     const withClick = await runCli([], {
@@ -141,26 +159,20 @@ module.exports = async function () {
     assertIncludes(plain(withClick.out), typed, 'the line must survive being clicked');
   });
 
-  await test('MOUSE LIVE: clicking a tab in the strip switches to it', async () => {
-    // Row 5 is the tab strip on a 30-row frame (header 4 + 1). Column 15 is the
-    // NUMBER of the second pane: the strip opens `┌─[1 context] 2 …`, which puts
-    // the first pane's bracketed label in columns 3-13 and the second pane's
-    // digit at 15.
+  await test('MOUSE LIVE: a click on the header does nothing at all', () => {
+    // ------------------------------------------------------------------
+    // IT USED TO SELECT A PANE. Row 5 was the tab strip and column 15 was the
+    // second pane's digit, and `tabAt` inverted that column arithmetic back
+    // into a pane name so a click and Alt+N could never land in different
+    // places.
     //
-    // WHICH pane that is comes from ui/tabs.js. It was hard-coded as `2 plan`
-    // and broke when ACTIVITY was inserted at position 2 — the click was still
-    // hit-tested correctly, the test simply named the pane that used to live
-    // there. The column is a fact about the strip's format; the pane at that
-    // position is not, so only the column stays written down here.
-    const second = require('../../src/ui/tabs').VIEWS[1];
-    const r = await runCli([], {
-      cwd: tmpdir('mtab-'), env: tui(),
-      stdinSteps: [ESC + '[<0;15;5M', '/exit\n'],
-      stepDelayMs: 800, script: [], timeoutMs: 40000,
-    });
-    const all = frames(r.out);
-    assert.ok(all.some((f) => new RegExp(`\\[2 ${second}\\]`).test(f)),
-      `clicking the strip must select that pane (${second}):\n${(all.pop() || '').slice(0, 400)}`);
+    // The strip is gone and so is the hit-test. A click on the header must now
+    // do what a click on chrome should always have done: nothing — and it must
+    // be CONSUMED rather than typed, so a stray report never reaches the line.
+    // ------------------------------------------------------------------
+    const mouse = require('../../src/ui/mouse');
+    assert.strictEqual(typeof mouse.tabAt, 'undefined', 'the strip hit-test must not survive it');
+    assert.strictEqual(typeof mouse.VIEWS, 'undefined', 'nor the pane order it read');
   });
 
   await test('MOUSE LIVE: a mouse report is never typed into the line', async () => {
@@ -171,7 +183,7 @@ module.exports = async function () {
       stdinSteps: ['hello', ESC + '[<0;40;26M', '/exit\n'],
       stepDelayMs: 700, script: [], timeoutMs: 40000,
     });
-    const f = frames(r.out).filter((x) => /│ > hello/.test(x)).pop() || '';
+    const f = frames(r.out).filter((x) => /hello/.test(x)).pop() || '';
     assert.ok(f, 'the typed text must be on screen');
     assertNotIncludes(f, '0;40;26', 'the report must not appear as typed characters');
     assertNotIncludes(f, '<0;', 'nor any part of it');
@@ -186,9 +198,9 @@ module.exports = async function () {
       stepDelayMs: 700, script: [], timeoutMs: 40000,
     });
     const all = frames(r.out);
-    const after = all.filter((f) => /│ > fix the dashboard signal /.test(f)).pop();
+    const after = all.filter((f) => /fix the dashboard signal /.test(f)).pop();
     assert.ok(after, `the word must be gone from the input row:\n${(all.pop() || '').slice(0, 400)}`);
-    assert.ok(!/│ > fix the dashboard signal button/.test(after), 'and "button" must not still be there');
+    assert.ok(!/fix the dashboard signal button/.test(after), 'and "button" must not still be there');
   });
 
   // ---------------------------------------------------------------- /clean --
@@ -263,12 +275,14 @@ module.exports = async function () {
     const cwd = tmpdir('wheel-');
     const first = 'remember this first prompt';
 
-    // The input row is found from a real frame rather than assumed, so a change
-    // in geometry fails loudly here instead of scrolling blind.
+    // FOUND BY THE CARET, which every frame parks on the row being edited —
+    // see `INPUT_COL` on why the border is no longer there to look for. Found
+    // from a real frame rather than assumed, so a change in geometry fails
+    // loudly here instead of scrolling blind.
     const probe = await runCli([], {
       cwd, env: tui(), stdinSteps: ['x', '/exit\n'], stepDelayMs: 700, script: [], timeoutMs: 40000,
     });
-    const chunk = String(probe.out).split(ESC + '[?25l').filter((c) => plain(c).includes('> x ')).pop() || '';
+    const chunk = String(probe.out).split(ESC + '[?25l').filter((c) => /\x1b\[\d+;\d+H/.test(c)).pop() || '';
     const marks = [...chunk.matchAll(/\x1b\[(\d+);(\d+)H/g)];
     const inputRow = marks.length ? Number(marks[marks.length - 1][1]) : 0;
     assert.ok(inputRow > 0, 'the input row must be findable from a drawn frame');
@@ -282,11 +296,21 @@ module.exports = async function () {
       stepDelayMs: 900, script: [{ text: 'Noted.' }], timeoutMs: 45000,
     });
 
-    // Back IN THE INPUT BOX — `> ` followed by it — which is a different claim
-    // from the words being somewhere on screen, since the submitted prompt also
-    // appears in the conversation above.
-    const all = frames(r.out);
-    assert.ok(all.some((f) => f.includes(`> ${first}`)),
-      `the wheel over the input box must recall the last prompt into it:\n${(all.pop() || '').slice(-500)}`);
+    // BACK IN THE INPUT REGION, which is a different claim from the words being
+    // somewhere on screen — the submitted prompt also appears in the
+    // conversation above.
+    //
+    // It used to be found by `> ` in front of it. With no prompt symbol the
+    // proof is the CARET: a frame where the cursor is parked at the end of the
+    // recalled text is a frame where that text is on the line being edited.
+    const raw = String(r.out).split(ESC + '[?25l');
+    const recalled = raw.some((f) => {
+      if (!plain(f).includes(first)) return false;
+      const marks = [...f.matchAll(/\x1b\[(\d+);(\d+)H/g)];
+      const park = marks[marks.length - 1];
+      return Boolean(park) && Number(park[2]) === INPUT_COL + first.length;
+    });
+    assert.ok(recalled,
+      `the wheel over the input box must recall the last prompt into it:\n${plain(raw.pop() || '').slice(-500)}`);
   });
 };

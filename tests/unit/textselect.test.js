@@ -43,20 +43,27 @@ function screenWith(lines = LINES, { feedStart = 5, feedRows = 3, feedPad = 0, s
 function uiFor(sc) {
   const copied = [];
   const notices = [];
-  return {
-    ui: {
-      enabled: true,
-      screen: sc,
-      panel: { visible: false },
-      refresh() {},
-      app: {
-        input: null,
-        render: { notice(level, text) { notices.push({ level, text }); } },
-      },
+  // ---- THE COPY CONFIRMATION IS AN OPERATION, NOT A NOTICE ---------------
+  //
+  // It used to be `render.notice`, which put `Copied 3 line(s) — 184
+  // characters.` into the CONVERSATION, where it stayed: a permanent record
+  // that somebody had once pressed the mouse, sitting between two real
+  // exchanges. It is one transient row above the caret now — worth a second,
+  // worth nothing tomorrow. See ui/operation.js.
+  //
+  // `notices` is still collected, and the assertions check it stays EMPTY: a
+  // confirmation that leaked back into the conversation is the regression.
+  const ui = {
+    enabled: true,
+    screen: sc,
+    panel: { visible: false },
+    refresh() {},
+    app: {
+      input: null,
+      render: { notice(level, text) { notices.push({ level, text }); } },
     },
-    copied,
-    notices,
   };
+  return { ui, copied, notices, ops: () => ui.op };
 }
 
 module.exports = async function () {
@@ -201,7 +208,9 @@ module.exports = async function () {
       copy.toClipboard = real;
     }
     assert.deepStrictEqual(copied, ['beta gamma\ndelta'], 'the selection reached the clipboard');
-    assert.ok(notices.some((n) => /Copied 2 line/.test(n.text)), `no confirmation: ${JSON.stringify(notices)}`);
+    assert.match(String(ui.op && ui.op.text), /Copied 2 line/,
+      `no confirmation: ${JSON.stringify(ui.op)}`);
+    assert.deepStrictEqual(notices, [], 'and it did not land in the conversation');
   });
 
   await test('MOUSE: a click with no drag copies nothing and clobbers no clipboard', () => {
@@ -236,7 +245,9 @@ module.exports = async function () {
     } finally {
       copy.toClipboard = real;
     }
-    assert.ok(notices.some((n) => /Could not reach the clipboard/.test(n.text)));
+    assert.match(String(ui.op && ui.op.text), /Could not reach the clipboard/);
+    assert.strictEqual(ui.op.level, 'warn', 'a failed copy says so at warn level');
+    assert.deepStrictEqual(notices, [], 'and it is still an operation, not a message');
     assert.ok(sc.hasSelection(), 'the text stays selected so it can be tried another way');
   });
 

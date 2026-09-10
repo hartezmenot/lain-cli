@@ -12,9 +12,10 @@
  *
  * The obvious way to establish "line numbers are 1-based" is to open
  * `jsscan.lineAt`, see `return lo + 1`, and write it down. That is a reading of
- * the source, and readings go stale the moment the source changes — which is
- * precisely the drift `probeskill.js` refuses to accept for the Probe's
- * contract, for the same reason.
+ * the source, and readings go stale the moment the source changes. (The
+ * measured-never-read discipline here descends from the runtime-contract work
+ * first enforced for the Probe — by a probeskill.js that was removed with the
+ * Probe integration in 2026-09.)
  *
  * So instead these RUN the code against a known input and record what comes
  * back. `lineAt` is called on a two-line string; the first line either reports

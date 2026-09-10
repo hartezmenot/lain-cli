@@ -76,7 +76,10 @@ module.exports = async function () {
 
   await test('FINDING: the label reads as what a person hunts for', () => {
     assert.strictEqual(f({ category: F.CATEGORY.MIGRATION_RESIDUE }).label, 'RESIDUE');
-    assert.strictEqual(f({ category: F.CATEGORY.FRONTEND_LAYOUT }).label, 'UI');
+    // (FRONTEND_LAYOUT used to label 'UI' here; it was removed with the
+    // browser in 2026-09. A retired category is not special-cased back — it
+    // falls through the table to the severity labels, like any unknown word.)
+    assert.strictEqual(f({ category: 'FRONTEND_LAYOUT' }).label, 'ERROR');
     assert.strictEqual(f({ category: F.CATEGORY.TYPO }).label, 'TYPO');
     assert.strictEqual(f({ category: F.CATEGORY.SYNTAX, severity: F.SEVERITY.ERROR }).label, 'ERROR');
   });
@@ -138,7 +141,6 @@ module.exports = async function () {
       findings: [f({ category: F.CATEGORY.MIGRATION_RESIDUE, severity: F.SEVERITY.ERROR })],
       ran: new Set([F.SOURCE.PARSER]),
       testRun: { ok: true },
-      frontend: { state: HEALTH.UNVERIFIED },
       lastCommand: { ok: true },
     });
     assert.strictEqual(h.build, HEALTH.PASS);
@@ -152,13 +154,11 @@ module.exports = async function () {
       findings: [],
       ran: new Set(),
       testRun: null,
-      frontend: { state: HEALTH.UNVERIFIED },
       lastCommand: null,
     });
     assert.strictEqual(h.build, HEALTH.UNVERIFIED);
     assert.strictEqual(h.test, HEALTH.UNVERIFIED);
     assert.strictEqual(h.runtime, HEALTH.UNVERIFIED);
-    assert.strictEqual(h.frontend, HEALTH.UNVERIFIED);
   });
 
   await test('HEALTH: a syntax error fails BUILD, whatever else passed', () => {
@@ -166,7 +166,6 @@ module.exports = async function () {
       findings: [f({ category: F.CATEGORY.SYNTAX, severity: F.SEVERITY.CRITICAL })],
       ran: new Set([F.SOURCE.PARSER]),
       testRun: { ok: true },
-      frontend: { state: HEALTH.PASS },
       lastCommand: { ok: true },
     });
     assert.strictEqual(h.build, HEALTH.FAILED);
@@ -178,22 +177,25 @@ module.exports = async function () {
       findings: [f({ severity: F.SEVERITY.INFO }), f({ severity: F.SEVERITY.UNVERIFIED })],
       ran: new Set([F.SOURCE.PARSER]),
       testRun: { ok: true },
-      frontend: { state: HEALTH.PASS },
       lastCommand: { ok: true },
     });
     assert.strictEqual(h.engineering, HEALTH.CLEAN);
   });
 
   await test('HEALTH: the report SAYS that a build pass is not a health verdict', () => {
+    // test: PASS, not UNVERIFIED — the "passing suite" caveat below it only
+    // fires when the suite actually ran green, which is the branch this is
+    // asserting.
     const text = briefing.healthSection({
       health: {
         build: HEALTH.PASS, test: HEALTH.PASS, runtime: HEALTH.PASS,
-        frontend: HEALTH.UNVERIFIED, engineering: HEALTH.DEGRADED,
+        engineering: HEALTH.DEGRADED,
       },
     });
     assert.match(text, /BUILD PASS DOES NOT MEAN THE PROJECT IS HEALTHY/);
     assert.match(text, /A PASSING SUITE DOES NOT MEAN THE FINDINGS ARE HARMLESS/);
-    assert.match(text, /UNVERIFIED: FRONTEND/);
+    // (A FRONTEND axis was named here too, until the browser that observed it
+    // was removed in 2026-09.)
   });
 
   // --------------------------------------------------------- root causes ----
@@ -362,7 +364,9 @@ module.exports = async function () {
         + 'function activeUsers(db) {\n  return getUser(db);\n}\nmodule.exports = { getUsers, activeUsers };\n',
     });
     const out = await briefcommand.build({}, { root: dir, session: {} });
-    for (const heading of ['PROJECT CONTEXT', 'ENVIRONMENT', 'GIT STATE', 'HEALTH — FIVE SEPARATE AXES',
+    // (The health section had five axes until the browser that observed the
+    // FRONTEND one was removed in 2026-09; four is what it actually produces.)
+    for (const heading of ['PROJECT CONTEXT', 'ENVIRONMENT', 'GIT STATE', 'HEALTH — FOUR SEPARATE AXES',
       'FINDINGS', 'ROOT-CAUSE CANDIDATES', 'UNVERIFIED', 'KNOWN LIMITATIONS', 'REPAIR DIRECTIVE']) {
       assert.ok(out.text.includes(heading), `the briefing is missing the ${heading} section`);
     }

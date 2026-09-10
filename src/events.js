@@ -51,6 +51,60 @@ const EVENT = Object.freeze({
   WAITING_FOR_USER: 'waiting_for_user',
   TASK_COMPLETED: 'task.completed',
   TASK_FAILED: 'task.failed',
+
+  // ---- THE HARNESS VOCABULARY -------------------------------------------
+  //
+  // ONE BUS, NOT TWO. The Task Runtime (src/harness/) needed named facts for
+  // exactly the reason the block above exists: a second reader that infers
+  // "is it verifying?" from prose is a second state machine, and it will
+  // disagree with the first one. The temptation was a `harness/events.js`
+  // with its own emitter, its own subscriber list and its own trimming — and
+  // then a companion would have to attach to two channels and merge them in
+  // arrival order, which is the drift this file was written to prevent.
+  //
+  // So the names live here, beside the ones that were already here, and the
+  // rule above still holds: an unknown name is REFUSED, and a subscriber that
+  // throws is dropped rather than allowed to take the turn down.
+  //
+  // THESE ARE STILL NOT A STATE MACHINE. Every payload is read from state
+  // that already exists at the moment it is emitted. `task.state` REPORTS a
+  // transition that src/harness/state.js already decided and the runtime
+  // already applied; it never causes one, and nothing subscribed to it may.
+  TASK_CREATED: 'task.created',
+  TASK_PAUSED: 'task.paused',
+  TASK_RESUMED: 'task.resumed',
+  TASK_CANCELLED: 'task.cancelled',
+  TASK_STATE: 'task.state',
+
+  AGENT_STARTED: 'agent.started',
+  AGENT_COMPLETED: 'agent.completed',
+  AGENT_FAILED: 'agent.failed',
+
+  TOOL_FAILED: 'tool.failed',
+
+  PROCESS_STARTED: 'process.started',
+  PROCESS_STOPPED: 'process.stopped',
+  PROCESS_FAILED: 'process.failed',
+  PROCESS_HEALTH: 'process.health',
+
+  BROWSER_STARTED: 'browser.started',
+  BROWSER_OBSERVED: 'browser.observed',
+  BROWSER_ERROR: 'browser.error',
+  BROWSER_CLOSED: 'browser.closed',
+
+  VERIFICATION_STARTED: 'verification.started',
+  VERIFICATION_PASSED: 'verification.passed',
+  VERIFICATION_FAILED: 'verification.failed',
+  VERIFICATION_INCONCLUSIVE: 'verification.inconclusive',
+
+  OBSERVATION_MADE: 'observation.made',
+  ARTIFACT_CREATED: 'artifact.created',
+
+  APPROVAL_REQUIRED: 'approval.required',
+  APPROVAL_RESOLVED: 'approval.resolved',
+
+  RECOVERY_STARTED: 'recovery.started',
+  HOOK_RAN: 'hook.ran',
 });
 
 const NAMES = Object.freeze(Object.values(EVENT));

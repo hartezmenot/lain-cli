@@ -193,9 +193,9 @@ module.exports = async function () {
     });
     const { frames, lastFrameRows } = require('../helpers');
     const drawn = frames(r.out).map(plain).join('\n');
-    assert.match(drawn, /STILL GOING ROUND/, 'it was raised while the repetition was happening');
+    assert.match(drawn, /STILL\s+GOING\s+ROUND/i, 'it was raised while the repetition was happening');
     const last = plain(lastFrameRows(r.out).join('\n'));
-    assert.ok(!/STILL GOING ROUND/.test(last), 'and it is gone once the model moved on');
+    assert.ok(!/STILL\s+GOING\s+ROUND/i.test(last), 'and it is gone once the model moved on');
     assert.match(plain(r.out), /CHANGED_APPROACH/);
   });
 

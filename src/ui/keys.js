@@ -194,41 +194,18 @@ function ROUTE(key) {
   }
 
   if (this.screen.completion) {
-    // THE COMPLETION SCREEN IS AN OVERLAY, and it used to be an invisible
-    // modal: it is returned by workspaceLines BEFORE the view switch, so it
-    // covered all seven panes at once. Tab still changed screen.view, the
-    // content never changed, and the pane looked stuck. It also advertised
-    // "[R] resume" and "[D] diff" as printable letters a plain-text screen
-    // could never actually make live — see ui/views.js's completion().
+    // THE TASK-COMPLETE OVERLAY IS A REPORT, NOT A PLACE.
     //
-    // Every key it names now works, and every key it does NOT name gets out
-    // of the way by dismissing the overlay first — a navigation keystroke is
-    // an explicit request to look at something else.
-    switch (key) {
-      case 'escape': this.dismissCompletion(); return true;
-      case 'up': case 'down':
-        // ONLY TWO CHOICES, so Up and Down do the same thing: swap between
-        // them. A cursor that walked past the end would need a modulus and a
-        // count neither key actually needs here.
-        this.screen.completionCursor = this.screen.completionCursor ? 0 : 1;
-        this._renderCompletion();
-        return true;
-      case 'enter': {
-        const diff = !this.screen.completionCursor;
-        this.dismissCompletion();
-        if (diff) this.screen.setView('diff');
-        // KEEP WORKING. The overlay is a report, not a state the session is
-        // stuck in: dismissing it is all "resume" can mean, and saying so is
-        // better than a key that silently does nothing.
-        else this.app.render.notice('info', 'Back to the task — type to carry on, or /new to start something else.');
-        return true;
-      }
-      case 'tab': case 'shift-tab':
-        this.dismissCompletion();
-        this.nextView(key === 'tab' ? 1 : -1);
-        return true;
-      default: break;    // typing: the overlay does not own it
-    }
+    // It used to offer a CHOICE — `diff` or `keep working` — navigated with
+    // Up/Down and taken with Enter, and the first branch switched panes. With
+    // one surface there is nowhere to switch to, so both branches meant the
+    // same thing: put the report away.
+    //
+    // So every key dismisses it. Esc because that is what Esc does; a
+    // navigation or editing key because pressing one is an explicit request to
+    // look at something else; and a printable character because you have
+    // started composing. What changed is `/changes`, which the report names.
+    if (key === 'escape' || key === 'enter') { this.dismissCompletion(); return true; }
     this.dismissCompletion();
     return false;
   }
@@ -258,37 +235,16 @@ function ROUTE(key) {
     case 'end':
       if (this.screen.inputText) return false;
       this.screen.stickToBottom = true; this.refresh(); return true;
-    // Alt+N is what a terminal can actually deliver; the ctrl- names are kept
-    // for the few emulators that send them.
+    // ---- ALT+1..9 AND CTRL+1..9 ARE NO LONGER BOUND ---------------------
     //
-    // ALT+N IS THE NUMBER IN THE STRIP, for EVERY N. Both come from
-    // ui/tabs.js, so the label `4 output` and the key that opens OUTPUT cannot
-    // drift apart — they used to be two hand-written lists.
+    // They selected one of nine panes by its number in the strip. The strip is
+    // gone and so are the panes, so a binding here would be a key that changes
+    // nothing — which is worse than an unbound key, because the user cannot
+    // tell it from a key that is broken.
     //
-    // ---- AND 6 AND 7 HAD ALREADY DRIFTED ---------------------------------
-    //
-    // They were hand-written to open `audit` and `health`, which were REMOVED
-    // from the strip (see ui/tabs.js). So the strip said `6 files` and `7
-    // memory` while the keys set a view name no pane draws — the "the tabs
-    // don't work" symptom that the one-list rule exists to make impossible,
-    // reintroduced by the two cases that opted out of it.
-    case 'alt-1': case 'ctrl-1':
-    case 'alt-2': case 'ctrl-2':
-    case 'alt-3': case 'ctrl-3':
-    case 'alt-4': case 'ctrl-4':
-    case 'alt-5': case 'ctrl-5':
-    case 'alt-6': case 'ctrl-6':
-    case 'alt-7': case 'ctrl-7':
-    case 'alt-8': case 'ctrl-8':
-    case 'alt-9': case 'ctrl-9': {
-      const view = require('./tabs').byNumber(key.slice(-1));
-      if (view) { this.screen.setView(view); this.ensureReport(view); }
-      return true;
-    }
-    case 'escape':
-      // Esc backs out of an opened diff before it means anything else.
-      if (this.screen.view === 'diff' && this.screen.diffFile) { this.screen.diffFile = null; this.refresh(); return true; }
-      return false;
+    // Tab and Shift+Tab are unbound in src/repl.js for the same reason.
+    // Esc used to back out of an opened diff first. There is no diff pane to
+    // be inside any more, so Esc falls through to whatever else claims it.
     default: return false;
   }
 }

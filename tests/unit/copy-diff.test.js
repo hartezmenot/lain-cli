@@ -175,4 +175,40 @@ module.exports = async function () {
     assert.match(text, /PROJECT/, 'and the structural tree is still below it');
     for (const l of lines) assert.ok(T.width(l) <= 70, `a files row was ${T.width(l)} wide at 70`);
   });
+
+  await test('DIFF: + and - are in the TEXT, so a monochrome terminal still reads it', () => {
+    const NL = String.fromCharCode(10);
+    // ------------------------------------------------------------------
+    // §8 OF THE REWRITE: additions and removals must be distinguishable where
+    // the terminal supports colour, and the diff must remain READABLE without
+    // it. Those are two requirements and only the first is about colour.
+    //
+    // `unified` puts the line number and the `+` / `-` / ` ` marker into the
+    // STRING, before anything paints it — so the meaning survives NO_COLOR, a
+    // pipe, and a terminal with no SGR support at all. Colour only makes it
+    // faster to scan.
+    //
+    // Asserted on the STRIPPED rows, which is exactly what a monochrome
+    // terminal would show.
+    const T = require('../../src/ui/text');
+    const rows = panes.unified('one' + NL + 'two' + NL + 'three' + NL,
+      'one' + NL + 'TWO CHANGED' + NL + 'three' + NL + 'four' + NL).map((l) => T.strip(l));
+    const text = rows.join(NL);
+    assert.ok(/-\s*two/.test(text), `a removal is marked with a minus:${NL}${text}`);
+    assert.ok(/\+\s*TWO CHANGED/.test(text), `an addition with a plus:${NL}${text}`);
+    assert.ok(/\+\s*four/.test(text), 'including one appended at the end');
+    // AND THE LINE NUMBERS, which are what make a diff checkable against a file.
+    assert.ok(/^\s*\d+\s/.test(rows[0]), `every row is numbered: ${JSON.stringify(rows[0])}`);
+    // NO ESCAPE SEQUENCE CARRIES ANY OF THAT MEANING: stripping them changed
+    // nothing about which rows are additions and which are removals.
+    // COUNTED RATHER THAN NAMED: `unified` works from the first and last
+    // differing line, so a change in the middle of a file is a run of removals
+    // followed by a run of additions. How many of each is the diff's business;
+    // that BOTH runs exist, marked, in the text, is this test's.
+    const adds = (text.match(/^\s*\d+ \+ /gm) || []).length;
+    const dels = (text.match(/^\s*\d+ - /gm) || []).length;
+    assert.ok(adds > 0, `additions must be marked: ${adds}`);
+    assert.ok(dels > 0, `and removals: ${dels}`);
+    assert.ok(adds > dels, 'a file that grew has more added rows than removed ones');
+  });
 };

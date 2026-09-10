@@ -267,9 +267,17 @@ const tools = {
       if (v.state === testing.STATE.TESTS_PASSED) {
         const q = quietPass(r.output);
         if (q.dropped) {
+          // THE ADVICE HERE IS THE TARGETED ONE, deliberately. An earlier
+          // version said "re-run `<command>` with run_bash and grep it" —
+          // which teaches the model to spend a SECOND FULL SUITE RUN (minutes,
+          // and another request to read) to answer a question the first run
+          // already settled. The counts above ARE the complete verdict; a
+          // single test's line is recoverable with the runner's own filter,
+          // which costs one flag, not one re-run of everything.
           body = `${q.text}\n\n[${q.dropped} individually passing test line(s) removed from this result — `
-            + `the counts above are the complete verdict. To confirm one test by name, re-run `
-            + `\`${command}\` with run_bash and grep it.]`;
+            + `the counts above are the complete verdict. To see one test by name, run the suite `
+            + `with the runner's own filter for it (e.g. \`-t\`/\`--filter\`/\`-k\`) rather than `
+            + `re-running everything.]`;
         }
       }
 

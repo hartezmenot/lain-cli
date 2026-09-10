@@ -1,21 +1,42 @@
 {
   "name": "lain",
   "version": "2.0.0-alpha.1",
-  "description": "LAIN V2 \u2014 an agentic coding CLI. The model decides; LAIN provides tools, state, evidence and recovery.",
+  "description": "LAIN Harness \u2014 an evidence-driven agentic coding CLI. The model decides; the harness executes, observes, verifies and keeps the receipts. One install, one `lain` command.",
   "license": "MIT",
   "bin": {
     "lain": "bin/lain.js"
   },
   "main": "src/cli.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "agent",
+    "cli",
+    "coding-agent",
+    "llm",
+    "harness",
+    "verification",
+    "evidence"
+  ],
+  "files": [
+    "bin/",
+    "src/",
+    "distribution/",
+    "README.md",
+    "docs/HARNESS.md",
+    "docs/BOT.md",
+    "docs/BOT-ARCHITECTURE.md"
+  ],
   "scripts": {
     "start": "node bin/lain.js",
+    "setup": "node distribution/install.js",
+    "setup:remove": "node distribution/uninstall.js",
     "test": "node tests/run.js",
     "test:unit": "node tests/run.js unit",
     "test:integration": "node tests/run.js integration",
     "test:smoke": "node tests/run.js smoke",
-    "test:live": "node tests/run.js live"
-  },
-  "engines": {
-    "node": ">=18"
+    "test:live": "node tests/run.js live",
+    "test:distribution": "node tests/run.js distribution"
   }
 }

@@ -8,22 +8,22 @@
  * the shell, the symbol index, the test runner. A question whose answer lives
  * in a changelog or an API reference could only be answered FROM MEMORY, which
  * for a model means answered from a training cut-off with the confidence of
- * something read. `web_fetch` and `web_search` are the way out of that.
+ * something read. `web_fetch` is the way out of that.
  *
  * ------------------------------------------------------------------------
- * BOTH FAILURE MODES BELOW WERE MEASURED, not imagined, on real pages:
+ * THE FAILURE MODE BELOW WAS MEASURED, not imagined, on real pages:
  *
  *   THE PAGE IS MOSTLY NOT THE PAGE. The Node.js `fs` documentation returns
  *   10,576 characters of contents listing before its first sentence, and the
  *   page then truncates — so the navigation was not noise, it was pushing the
  *   ANSWER out of the window.
  *
- *   THE ENGINE SUBSTITUTES A DIFFERENT PAGE. Bing served a headless browser
- *   four Louisiana court cases in answer to "ERR_REQUIRE_ESM node", and served
- *   the same query from a visible window Stack Overflow as the first result.
- *   The degraded page is well-formed and parses perfectly. Nothing in the
- *   markup says the answer is wrong, which is exactly why it needs a test: a
- *   search that FAILS is retried, and a search that LIES is believed.
+ * (A `web_search` half lived here too — a search driven through the Chromium
+ * LAIN owned, because search engines are the one corner of the web actively
+ * hostile to a bare socket. It was removed with the browser in 2026-09 per the
+ * browser-ownership ruling; the measurements behind it — Bing serving a
+ * headless browser a substituted page of Louisiana court cases — are preserved
+ * in git history with the rest of that half.)
  */
 
 const assert = require('assert');
@@ -102,79 +102,32 @@ module.exports = async function () {
       'entries that end like sentences are content, however many there are');
   });
 
-  // ------------------------------------------------------ the substitution --
-
-  await test('WEB: results that have nothing to do with the query are DISCARDED, not passed on', () => {
-    // MEASURED. This is the exact result set Bing served a headless browser for
-    // this exact query, and it parsed perfectly.
-    const louisiana = [
-      { title: 'STATE OF LOUISIANA VS. SULLIVAN WALTER :: 2025', snippet: 'court of appeal', url: 'https://law.justia.com/cases/louisiana/x' },
-      { title: 'Man wrongfully convicted at 17 wins compensation', snippet: 'wwltv', url: 'https://www.wwltv.com/article/news/local/y' },
-    ];
-    assert.strictEqual(research.anyRelevant('ERR_REQUIRE_ESM node', louisiana), false,
-      'a substituted results page must be detectable, because nothing in its markup admits to it');
-
-    const real = [
-      { title: 'How would you fix an ERR_REQUIRE_ESM error?', snippet: '', url: 'https://stackoverflow.com/questions/71804844/x' },
-    ];
-    assert.strictEqual(research.anyRelevant('ERR_REQUIRE_ESM node', real), true);
-  });
-
-  await test('WEB: the relevance check is the WEAKEST one that works — one word is enough', () => {
-    // A strong check would throw away good results. A page that answers the
-    // question without repeating its words is common and must survive; a page
-    // about something else entirely is what is being caught.
-    const oneWord = [
-      { title: 'Deleting directories in Node', snippet: 'use the recursive option', url: 'https://example.com/a' },
-    ];
-    assert.strictEqual(research.anyRelevant('node fs.rm recursive force', oneWord), true,
-      'matching a single significant word is enough to be kept');
-    const words = research.keywords('how does the ERR_REQUIRE_ESM work');
-    assert.ok(words.includes('err_require_esm'), 'the word that identifies the question must be kept');
-    for (const noise of ['how', 'does', 'the']) {
-      assert.ok(!words.includes(noise),
-        `"${noise}" appears on every page ever written — matching on it would pass any result set`);
-    }
-  });
-
-  await test('WEB: searching without a browser says so, and names how to start one', () => {
-    return research.search(null, 'anything').then((r) => {
-      assert.strictEqual(r.ok, false);
-      assert.match(r.why, /\/external browser/, 'the way to make it work must be named');
-    });
-  });
-
   // ------------------------------------------------------------- the tools --
 
-  await test('WEB: web_fetch is always offered; web_search follows the browser', () => {
+  await test('WEB: web_fetch is offered; web_search is not a tool in any configuration', () => {
     const names = require('../../src/tools').names();
     assert.ok(names.includes('web_fetch'),
       'a plain GET needs no browser and works headless, in CI and over SSH');
-    // The rule `browser` and `probe` already follow: a model told it can do
-    // something it cannot will try, and spend a step finding out.
-    let live = null;
-    try { live = require('../../src/browser').live(); } catch { live = null; }
-    assert.strictEqual(names.includes('web_search'), Boolean(live),
-      'web_search must be offered exactly when the Chromium it drives is running');
+    // The rule `probe` already follows: a model told it can do something it
+    // cannot will try, and spend a step finding out. A retired name must not
+    // be special-cased back into existence.
+    assert.ok(!names.includes('web_search'),
+      'the search tool drove the Chromium that was removed in 2026-09');
+    assert.ok(!require('../../src/tools').has('web_search'));
   });
 
-  await test('WEB: neither tool MUTATES, so neither needs a checkpoint', () => {
+  await test('WEB: web_fetch does not MUTATE, so it needs no checkpoint', () => {
     const web = require('../../src/tools/web');
     assert.strictEqual(web.fetchTools.web_fetch.mutates, false);
-    assert.strictEqual(web.searchTools.web_search.mutates, false);
   });
 
   await test('WEB: the model is told what a page IS, and what it is not', () => {
     const web = require('../../src/tools/web');
     const fetchDesc = web.fetchTools.web_fetch.schema.description;
-    const searchDesc = web.searchTools.web_search.schema.description;
     // The whole risk of this feature in one sentence: a model that treats a
     // blog post as a measurement writes a confident answer on top of it.
     assert.match(fetchDesc, /not a fact about this project/i);
     assert.match(fetchDesc, /never evidence that your change works/i);
-    assert.match(searchDesc, /pointer, not an answer/i);
-    assert.match(searchDesc, /VISIBLE window/,
-      'the headless failure is not discoverable from the result, so it must be in the description');
   });
 
   await test('WEB: a fetch failure is reported as itself, and starts no turn of guessing', async () => {

@@ -40,25 +40,100 @@ function frames(out) {
   return String(out).split('\x1b[?25l').map((f) => f.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '\n'));
 }
 
+/** The RAW frames — every escape intact, which `frames()` deliberately loses. */
+function rawFrames(out) {
+  return String(out).split('\x1b[?25l');
+}
+
+/**
+ * THE INPUT ROW OF ONE RAW FRAME, or ''.
+ *
+ * ------------------------------------------------------------------------
+ * IT USED TO BE FOUND BY ITS BORDER — a line starting `│ > `. The input has no
+ * border and no prompt symbol now (it is a grey fill; see ui/inputbox.js), so
+ * there is no character left to look for.
+ *
+ * IT IS FOUND BY THE CARET INSTEAD, which is a better anchor than the border
+ * ever was: `draw()` ends every frame by parking the cursor at
+ * `ESC[<row>;<col>H`, and that row IS the row being edited, by construction.
+ * A test that reads the row the caret is on cannot be reading a different row
+ * from the one the user is typing into.
+ */
+function inputRow(frame) {
+  const addrs = [...String(frame).matchAll(/\x1b\[(\d+);(\d+)H/g)];
+  if (!addrs.length) return '';
+  const row = addrs[addrs.length - 1][1];
+  // ANY COLUMN: the content frame moved every region off column 1.
+  const at = new RegExp(`\\x1b\\[${row};\\d+H([^\\x1b]*(?:\\x1b\\[[0-9;?]*[A-Za-z][^\\x1b]*)*?)\\x1b\\[K`).exec(frame);
+  if (!at) return '';
+  return at[1].replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').trimEnd();
+}
+
 /** Every distinct value the INPUT row held, in order. */
 function typed(out) {
   const seen = [];
-  for (const f of frames(out)) {
-    for (const line of f.split('\n')) {
-      if (!line.startsWith('│ > ')) continue;
-      const t = line.slice(4).replace(/\s*│\s*$/, '').trimEnd();
-      if (seen[seen.length - 1] !== t) seen.push(t);
-    }
+  for (const f of rawFrames(out)) {
+    // TRIMMED, NOT UN-PADDED BY ONE. This stripped a single leading space, which
+    // was the composer's inset when that inset was one column. It is two now -
+    // the same inset the conversation uses, so the prompt and the prose begin on
+    // one column (ui/views.js `content`) - and a helper that knows the number is
+    // a helper that breaks when the number changes. The inset is GEOMETRY; this
+    // reads CONTENT.
+    const t = inputRow(f).trim();
+    // The placeholder is DRAWN, not typed: an empty line must read as empty.
+    if (t === 'Ask LAIN…' || t.startsWith('ANSWER — ')) continue;
+    if (seen[seen.length - 1] !== t) seen.push(t);
   }
   return seen.filter(Boolean);
+}
+
+/**
+ * IS THIS FRAME SHOWING THE PANEL CALLED `name`?
+ *
+ * ------------------------------------------------------------------------
+ * MATCHED ON THE TITLE *ROW*, not anywhere in the frame. The panel titles itself
+ * in a dim sentence-case row now rather than a shouted boxed banner, so a bare
+ * case-insensitive search for `commands` also matches the launch screen's own
+ * `/  commands        @  files` hint — and `effort` matches its `Effort  auto`.
+ * Both made the wrong frame look like an open palette.
+ *
+ * A title row is the panel's indent and the name, alone, optionally followed by a
+ * count (`Models   5`). Nothing else on the surface is shaped like that.
+ */
+function hasPanel(frame, name) {
+  const want = String(name).toLowerCase();
+  for (const row of rowsOfFrame(frame)) {
+    const t = row.trim().toLowerCase();
+    if (t === want) return true;
+    if (t.startsWith(want + ' ') && /^[0-9\s]*$/.test(t.slice(want.length))) return true;
+  }
+  return false;
+}
+
+/**
+ * The frame's rows — from either shape a caller may hand over.
+ *
+ * A RAW frame positions each row with a cursor address and those are the row
+ * boundaries. `frames()` in this file has already replaced every escape with a
+ * newline, so its rows are newline-separated and there is no address left to
+ * split on. Both callers exist, so both shapes are accepted rather than one of
+ * them silently yielding no rows at all.
+ */
+function rowsOfFrame(frame) {
+  const raw = String(frame);
+  const addressed = raw.split(/\x1b\[\d+;\d+H/);
+  const parts = addressed.length > 1 ? addressed.slice(1) : raw.split('\n');
+  return parts.map((r) => r.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ''));
 }
 
 /** Which panel titles appeared, in order, collapsed. */
 function panelTrail(out) {
   const seen = [];
   for (const f of frames(out)) {
-    const m = /COMMANDS|FILES|CONFIG|MODELS|EFFORT|LAIN NEEDS YOUR INPUT|PROVIDERS/.exec(f);
-    const v = m ? m[0] : '-';
+    // THE TITLE ROW, not the word anywhere in the frame — see `hasPanel`.
+    const found = ['Commands', 'Files', 'Config', 'Models', 'Effort', 'Providers',
+      'Lain needs your input'].find((n) => hasPanel(f, n));
+    const v = found ? found.toUpperCase() : '-';
     if (seen[seen.length - 1] !== v) seen.push(v);
   }
   return seen;
@@ -67,14 +142,24 @@ function panelTrail(out) {
 /** Rows rendered inside the last frame that showed `title`. */
 function itemsUnder(out, title) {
   let best = null;
-  for (const f of frames(out)) if (f.includes(title)) best = f;
+  for (const f of frames(out)) if (hasPanel(f, title)) best = f;
   return best ? rowsOf(best) : [];
 }
 
 function rowsOf(frame) {
+  // ---- THE MENU IS A LIST, NOT A BOX --------------------------------
+  //
+  // Rows used to arrive as `│   ❯ /exit …  │` and this matched the border. The
+  // panel has no frame, no rules and no shouted title any more (ui/panel.js
+  // `render`): an item row is the menu's own indent, an optional `❯`, and the
+  // label. The title row and the footer are not items and are excluded by what
+  // they are rather than by where a border was.
   return frame.split('\n')
-    .filter((l) => /^│\s{1,3}[❯ ]\s*\S/.test(l))
-    .map((l) => l.replace(/^│\s*/, '').replace(/\s*│$/, '').trimEnd());
+    .map((l) => l.replace(/\s+$/, ''))
+    .filter((l) => /^ {2,}(?:❯ )?\S/.test(l))
+    .filter((l) => !/↑↓|Esc (close|cancel)/.test(l))
+    .map((l) => l.replace(/^ +/, '').replace(/^❯ /, ''))
+    .filter(Boolean);
 }
 
 /**
@@ -87,13 +172,16 @@ function rowsOf(frame) {
  */
 function menuFor(out, line, title) {
   let best = null;
-  for (const f of frames(out)) {
-    if (!f.includes(title)) continue;
-    const row = f.split('\n').find((l) => l.startsWith('│ > '));
-    if (!row) continue;
-    if (row.slice(4).replace(/\s*│\s*$/, '').trimEnd() === line) best = f;
+  // RAW frames, because the input row is found by the caret park — see
+  // `inputRow`, and why the border is no longer there to look for.
+  for (const raw of rawFrames(out)) {
+    // THE TITLE ROW — see `hasPanel` for why the word alone is not enough.
+    if (!hasPanel(raw, title)) continue;
+    // TRIMMED for the same reason `typed` is: the composer's inset is two columns
+    // now, and a helper that knows the number breaks when the number changes.
+    if (inputRow(raw).trim() === line) best = raw;
   }
-  return best ? rowsOf(best) : [];
+  return best ? rowsOf(best.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '\n')) : [];
 }
 
 /** A small project to complete paths against. */
@@ -188,9 +276,19 @@ module.exports = async function () {
   // ---- the / command palette ---------------------------------------------
 
   await test('UX: typing `/` opens the command palette', async () => {
-    const r = await runCli([], { env: tui, script, stdin: `/${ESC}/exit${CR}`, timeoutMs: 45000 });
+    // ---- STEPS, NOT ONE STDIN BLOCK -----------------------------------
+    //
+    // The whole of stdin used to arrive in one write, so the palette could open
+    // and close between two redraws and never appear in a frame at all. That went
+    // unnoticed because `panelTrail` matched the word ANYWHERE in the frame, and
+    // the launch screen's own `/  commands   @  files` hint satisfied it — the
+    // test passed without the palette ever being drawn. `hasPanel` matches the
+    // title ROW now, so the keys have to be separated for there to be one.
+    const r = await runCli([], {
+      env: tui, script, stdinSteps: ['/', ESC, `/exit${CR}`], stepDelayMs: 1200, timeoutMs: 45000,
+    });
     assert.strictEqual(r.code, 0);
-    assertIncludes(panelTrail(r.out).join('->'), 'COMMANDS', 'the palette opened on `/`');
+    assert.match(panelTrail(r.out).join('->'), /commands/i, 'the palette opened on `/`');
   });
 
   await test('UX: `/mo` filters the palette to the matching commands', async () => {
@@ -268,9 +366,20 @@ module.exports = async function () {
   // ---- @ file completion --------------------------------------------------
 
   await test('UX: typing `@` opens the file menu', async () => {
-    const r = await runCli([], { cwd: project(), env: tui, script, stdin: `@${ESC}${CLEAR}/exit${CR}`, timeoutMs: 45000 });
+    // ---- STEPS, NOT ONE STDIN BLOCK -----------------------------------
+    //
+    // The whole of stdin used to arrive in one write, so the palette could open
+    // and close between two redraws and never appear in a frame at all. That went
+    // unnoticed because `panelTrail` matched the word ANYWHERE in the frame, and
+    // the launch screen's own `/  commands   @  files` hint satisfied it — the
+    // test passed without the palette ever being drawn. `hasPanel` matches the
+    // title ROW now, so the keys have to be separated for there to be one.
+    const r = await runCli([], {
+      cwd: project(), env: tui, script,
+      stdinSteps: ['@', ESC, CLEAR, `/exit${CR}`], stepDelayMs: 1200, timeoutMs: 45000,
+    });
     assert.strictEqual(r.code, 0);
-    assertIncludes(panelTrail(r.out).join('->'), 'FILES');
+    assert.match(panelTrail(r.out).join('->'), /FILES/i);
     const items = menuFor(r.out, '@', 'FILES').join('\n');
     assertIncludes(items, 'src/', 'directories are offered');
     assert.ok(!/node_modules/.test(items), `generated directories stayed out:\n${items}`);
@@ -356,16 +465,33 @@ module.exports = async function () {
   await test('UX: the workspace and header survive menu use', async () => {
     const r = await runCli([], {
       env: tui, script,
-      stdin: `hello${CR}/mo${ESC}/exit${CR}`,
+      stdinSteps: [`hello${CR}`, '/mo', ESC, `/exit${CR}`],
+      stepDelayMs: 1400,
       timeoutMs: 45000,
     });
     assert.strictEqual(r.code, 0);
-    const withPalette = frames(r.out).filter((f) => f.includes('COMMANDS'));
+    const withPalette = frames(r.out).filter((f) => f.match(/commands/i));
     assert.ok(withPalette.length, 'the palette was drawn');
     const f = withPalette[withPalette.length - 1];
-    assertIncludes(f, 'L A I N', 'the header is still there');
-    assertIncludes(f, 'context', 'the view tabs are still there');
-    assertIncludes(f, '│ >', 'the input row is still there');
+    // THE SURFACE IS STILL THERE UNDERNEATH. A panel opening must cost the
+    // CONVERSATION rows and nothing else: the header stays, the input stays,
+    // and the caret stays on the line you are filtering with.
+    //
+    // `context` used to be asserted here as proof the TAB STRIP survived. There
+    // is no strip; the header and the input are what "the surface survived"
+    // means now, and after a turn the conversation is what fills the middle.
+    assertIncludes(f, 'LAIN', 'the header is still there');
+    assertIncludes(f, 'mock-model', 'with the model on it');
+    assert.ok(hasPanel(f, 'Commands'), 'and the palette below, not over the screen');
+    // AND THE CARET IS STILL ON THE LINE YOU ARE FILTERING WITH. That is the
+    // property the panel-below-the-input arrangement exists for: the list and
+    // the line that filters it read as one thing.
+    // The keys are separated now, but the last palette frame may still carry the
+    // ones typed right after it — what must be true is that the caret is on the
+    // line and the line still holds what was typed.
+    const withCaret = rawFrames(r.out).filter((x) => hasPanel(x, 'Commands'));
+    assert.ok(inputRow(withCaret[withCaret.length - 1]).trim().startsWith('/mo'),
+      `the input still holds what was typed, and the caret is on it: ${JSON.stringify(inputRow(withCaret[withCaret.length - 1]))}`);
   });
 
   await test('UX: typing does not disturb a modal panel', async () => {
@@ -374,11 +500,15 @@ module.exports = async function () {
     const r = await runCli([], {
       env: tui, script,
       stdinSteps: [`/config${CR}`, '/mo', `${ESC}`, `/exit${CR}`],
+      // A STEP DELAY, so each panel has a frame to be drawn in. Without one the
+      // keys can arrive between two redraws and nothing is ever on screen to
+      // assert about — see the note on the `/` palette test above.
+      stepDelayMs: 1400,
       timeoutMs: 45000,
     });
     assert.strictEqual(r.code, 0);
     const trail = panelTrail(r.out).join('->');
-    assertIncludes(trail, 'CONFIG');
+    assert.match(trail, /CONFIG/i);
     assert.ok(!/CONFIG->COMMANDS/.test(trail), `the palette hijacked a modal panel: ${trail}`);
   });
 };

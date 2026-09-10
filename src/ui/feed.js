@@ -37,9 +37,43 @@ function editCounts(a) {
   return `   +${added} -${removed}`;
 }
 
+/**
+ * Prefix every row of a tool run with the gutter, quietly.
+ *
+ * One glyph, one meaning: this is agent activity. Behind a `│` the distinction
+ * between WHAT LAIN SAID and WHAT A TOOL DID survives monochrome — it is
+ * structural, not a colour. (The original lived in ui/blocks.js, which went
+ * with the browser in 2026-09; this is its one surviving use, kept here.)
+ */
+const GUTTER = '│';
+
+/**
+ * HOW WIDE A CONVERSATION DIVIDER IS.
+ *
+ * Shorter than the frame on a wide terminal, for the same reason prose is: a rule
+ * running two hundred columns is a wall, and what this is for is rhythm. It is the
+ * only horizontal line in the conversation — the header's rule is the only other
+ * one on the whole surface.
+ */
+const DIVIDER_MAX = 64;
+
+// HOW A ROW IS PAINTED lives next door: this file decides which rows exist,
+// ui/rowpaint.js decides what weight each part of one carries. See its header.
+const { paintRow, paintMark } = require('./rowpaint');
+
+
+/** A run of tool rows, every one behind the gutter. `P` is passed in lazily. */
+function quoteRun(rows, P) {
+  return rows.map((r) => (r === '' ? P.meta(GUTTER) : P.meta(`${GUTTER} `) + r));
+}
+
 function pushAction(out, a) {
   out.push({
     kind: 'action',
+    // WHAT THE ROW IS ABOUT, for the one word in it that carries an accent. The
+    // `path` below answers a different question (can a click open this?), and a
+    // shell command has no path — so the subject is recorded on its own.
+    subject: String(a.target || ''),
     // THE SIZE OF THE CHANGE STAYS WITH IT. The live card shows the counts
     // climbing and then takes them away with it; this row is what is left
     // behind, and a record of an edit that cannot say how big it was is half a
@@ -67,7 +101,18 @@ function pushAction(out, a) {
   // than either dumping forty lines of test log into the conversation or —
   // which is what it did — saying nothing at all, so the one place the result
   // actually was went undiscovered.
-  else if (a.output && !a.brief) out.push({ kind: 'action', text: '    ▶ full output in OUTPUT (4)' });
+  // THE OUTPUT PANE IS GONE - it went with the tabs in the one-surface rewrite,
+  // and this row spent a year telling people to press a key that no longer
+  // exists. A command's full account is `/jobs <n>` now, and a kept row says so
+  // rather than naming a place.
+  // ---- WHERE THE REST OF IT IS, IN FOUR CHARACTERS ---------------------
+  //
+  // It read `full output in OUTPUT (4)` - a sentence, naming a pane that went
+  // with the tabs - and then `full output in /jobs`, which was true and still a
+  // sentence. A pointer is not worth a sentence: this is the same fact at a
+  // quarter of the weight, and it is drawn only when the output really was too
+  // long to show (`!a.brief`), so a short result points nowhere.
+  else if (a.output && !a.brief) out.push({ kind: 'action', text: '    \u21b3 /jobs' });
 }
 
 /**
@@ -175,13 +220,23 @@ function pushUser(out, text) {
   // THE WHOLE MESSAGE TRAVELS WITH EVERY ROW OF IT. A three-line prompt is
   // three entries, and clicking the second line has to bring back the prompt —
   // not its middle line. See `userBlock` and ui/mouse.js.
-  // A PASTE IS DRAWN AS A MARKER, NOT AS FOUR HUNDRED LINES. See ui/pasted.js:
-  // one act of attaching something becomes `[pasted text #1]` on screen, while
-  // the payload below still travels on every row as `source`, still goes to the
-  // model, and is still what /copy copies. Only the DRAWING changes.
+  // ---- THE TRANSCRIPT SHOWS WHAT WAS ACTUALLY SENT ----------------------
+  //
+  // A paste used to be drawn here as `[pasted text #1]`, on the argument that
+  // one act of attaching four hundred lines should not bury the conversation.
+  // The argument was right about the COMPOSER and wrong about the RECORD.
+  //
+  // Collapsing it here meant the transcript could not be read back, reviewed,
+  // scrolled, exported or handed over: the one thing a person needs to be sure
+  // of after sending ten thousand characters is that the right ten thousand
+  // characters went, and the screen answered with a marker. Worse, the marker
+  // and the payload then had to be kept in step by a content-keyed registry.
+  //
+  // So the collapse moved to where it belongs — the COMPOSER, while you are
+  // still editing (ui/composer.js) — and the record shows the record.
   const before = out.length;
   const source = String(text == null ? '' : text);
-  pushLines(out, require('./pasted').compact(source), 'user');
+  pushLines(out, source, 'user');
   for (let i = before; i < out.length; i++) out[i].source = source;
 }
 
@@ -319,7 +374,12 @@ function userBlock(out, text, rows, width, P) {
   for (const row of rows) {
     const body = (first ? '❯ ' : '  ') + row;
     out.userAt[out.length] = text;
-    out.push(P.surface(T.pad('  ' + body, w)));
+    // NO BASE GUTTER HERE. The content frame owns the outer margin and the layout
+    // positions this whole region inside it (ui/views.js `contentBounds`), so a
+    // two-column indent of our own would be counted twice. `body` still carries
+    // the `❯ ` marker and the alignment under it, which is structure rather than
+    // margin.
+    out.push(P.surface(T.pad(body, w)));
     first = false;
   }
 }
@@ -358,6 +418,24 @@ function renderFeed(entries, width) {
     const key = e.kind === 'note' ? `note:${e.level || 'info'}` : e.kind;
     if (key !== last) {
       if (last !== null) out.push('');
+      // ---- A DIVIDER AT A MAJOR BOUNDARY, AND ONLY THERE -----------------
+      //
+      // A long session is one wall of text: a user turn, an answer, the next user
+      // turn, all separated by a single blank row. A rule gives it rhythm — but a
+      // rule between every paragraph would be card borders arrived at by another
+      // route, which is the thing this surface is not.
+      //
+      // SO IT IS ONLY AT THE BOUNDARY THAT IS ACTUALLY MAJOR: the start of a new
+      // USER TURN, which is where one exchange ends and the next begins. Not
+      // between prose and a tool row, not between two notes, not before the first
+      // thing on the screen.
+      //
+      // Dim, inside the shared content frame like every other row (the layout
+      // positions it), and deliberately lighter than anything it separates.
+      if (e.kind === 'user' && out.length) {
+        out.push(P.meta('─'.repeat(Math.max(8, Math.min(width, DIVIDER_MAX)))));
+        out.push('');
+      }
       // The label carries the actor's own colour, so a glance down the left
       // edge tells you who said what without reading a word of it.
       //
@@ -385,7 +463,7 @@ function renderFeed(entries, width) {
       //
       // It costs one short row, and it is the one label that earns it at every
       // width.
-      if ((labels || e.kind === 'user') && k.label) out.push('  ' + text);
+      if ((labels || e.kind === 'user') && k.label) out.push(text);
       last = key;
     }
     // ---- PROSE STARTS AT THE MARGIN --------------------------------------
@@ -394,7 +472,14 @@ function renderFeed(entries, width) {
     // spaces are four spaces of nothing — and they were spent on the model's
     // answer, which is the one thing on the screen a person is actually
     // reading. It keeps its indent only where a label is genuinely above it.
-    const indent = (labels || e.kind === 'user') && k.label ? '    ' : (e.kind === 'action' ? '   ' : '  ');
+    // ---- RELATIVE STRUCTURE ONLY, NOT A MARGIN -------------------------
+    //
+    // These used to be 4 / 3 / 2 columns, the last of which was the outer margin
+    // every row paid. The frame owns that now (ui/views.js `contentBounds`), so
+    // what is left is the RELATIVE offset each kind wants INSIDE the frame: content
+    // sitting under a label is indented from it, a tool row is nudged a column, and
+    // prose starts at the frame.
+    const indent = (labels || e.kind === 'user') && k.label ? '  ' : (e.kind === 'action' ? ' ' : '');
 
     // ---- A TOOL ACTION IS QUOTED, NEVER PROSE ---------------------------
     //
@@ -414,15 +499,19 @@ function renderFeed(entries, width) {
       // than derived from it afterwards: the entry knows its path, and reading
       // it back out of a painted sentence would be parsing our own output.
       const named = [];
+      // WHAT EACH ROW IS ABOUT, collected beside the text. A row's subject - the
+      // file it touched or the command it ran - is the one word a person scans a
+      // session for, and it is painted as one. See `paintMark`.
+      const subjects = [];
       while (j < entries.length && entries[j].kind === 'action') {
         if (entries[j].text) {
           rows.push(entries[j].text);
+          subjects.push(entries[j].path || entries[j].subject || '');
           if (entries[j].path) named.push({ text: entries[j].text, path: entries[j].path });
         }
         j += 1;
       }
       if (rows.length) {
-        const blocks = require('./blocks');
         // ---- FINISHED WORK RECEDES; THE CURRENT RUN DOES NOT ---------------
         //
         // Every completed call was drawn at `meta`, which is also the weight of
@@ -440,8 +529,32 @@ function renderFeed(entries, width) {
         // FROM THE ENTRIES, NOT A COUNTER. `lastRun` is computed once from the
         // list being drawn, so it cannot fall out of step with what is on screen
         // the way a flag set at push time would.
-        const quoted = blocks.quote(rows, { width });
+        // (This was `require('./blocks').quote` — a whole visual-block language
+        // of which this is the one 4-line primitive the feed still uses. The
+        // rest drew the external fan-out panels and went with the browser in
+        // 2026-09; the gutter survives here, in its only remaining caller.)
         const recede = i !== lastRun;
+        // ---- AND THE ROWS ARE PAINTED, WHICH THEY WERE NOT ---------------
+        //
+        // MEASURED, by rendering one: the GUTTER carried a dim attribute and
+        // EVERYTHING AFTER IT CARRIED NONE AT ALL. So a tool row was plain white
+        // text, the cyan every path wears everywhere else in LAIN never reached
+        // one, and — the serious half — a FAILED call's cross was exactly the
+        // same colour as a successful tick. The outcome of a call was carried by
+        // one glyph with no colour on it.
+        //
+        // `paintMark` existed and said all of this in its own header. It was
+        // simply unreachable: actions always take this block, and the only call
+        // to it sat in the fallthrough path below, which an action never gets to.
+        //
+        // COMPOSED BY CONCATENATION, never by wrapping — see ui/paint.js's
+        // nesting rule. A receding row is painted `faint` WHOLE, from the raw
+        // text, because wrapping an already-painted row in another colour would
+        // have its first inner reset cancel the outer one.
+        const quoted = quoteRun(
+          rows.map((r, n) => (recede ? P.faint(r) : paintMark(r, P, subjects[n] || ''))),
+          P,
+        );
         for (const row of quoted) {
           // ---- A ROW THAT NAMES A FILE IS A ROW YOU CAN OPEN ---------------
           //
@@ -452,7 +565,7 @@ function renderFeed(entries, width) {
           // name is not something anybody would aim at.
           const hit = named.find((n) => row.includes(n.path));
           if (hit) out.fileAt[out.length] = hit.path;
-          out.push('  ' + (recede ? P.faint(row) : row));
+          out.push(recede ? P.faint(row) : row);
         }
         i = j - 1;
         continue;
@@ -470,7 +583,7 @@ function renderFeed(entries, width) {
       let source = '';
       while (j < entries.length && entries[j].kind === 'user') {
         if (!source && entries[j].source) source = entries[j].source;
-        for (const row of V().wrap(entries[j].text || '', Math.max(12, width - indent.length - 2))) rows.push(row);
+        for (const row of V().wrap(entries[j].text || '', Math.max(12, width - indent.length))) rows.push(row);
         j += 1;
       }
       userBlock(out, source || rows.join(String.fromCharCode(10)), rows, width, P);
@@ -494,7 +607,7 @@ function renderFeed(entries, width) {
       while (j < entries.length && entries[j].kind === 'model') { run.push(entries[j].text || ''); j += 1; }
       const md = require('./markdown');
       if (md.looksMarked(run.join('\n'))) {
-        for (const row of md.render(run, Math.max(12, width - indent.length - 2))) {
+        for (const row of md.render(run, Math.max(12, width - indent.length))) {
           out.push(row ? indent + row : '');
         }
         i = j - 1;
@@ -519,48 +632,30 @@ function renderFeed(entries, width) {
     const lead = (/^[ \t]+/.exec(e.text) || [''])[0].replace(/\t/g, '  ').slice(0, 24);
     const body = e.text.slice((/^[ \t]+/.exec(e.text) || [''])[0].length);
     let first = true;
-    for (const row of V().wrap(body, Math.max(12, width - indent.length - lead.length - 2))) {
-      out.push(indent + lead + paintRow(e, row, first, P, k));
+    // ---- AN INDENTED LINE IS PREFORMATTED, AND IS NOT REFLOWED --------
+    //
+    // Four spaces is markdown's own spelling of a code block, and it is how a
+    // model writes a tree or an architecture diagram without a fence. `wrap`
+    // breaks on whitespace and rejoins, so the moment such a row was wider than
+    // the viewport the figure came apart — and a long unbroken path simply
+    // overflowed, because `wrap` will not split a token, leaving the row to be
+    // clipped by the frame.
+    //
+    // THE SAME FOLD THE FENCED PATH USES (ui/markdown.js `foldPre`): cut at the
+    // exact cell the viewport ends at, carry the indent onto the continuation,
+    // and lose nothing — so selecting the block still copies what was written.
+    const pre = lead.length >= 4;
+    const room = Math.max(12, width - indent.length);
+    const rows = pre
+      ? require('./markdown').foldPre(lead + body, room).map((r) => ({ lead: '', text: r }))
+      : V().wrap(body, Math.max(12, room - lead.length)).map((r) => ({ lead, text: r }));
+    for (const row of rows) {
+      out.push(indent + row.lead + paintRow(e, row.text, first, P, k));
       first = false;
     }
   }
   return out;
 }
-
-/** One row of an entry, painted for its kind. */
-function paintRow(e, row, first, P, k) {
-  if (e.kind === 'action') return first ? paintMark(row, P) : P.meta(row);
-  // A user line is bright and marked, so it stands out of the scroll as the
-  // thing that started everything below it.
-  if (e.kind === 'user' && first) return P.key('❯ ') + P.key(row);
-  if (e.kind === 'user') return P.key('  ' + row);
-  // The body wears the kind's own weight, which for a note is its SEVERITY —
-  // so a refused request is red text and not grey text with a red word above it.
-  const paint = P[k.body];
-  return paint && k.body !== 'plain' ? paint(row) : row;
-}
-
-/**
- * Green tick, red cross — the outcome, before anything else on the row.
- *
- * THE TEXT AFTER THE MARK IS SECONDARY, and it was not: the glyph was coloured
- * and the rest of the row left at full weight, so `✓ Read dashboard.py` carried
- * the same visual force as the sentence LAIN had just written — and the green
- * tick carried more. Three tool calls then outshouted the model's actual
- * answer, which is backwards: the calls are the EVIDENCE for that answer, not
- * the point of it.
- *
- * The mark keeps its colour, because passed-or-failed is the one thing worth
- * spotting from across the row. Everything after it goes quiet.
- */
-function paintMark(row, P) {
-  const m = V().MARK;
-  if (row.startsWith(m.done)) return P.ok(m.done) + P.meta(row.slice(m.done.length));
-  if (row.startsWith(m.error)) return P.bad(m.error) + P.meta(row.slice(m.error.length));
-  // A wrapped detail line under a call, not an outcome of its own.
-  return P.meta(row);
-}
-
 
 /**
  * HOW MANY CONVERSATIONAL MESSAGES — what `↓ 3 new` counts.

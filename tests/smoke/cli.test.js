@@ -156,7 +156,10 @@ module.exports = async function () {
       ],
     });
     assert.strictEqual(r.code, 0);
-    assertIncludes(r.stdout, 'modified');
+    // `/changes` PRINTS THE DIFF NOW, not a bare list of paths — the DIFF and
+    // FILES panes went and their renderers came here (src/workcommands.js). The
+    // grouping is still stated, in the vocabulary the pane used: `~ MODIFIED`.
+    assertIncludes(r.stdout, 'MODIFIED');
     assert.strictEqual(fs.readFileSync(path.join(cwd, 'keep.js'), 'utf8'), 'ORIGINAL\n', 'undo restored the prior bytes');
   });
 

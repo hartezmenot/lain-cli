@@ -66,10 +66,13 @@ async function check(name, input, ctx, { mutates = false } = {}) {
   //
   // A person who typed `lain -p "fix the parser"` in a directory has said which
   // directory they mean about as plainly as it can be said.
-  if (!app.ui || !app.ui.enabled) return { ok: true };
+  if (!require('./interaction').available(app)) return { ok: true };
 
   const root = (app.session && app.session.cwd) || cwd;
   const targets = pathsIn(input, cwd);
+  // Remote admission is not local machine consent. Commands without a named
+  // file still exercise the existing directory trust decision.
+  if (app.interaction && mutates) targets.push(path.resolve(cwd, input?.cwd || '.'));
   if (!targets.length) return { ok: true };
 
   for (const target of targets) {

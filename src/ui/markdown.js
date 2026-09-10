@@ -41,6 +41,52 @@ const { wrap } = require('./doc');
 
 /** Code is indented under a quiet gutter, so a block is findable at a glance. */
 const CODE_GUTTER = '▏';
+
+/**
+ * FOLD A PREFORMATTED LINE AT A CHARACTER BOUNDARY — losslessly, and in place.
+ *
+ * THE RULE: a preformatted line is never broken on whitespace and never has a
+ * run of spaces collapsed, because in code, a diagram, a tree or a diff hunk the
+ * spacing IS the content. When a line will not fit, it is cut at the exact cell
+ * the viewport ends at and continued on the next row, carrying its own leading
+ * indent so the continuation stays under the block rather than under the margin.
+ *
+ * NOTHING IS LOST, which is the property that matters most: every character of
+ * the source appears, in order, so selecting the block and copying it yields the
+ * text that was actually written rather than a display-mutated version of it.
+ * That is the whole argument against clipping with an ellipsis here.
+ *
+ * MEASURED IN CELLS, NOT CHARACTERS. A double-width glyph takes two columns, so
+ * the cut is found by accumulating `T.width` one character at a time — slicing
+ * by `length` is how a box-drawing figure ends up one column out on the row
+ * after it.
+ */
+function foldPre(line, room) {
+  const s = String(line == null ? '' : line).replace(/	/g, '  ');
+  const w = Math.max(4, Math.floor(room));
+  if (T.width(s) <= w) return [s];
+  const indent = ((/^ */.exec(s) || [''])[0]).slice(0, 8);
+  const out = [];
+  let i = 0;
+  let first = true;
+  while (i < s.length) {
+    const lead = first ? '' : indent;
+    const room2 = Math.max(1, w - T.width(lead));
+    let used = 0;
+    let j = i;
+    while (j < s.length) {
+      const cw = T.width(s[j]) || 1;
+      if (used + cw > room2) break;
+      used += cw;
+      j += 1;
+    }
+    if (j === i) j = i + 1;            // never fail to advance
+    out.push(lead + s.slice(i, j));
+    i = j;
+    first = false;
+  }
+  return out;
+}
 /** Any fence line, opening or closing — used when unwrapping a how-to block. */
 const FENCE_ANY = /^\s*(?:```|~~~)/;
 const BULLET = '•';
@@ -366,8 +412,22 @@ function inline(text) {
  * @param {number} width    columns available for the text itself
  * @returns {string[]} painted rows, ready to draw — never re-wrapped by callers
  */
+/**
+ * HOW WIDE PROSE MAY BE HERE - narrower than the frame on a very wide terminal.
+ *
+ * THE DISTINCTION THIS FILE HAS TO MAKE. A paragraph, a heading, a quote and a
+ * bullet are PROSE: their width is a reading decision, and two hundred columns of
+ * it is measurably harder to read than ninety. A fence, an indented block, a
+ * how-to box and a rule are STRUCTURE: their width is part of what they mean, and
+ * squeezing them into a reading measure breaks the thing the width was carrying.
+ *
+ * So every WRAPPING branch below asks for `measure` and every PREFORMATTED one
+ * keeps `cols`. See ui/views.js `proseWidth` for the curve, and why it is not a
+ * hard eighty columns.
+ */
 function render(lines, width) {
   const cols = Math.max(20, Number(width) || 80);
+  const measure = require('./views').proseWidth(cols);
   const out = [];
   let inCode = false;
 
@@ -404,9 +464,48 @@ function render(lines, width) {
     if (inCode) {
       // CODE IS NOT REFLOWED. Its indentation is its meaning, so it is kept and
       // a line too long for the pane folds losslessly rather than being clipped.
+      //
+      // ---- AND THE FOLD IS NOT `wrap`, WHICH IS WHAT IT USED TO BE --------
+      //
+      // `wrap` is the PROSE wrapper: it breaks on whitespace and joins what it
+      // keeps, so a run of spaces inside a line is collapsed and a continuation
+      // starts at column zero of the block. That is correct for a sentence and
+      // destroys a diagram — measured at 50 columns,
+      //
+      //     const veryLongVariableName = someFunction(argumentOne, argumentTwo,
+      //     argumentThree, four);
+      //
+      // which has lost the alignment of everything after the break. The comment
+      // above already said code is not reflowed; the implementation reflowed it.
+      // See `foldPre`: a character-boundary fold that keeps every space and
+      // carries the line's own indent onto each continuation.
       const room = Math.max(12, cols - 4);
-      const parts = T.width(line) <= room ? [line] : wrap(line, room);
-      for (const p of parts) push(`  ${P.meta(CODE_GUTTER)} ${P.cmd(p)}`);
+      for (const p of foldPre(line, room)) push(`  ${P.meta(CODE_GUTTER)} ${P.cmd(p)}`);
+      continue;
+    }
+
+    // ---- PREFORMATTED BY INDENTATION ------------------------------------
+    //
+    // Four spaces is markdown's own spelling of a code block, and it is how a
+    // model writes an architecture diagram or a directory tree without reaching
+    // for a fence:
+    //
+    //           A
+    //           |
+    //           v
+    //           B ----> C
+    //
+    // It used to fall through to the prose branch, which preserved the leading
+    // indent and then reflowed the rest on whitespace — so the moment a row was
+    // wider than the viewport the figure came apart, and `inline()` was free to
+    // read an asterisk in it as emphasis. STRUCTURE IS MEANING HERE, so it is
+    // drawn verbatim: no markup processing, no reflow, every space kept.
+    //
+    // DRAWN PLAIN, not behind the code gutter. A gutter would reframe ordinary
+    // indented prose as a code block, which is a louder change than this needs
+    // to be — the only thing being fixed is that the spacing survives.
+    if (/^ {4}/.test(line) && line.trim()) {
+      for (const p of foldPre(line, Math.max(12, cols))) push(p);
       continue;
     }
 
@@ -454,7 +553,13 @@ function render(lines, width) {
     const sec = SCHEMA_HEADING.exec(line);
     if (sec) {
       push('');
-      push(P.head(String(sec[1]).toUpperCase()));
+      // ---- ITS OWN CASE, NOT SHOUTED ----------------------------------
+      //
+      // `### Summary` became `SUMMARY` while `### Tests` — which is not on the
+      // schema list — stayed `Tests`, so a final answer with both had two heading
+      // weights in it for no reason a reader could infer. A heading is made a
+      // heading by being bold; upper-casing it on top of that is a second claim.
+      push(P.head(String(sec[1])));
       continue;
     }
 
@@ -463,7 +568,7 @@ function render(lines, width) {
     if (h) {
       push('');
       const paint = h[1].length <= 2 ? P.head : P.key;
-      for (const p of wrap(inline(h[2]), cols)) push(paint(p));
+      for (const p of wrap(inline(h[2]), measure)) push(paint(p));
       continue;
     }
 
@@ -472,7 +577,7 @@ function render(lines, width) {
     // ---- QUOTES ---------------------------------------------------------
     const q = QUOTE.exec(line);
     if (q) {
-      for (const p of wrap(inline(q[1]), Math.max(12, cols - 2))) push(`${P.meta('│')} ${p}`);
+      for (const p of wrap(inline(q[1]), Math.max(12, measure - 2))) push(`${P.meta('│')} ${p}`);
       continue;
     }
 
@@ -480,7 +585,7 @@ function render(lines, width) {
     const b = BULLET_RE.exec(line);
     if (b) {
       const lead = `${b[1]}${BULLET} `;
-      const parts = wrap(inline(b[2]), Math.max(12, cols - T.width(lead)));
+      const parts = wrap(inline(b[2]), Math.max(12, measure - T.width(lead)));
       push(`${P.meta(b[1] + BULLET)} ${parts[0]}`);
       for (const p of parts.slice(1)) push(' '.repeat(T.width(lead)) + p);
       continue;
@@ -488,7 +593,7 @@ function render(lines, width) {
     const n = NUMBERED.exec(line);
     if (n) {
       const lead = `${n[1]}${n[2]}. `;
-      const parts = wrap(inline(n[3]), Math.max(12, cols - T.width(lead)));
+      const parts = wrap(inline(n[3]), Math.max(12, measure - T.width(lead)));
       push(P.meta(lead) + parts[0]);
       for (const p of parts.slice(1)) push(' '.repeat(T.width(lead)) + p);
       continue;
@@ -500,7 +605,7 @@ function render(lines, width) {
     // continuation means something by it.
     const leading = (/^[ \t]*/.exec(line) || [''])[0];
     const indent = leading.replace(/\t/g, '  ').slice(0, 12);
-    for (const p of wrap(inline(line.slice(leading.length)), Math.max(12, cols - indent.length))) {
+    for (const p of wrap(inline(line.slice(leading.length)), Math.max(12, measure - indent.length))) {
       push(indent + p);
     }
   }
@@ -542,4 +647,4 @@ function looksMarked(text) {
     || s.split('\n').filter((line) => SCHEMA_HEADING.test(line)).length >= 2;
 }
 
-module.exports = { render, inline, looksMarked, CODE_GUTTER, BULLET, HOWTO };
+module.exports = { render, inline, looksMarked, foldPre, CODE_GUTTER, BULLET, HOWTO };

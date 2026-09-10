@@ -121,8 +121,12 @@ module.exports = async function () {
     cache.reset();
     const sess = session(2, 2);
     const before = conv.activity({ session: sess, width: 100 }).join('\n');
+    // AN EDIT, NOT A READ. A successful read is live state and is drawn in the
+    // one row above the caret, not in the conversation (ui/feed.js `durable`) —
+    // so it is no longer a change to THIS function's output. A call that changes
+    // the project still is, and that is what the cache must never stale on.
     const after = conv.activity({
-      session: sess, width: 100, liveActions: [{ name: 'read_file', target: 'src/new.js', ok: true }],
+      session: sess, width: 100, liveActions: [{ name: 'edit_file', target: 'src/new.js', ok: true }],
     }).join('\n');
     assert.notStrictEqual(after, before);
     assert.ok(after.includes('src/new.js'), 'and the new call is on screen');

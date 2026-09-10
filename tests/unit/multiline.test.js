@@ -157,7 +157,20 @@ module.exports = async function () {
     const one = screen.geometry().inputRows;
     screen.inputText = `one${LF}two${LF}three`;
     const three = screen.geometry().inputRows;
-    assert.strictEqual(three, one + 2, 'three lines take two more rows than one');
+    // ---- THE REGION HAS A THREE-ROW FLOOR -------------------------------
+    //
+    // So a one-line prompt already occupies three rows, with the text centred in
+    // them (ui/inputbox.js `topPad`). The floor is what gives a borderless composer
+    // a shape without drawing anything around it, and the centring is what stops
+    // that shape reading as a box that failed to fill. It still GROWS past the
+    // floor — see the long-prompt case below.
+    assert.strictEqual(one, 3, 'the composer is never a single-row strip');
+    assert.strictEqual(three, 3, 'and three lines of text fill the three rows it has');
+    // AND IT STILL GROWS PAST THE FLOOR, which is the property this test is named
+    // for. Three lines FILL the three rows the floor already gave; four need a
+    // fourth.
+    screen.inputText = `one${LF}two${LF}three${LF}four`;
+    assert.ok(screen.geometry().inputRows > three, 'the region grows with the buffer');
 
     screen.inputText = new Array(200).fill('x').join(LF);
     const huge = screen.geometry().inputRows;
@@ -175,14 +188,26 @@ module.exports = async function () {
     }
   });
 
-  await test('BOX: the summary row appears only when lines are actually HIDDEN', () => {
-    // It said "⎘ 3 lines" above three lines the reader could already see — and
-    // called them pasted, when they had just been typed.
-    assert.strictEqual(views.pasteSummary(`a${LF}b${LF}c`, 80, 3), null,
-      'nothing is hidden, so there is nothing to summarise');
-    assert.ok(views.pasteSummary(new Array(40).fill('x').join(LF), 80, 8),
-      'a buffer larger than the box still gets its one row');
-    assert.strictEqual(views.pasteSummary('single line', 80, 1), null);
+  await test('BOX: there is no summary row — the region is one region', () => {
+    // ------------------------------------------------------------------
+    // `pasteSummary` DREW AN EXTRA ROW UNDER THE INPUT BOX reading
+    // `⎘ 1,200 lines · 41.2 KB · "Traceback…"`, because the box drew the whole
+    // paste and a person could not tell how much of it there was.
+    //
+    // The composer collapses the paste instead (ui/composer.js), so there is
+    // no wall to describe: the marker says a block is there and its size rides
+    // beside it on the caret's own row. A region that is one region does not
+    // need a second row about itself.
+    // ------------------------------------------------------------------
+    assert.strictEqual(typeof views.pasteSummary, 'undefined', 'the summary row must not come back');
+    assert.strictEqual(typeof require('../../src/ui/viewport').pasteSummary, 'undefined');
+    // AND THE REGION IS THE ROWS ITS TEXT OCCUPIES, with no border either.
+    const { Screen } = require('../../src/ui/layout');
+    const s2 = new Screen({ out: { columns: 80, rows: 30, isTTY: true, write() {}, on() {}, removeListener() {} } });
+    s2.inputText = 'one short prompt';
+    // THREE ROWS, which is the composer's floor and not three rows ABOUT the
+    // composer. Nothing here describes the region; it is simply less cramped.
+    assert.strictEqual(s2.geometry().inputRows, 3, 'one line of text sits in a three-row region');
   });
 
   await test('BOX: lineCount is the one answer to "how many lines"', () => {

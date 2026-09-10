@@ -269,7 +269,12 @@ async function handle(app, record, text) {
   // If this ever becomes automatic — resuming without the question, or
   // resuming more than the once that was authorised — it has become carry-on
   // again under a different name.
-  return await app.submit(RESUME_PROMPT, { sameTask: true, from: 'rate-limit-wait' });
+  // `from` IS WHAT KEEPS THIS OUT OF THE TRANSCRIPT AS A FAKE USER MESSAGE, and
+  // the key has to match the one ui/phrasing.js knows: it was `rate-limit-wait`
+  // against a table holding `rate-limit-resume`, so the caption fell through to the
+  // generic `carrying on (rate-limit-wait)` — which named an internal identifier at
+  // the user. See SELF_ASKED.
+  return await app.submit(RESUME_PROMPT, { sameTask: true, from: 'rate-limit-resume' });
 }
 
 module.exports = { worthAsking, human, at, adapter, handle, CHOICE, RESUME_PROMPT, ASK_ABOVE_MS, TICK_MS };

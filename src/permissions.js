@@ -31,6 +31,10 @@
  */
 
 /** What can be asked for. Nothing outside this list is grantable. */
+// The named-fact channel. A permission request is one of the few things a
+// person needs to learn about from a room away — see `emit` below.
+const { EVENT } = require('./events');
+
 const CAPABILITY = Object.freeze({
   screen: 'see the screen',
   keyboard: 'send keystrokes',
@@ -44,33 +48,17 @@ const SESSION_MS = 10 * 60_000;
 const MAX_LOG = 200;
 
 /**
- * THE THREE SCOPES, and why the third one is not a longer timer.
- *
- * `once` and `session` are WALL-CLOCK grants: they expire after a fixed number
+ * THE TWO SCOPES. Both are WALL-CLOCK grants: they expire after a fixed number
  * of minutes whatever is happening. That is exactly right for a bridge that was
  * configured once and may act at any moment — the whole argument for a short
  * expiry is that a grant nobody is watching should lapse.
- *
- * IT IS THE WRONG SHAPE FOR THE PROBE, and this was the reported defect. A
- * Probe session is something the user STARTS, with `/mcp probe`, and WATCHES —
- * it opens a window of its own. Ten minutes into an investigation the grant
- * expired mid-sequence, the next action raised the same prompt again, and the
- * answer to "may this Probe see the screen" was being asked repeatedly about
- * one session the user had already authorised and was sitting in front of. A
- * prompt that returns every ten minutes is not a stronger permission; it is one
- * people learn to click through without reading, which is strictly weaker.
- *
- * So `probe` grants are bound to a SESSION IDENTITY rather than to a clock.
- * They are valid exactly while that Probe connection is the live one, and they
- * end — completely, and by construction rather than by remembering to — the
- * moment it goes away. That is a NARROWER promise than ten minutes, not a
- * looser one: it cannot outlive the thing it was granted to, and reconnecting
- * mints a new connection id, which is a new authorisation.
+ * (A third, `probe` — a grant bound to the session identity of a live Probe
+ * connection rather than to a clock — was removed with the Probe integration
+ * in 2026-09. Both surviving scopes keep their timers.)
  */
 const SCOPE = Object.freeze({
   ONCE: 'once',
   SESSION: 'session',
-  PROBE: 'probe',
 });
 
 class Permissions {
@@ -81,14 +69,6 @@ class Permissions {
     this.log = [];
     /** Set while a request is on screen, so two cannot race. */
     this.pending = null;
-    /**
-     * THE LIVE PROBE SESSION, and the ONE fact that decides whether a `probe`
-     * grant is still good. Null means there is no authorised Probe session, so
-     * every probe-scoped grant is dead — there is no second place that can
-     * disagree, and no timer that can expire it out from under a session the
-     * user is watching.
-     */
-    this.probeSession = null;
   }
 
   _note(event, detail) {
@@ -97,26 +77,12 @@ class Permissions {
   }
 
   /**
-   * Is this capability allowed RIGHT NOW?
-   *
-   * A probe-scoped grant is checked against the LIVE SESSION rather than
-   * against a clock; every other scope is checked against its expiry, on every
-   * use. Both are answered here so there is one answer to "may this happen".
+   * Is this capability allowed RIGHT NOW? Checked against the grant's expiry,
+   * on every use, so there is one answer to "may this happen".
    */
   check(cap) {
     const g = this.grants.get(cap);
     if (!g) return { ok: false, why: 'not granted' };
-    if (g.scope === SCOPE.PROBE) {
-      // THE SESSION IS THE EXPIRY. A grant whose session is not the live one is
-      // dropped on the spot rather than merely refused, so a Probe that
-      // reconnected cannot inherit the authorisation of the one before it.
-      if (!g.session || g.session !== this.probeSession) {
-        this.grants.delete(cap);
-        this._note('ended', cap + ' — the Probe session it was granted to has ended');
-        return { ok: false, why: 'the Probe session it was granted to has ended' };
-      }
-      return { ok: true, grant: g, msLeft: null };
-    }
     if (g.expiresAt <= this._now()) {
       this.grants.delete(cap);
       this._note('expired', cap);
@@ -147,55 +113,20 @@ class Permissions {
   }
 
   /**
-   * Apply an answered request. `scope` is 'once', 'session' or 'probe'.
-   *
-   * A PROBE GRANT REQUIRES A SESSION ID and is refused without one — a
-   * probe-scoped grant with no session would be a grant nothing can ever end,
-   * which is the opposite of what the scope is for.
+   * Apply an answered request. `scope` is 'once' or 'session'.
    */
-  grant(caps, { scope = SCOPE.ONCE, target = null, session = null } = {}) {
-    if (scope === SCOPE.PROBE) {
-      if (!session) return this.deny(caps, 'a Probe grant needs the session it belongs to');
-      this.probeSession = String(session);
-    }
+  grant(caps, { scope = SCOPE.ONCE, target = null } = {}) {
     const ms = scope === SCOPE.SESSION ? SESSION_MS : ONCE_MS;
-    // Infinity, not a large number: a probe grant has no clock at all, and a
-    // "very long" timeout is the defect this scope exists to remove.
-    const expiresAt = scope === SCOPE.PROBE ? Infinity : this._now() + ms;
+    const expiresAt = this._now() + ms;
     const given = [];
     for (const cap of caps) {
       if (!CAPABILITY[cap]) continue;
-      this.grants.set(cap, { expiresAt, target, scope, session: scope === SCOPE.PROBE ? String(session) : null });
+      this.grants.set(cap, { expiresAt, target, scope });
       given.push(cap);
     }
     this._note('granted', `${given.join(', ')} · ${scope}${target ? ` · ${target}` : ''}`);
     return given;
   }
-
-  /**
-   * THE PROBE SESSION ENDED — drop everything it bought.
-   *
-   * Called from the Probe's own teardown, so authorisation ends with the
-   * session by construction rather than by anybody remembering to. Idempotent,
-   * and safe to call for a session that is no longer the live one: a stale
-   * teardown must never revoke a NEWER session's grants, which is why the id is
-   * compared rather than assumed.
-   */
-  endProbeSession(session = null, why = 'the Probe session ended') {
-    if (session && this.probeSession && String(session) !== this.probeSession) return [];
-    this.probeSession = null;
-    const had = [];
-    for (const [cap, g] of [...this.grants]) {
-      if (g.scope !== SCOPE.PROBE) continue;
-      this.grants.delete(cap);
-      had.push(cap);
-    }
-    if (had.length) this._note('ended', `${had.join(', ')} — ${why}`);
-    return had;
-  }
-
-  /** Is there an authorised Probe session right now? */
-  get probeAuthorised() { return Boolean(this.probeSession); }
 
   deny(caps, why = 'you said no') {
     this._note('denied', `${[...caps].join(', ')} — ${why}`);
@@ -206,11 +137,6 @@ class Permissions {
   revoke(why = 'revoked') {
     const had = [...this.grants.keys()];
     this.grants.clear();
-    // A STOP BUTTON THAT LEAVES THE SESSION AUTHORISED IS NOT A STOP BUTTON.
-    // Without this, revoking dropped the grants and left `probeSession` set, so
-    // the next request could be re-granted at probe scope without the user
-    // being asked again about the session they had just revoked.
-    this.probeSession = null;
     if (had.length) this._note('revoked', `${had.join(', ')} — ${why}`);
     return had;
   }
@@ -226,18 +152,8 @@ class Permissions {
  * means the request the user reads and the grant that is applied come from one
  * place and cannot describe different things.
  */
-function requestAdapterSpec({ caps, target = null, reason = '', probeSession = null }) {
+function requestAdapterSpec({ caps, target = null, reason = '' }) {
   const wanted = caps.filter((c) => CAPABILITY[c]);
-  // WHEN A PROBE SESSION IS RUNNING, THE MIDDLE OPTION CHANGES ITS MEANING.
-  //
-  // "for this session (10 minutes)" is a promise about a clock, and against a
-  // Probe the user started and is watching it is the wrong promise in both
-  // directions: it expires in the middle of an investigation, and it keeps
-  // running for ten minutes after the Probe has gone. Bound to the session, it
-  // covers exactly the thing the user said yes to and ends with it.
-  const middle = probeSession
-    ? { label: 'Allow for this Probe session (until the Probe exits)', value: SCOPE.PROBE }
-    : { label: 'Allow for this session (10 minutes)', value: SCOPE.SESSION };
   return {
     title: 'DESKTOP CONTROL REQUEST',
     // NO BLANK SPACER ROWS. The panel scrolls, and every row spent on air is a
@@ -251,12 +167,11 @@ function requestAdapterSpec({ caps, target = null, reason = '', probeSession = n
     ].filter((x) => x !== null),
     options: [
       { label: 'Allow once (1 minute)', value: SCOPE.ONCE },
-      middle,
+      { label: 'Allow for this session (10 minutes)', value: SCOPE.SESSION },
       { label: 'Deny', value: 'deny' },
     ],
     caps: wanted,
     target,
-    probeSession,
   };
 }
 
@@ -272,21 +187,21 @@ function requestAdapterSpec({ caps, target = null, reason = '', probeSession = n
  * answer is no. Inferring consent from "there was no way to object" is exactly
  * the failure this gate exists to prevent.
  */
+/**
+ * State a fact on the shared bus. Best effort, and never in the way of consent:
+ * a broken subscriber must not be able to stop a person being asked.
+ */
+function emit(app, name, payload) {
+  try { require('./events').busOf(app).emit(name, payload); } catch { /* the question still gets asked */ }
+}
+
 async function request(app, { caps = [], target = null, reason = '' } = {}) {
   const perms = app.desktop().permissions;
-  // WHICH PROBE SESSION, ASKED OF THE PROBE and not remembered here. A second
-  // copy of "is a Probe running" is a second thing that can be wrong, and the
-  // one that is wrong is always the copy.
-  let probeSession = null;
-  try {
-    const live = require('./probe').live();
-    probeSession = live ? live.connectionId : null;
-  } catch { probeSession = null; }
-  const spec = requestAdapterSpec({ caps, target, reason, probeSession });
+  const spec = requestAdapterSpec({ caps, target, reason });
   if (!spec.caps.length) return { ok: false, why: 'nothing was actually requested' };
 
   if (perms.pending) return { ok: false, why: 'another desktop request is already on screen' };
-  if (!app.ui || !app.ui.enabled) {
+  if (!require('./interaction').available(app)) {
     perms.deny(spec.caps, 'there is no interactive terminal to ask');
     return { ok: false, why: 'no interactive terminal — desktop access is never granted unattended' };
   }
@@ -303,17 +218,27 @@ async function request(app, { caps = [], target = null, reason = '' } = {}) {
     app.ui.noteActor('mcp', `Permission required: ${spec.caps.join(', ')}${target ? ` · ${target}` : ''}`);
   }
   perms.pending = spec;
+  // ---- AND A NAMED FACT, SO A SECOND WINDOW CAN SEE IT --------------------
+  //
+  // A person who has walked away from the terminal has no way to learn that
+  // LAIN is now waiting on them: the modal is on a screen nobody is looking at.
+  // The dashboard and any future remote client render `approval.required`, and
+  // that is the only route by which "something needs you" can leave this
+  // machine. It is a REPORT — nothing subscribed to it can answer, and consent
+  // is still given at this keyboard and nowhere else.
+  emit(app, EVENT.APPROVAL_REQUIRED, {
+    what: spec.caps.join(', '), target: target || '', reason: reason || '', kind: 'desktop',
+  });
   let picked = null;
   try {
-    const { askAdapter } = require('./ui/panel');
-    picked = await app.ui.ask(askAdapter({
+    picked = await require('./interaction').ask(app, {
       // The panel's own title carries the headline, and each line of the
       // request is its own row — the capability list is the whole point of
       // showing this, and it must not be clipped away.
       title: spec.title,
       question: spec.lines.join('\n'),
       options: spec.options.map((o) => o.label),
-    }));
+    });
   } finally {
     perms.pending = null;
   }
@@ -322,11 +247,15 @@ async function request(app, { caps = [], target = null, reason = '' } = {}) {
   // them is a yes.
   const chosen = spec.options.find((o) => o.label === picked);
   if (!chosen || chosen.value === 'deny') {
+    emit(app, EVENT.APPROVAL_RESOLVED, { what: spec.caps.join(', '), granted: false, kind: 'desktop' });
     perms.deny(spec.caps, picked ? 'you denied it' : 'you dismissed the request');
     if (app.ui) app.ui.noteActor('mcp', picked ? 'Permission denied — nothing was touched.' : 'Request dismissed — nothing was touched.');
     return { ok: false, why: picked ? 'denied' : 'dismissed' };
   }
-  const given = perms.grant(spec.caps, { scope: chosen.value, target, session: spec.probeSession });
+  emit(app, EVENT.APPROVAL_RESOLVED, {
+    what: spec.caps.join(', '), granted: true, scope: chosen.value, target: target || '', kind: 'desktop',
+  });
+  const given = perms.grant(spec.caps, { scope: chosen.value, target });
   // SOMETHING IS ABOUT TO MOVE YOUR MOUSE. A second window opens above the work
   // saying what is permitted, counting it down, showing each action, and
   // carrying a STOP that does not depend on LAIN being responsive.

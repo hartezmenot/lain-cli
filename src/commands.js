@@ -170,81 +170,26 @@ define('/status', {
   },
 });
 
-/**
- * `/tokens` — WHERE THE INPUT WENT, for the requests this turn actually made.
- *
- * THE CONDITION THIS EXISTS FOR was reported as requests of 325,000-343,000
- * input tokens against a few hundred output, exhausting a rate limit in
- * minutes. Nothing inside LAIN could say why: `usage.inputTokens` is one number
- * handed back after the fact, and it cannot tell a system prompt from a tool
- * schema from the ninth replay of a file read an hour ago.
- *
- * So token growth is now EXPLAINABLE rather than merely observable. The
- * breakdown is measured at the one place the transmitted array exists
- * (contextfit.js) and kept on the turn record; this reads it back.
- */
-const EOL = String.fromCharCode(10);
-
-define('/tokens', {
-  flashMs: 0,
-  surface: true,
-  desc: 'What the recent requests cost, and of what',
-  run(app) {
-    const w = (s) => app.render.write(s);
-    const turns = (app.session && app.session.turns) || [];
-    // The finished turn's record is what the session keeps; a turn still in
-    // flight has not been appended yet, which is why this reads the last
-    // COMPLETED one rather than reaching into a running turn's state.
-    const audits = (turns.length && turns[turns.length - 1].audits) || [];
-    w(EOL + C.bold('Token accounting') + C.dim('  — estimated from characters; see src/tokenaudit.js') + EOL);
-    if (!audits.length) {
-      w(C.dim('  no request has been measured yet in this session.' + EOL));
-      return;
-    }
-    const ta = require('./tokenaudit');
-    // THE LAST FEW, NEWEST LAST, because the question is always about the
-    // request that just happened and how it compares with the one before it.
-    for (let i = 0; i < audits.length; i++) {
-      for (const line of ta.report(audits[i], { n: i + 1 })) w(C.dim('  ' + line) + EOL);
-      w(EOL);
-    }
-    const last = audits[audits.length - 1];
-    // AMPLIFICATION, MEASURED NOT ENFORCED: real provider requests the session
-    // made per turn it recorded. A turn that needed N attempts (retries,
-    // post-413 folds) shows here as N, because each attempt was admitted and
-    // closed as its own request — requestadmission.test.js proves that count.
-    const turnsAll = turns.filter((x) => x.usage && x.usage.requests > 0);
-    if (turnsAll.length) {
-      const reqs = turnsAll.reduce((a, x) => a + x.usage.requests, 0);
-      const steps = turnsAll.reduce((a, x) => a + (x.steps || 1), 0);
-      w(C.dim(`  amplification: ${reqs} request(s) over ${turnsAll.length} turn(s), ${steps} model step(s)`)
-        + (reqs > steps ? C.yellow(` — ${reqs - steps} retry/fold attempt(s)`) : '') + EOL);
-    }
-
-    if (last && last.overBudget) {
-      w('  ' + C.yellow('this request was over budget and was compacted before it was sent') + EOL);
-    }
-  },
-});
+// ---- `/token` MOVED TO src/tokencommand.js ----------------------------
+//
+// It is one subject — what a conversation has cost and what the requests were
+// made of — and it had grown a session account, a context-occupancy reading and
+// a per-request audit. The move took this file back under the god-object guard,
+// which is the guard doing its job rather than the reason for the move.
 
 /**
- * A PROBLEM WITHOUT A KNOWN CAUSE — trace it, do not guess.
- *
- * "The button doesn't turn on" is not automatically a coding task: it could be
- * config, a dead service, a stale display, or a real bug, and editing the first
- * suspicious file is how you fix the wrong thing. This forces the TROUBLESHOOT
- * workflow (see mode.js / prompt.js) for the description you give — narrow it
- * down with evidence, cheapest checks first, and say what has been ruled out.
- *
- * BLOCKED during a turn: it starts a turn of its own, and two turns cannot own
- * the session at once.
+ * `/troubleshoot` — REMOVED FROM THE COMMAND SURFACE, 2026-09, UX subtraction
+ * pass. The workflow it forced is now reached the way every other workflow is:
+ * mode.js classifies a plain-English problem report ("reports a problem without
+ * saying where it is") into the TROUBLESHOOT mode automatically, so the user
+ * describes the symptom and LAIN decides whether tracing-evidence-first is the
+ * right shape for it — no "troubleshoot mode" to invoke. The machinery survives
+ * as internal plumbing: the TROUBLESHOOT prompt paragraph (prompt.js), the local
+ * evidence scan and the report renderer (troubleshoot.js, still consumed by
+ * /copy troubleshoot and the relay), and the bounded external-review relay
+ * (investigation.js) behind the same classification. Nothing a person could
+ * reach before is lost; the door they had to know about is gone.
  */
-define('/troubleshoot', {
-  duringTurn: DURING_TURN.BLOCKED,
-  args: '<what is going wrong>',
-  desc: 'Trace a problem to its cause with evidence, and report it as a report',
-  run(app, ctx) { return require('./troubleshoot').runCommand(app, ctx, { C }); },
-});
 
 /**
  * `/dash` LIVES IN dashcommand.js — it is the one command that runs a server,
@@ -264,18 +209,13 @@ define('/troubleshoot', {
 define('/mcp', {
   // MACHINERY: about LAIN, not about the work. Goes to the command panel.
   surface: true,
-  args: '[status|connect|revoke|disconnect|probe|stop probe]',
+  args: '[status|connect|revoke|disconnect]',
   desc: 'The desktop bridge and what it is currently allowed to do',
   async run(app, { args }) {
     const mcpMod = require('./mcp');
-    const probeCmd = require('./probecommand');
     const { bridge, permissions } = app.desktop();
     const sub = String(args[0] || 'status').toLowerCase();
     const w = (s) => app.render.write(s);
-
-    // ---- the Probe: a SEPARATE seam beside the desktop bridge.
-    // It lives in probecommand.js; this is only the routing.
-    if (probeCmd.handles(sub, args)) return probeCmd.run(app, sub, w, C);
 
     if (sub === 'connect') {
       if (!mcpMod.configured(app.cfg)) {
@@ -293,14 +233,6 @@ define('/mcp', {
       return;
     }
     if (sub === 'revoke') {
-      // Reaches the Probe too. A STOP handle that covers half the surface
-      // is not a STOP handle.
-      if (app._probe && app._probe.state === require('./probe').STATE.CONNECTED) {
-        try {
-          await app._probe.revoke();
-          w('  ' + C.green('REVOKED') + C.dim('  the Probe permissions are gone') + '\n');
-        } catch { /* the lines below still tell the truth */ }
-      }
       const had = permissions.revoke('you revoked it');
       try { require('./controlwindow').update(app); } catch { /* no window */ }
       w(had.length
@@ -354,8 +286,8 @@ define('/mcp', {
     // CAN LAIN ACTUALLY LOOK AT THE SCREEN RIGHT NOW? A different question from
     // "is a bridge configured", and the one that decides whether a UI change
     // can be visually VERIFIED or merely made. It lives in computer.js because
-    // it has to answer for EITHER transport and for the user's own refusals —
-    // asked of one bridge, a Probe-only machine was told nothing could see.
+    // it has to answer for the user's own refusals, not only for the bridge's
+    // state.
     const vis = require('./computer').visualReadiness(app);
     w('  ' + 'Visual inspection'.padEnd(20)
       + (vis.ok ? C.green('✓ POSSIBLE') : C.dim('— ' + vis.why)) + '\n');
@@ -363,9 +295,7 @@ define('/mcp', {
       w('\n' + C.dim('  recent\n'));
       for (const a of s.activity.slice(-6)) w(C.dim(`    ${a.ok ? '·' : '✕'} ${a.text}\n`));
     }
-    await probeCmd.status(app, w, C);
     w(C.dim('\n  /mcp connect · /mcp revoke (stops everything now) · /mcp disconnect\n'));
-    w(C.dim('  /mcp probe (runtime investigation) | /mcp stop probe') + '\n');
   },
 });
 
@@ -382,9 +312,10 @@ define('/mcp', {
  * That is honest, and on its own it is a dead end: the one thing a person wants
  * at that moment is to LOOK, and there was no way to.
  *
- * This is the other half. LAIN's own Chromium when one is running — it is the
- * browser LAIN owns, and the design says not to put LAIN's automation into the user's
- * session — and the machine's own viewer otherwise.
+ * This is the other half. The machine's own viewer, the same window any other
+ * file on this machine opens in. (LAIN's own Chromium used to take this when
+ * one was running; it was removed in 2026-09 per the browser-ownership
+ * ruling.)
  *
  * With no argument it offers the images LAIN has seen mentioned, read from the
  * OUTPUT surface that already lists them rather than from a second record kept
@@ -510,6 +441,14 @@ define('/task', {
     }
     const ev = app.session.evidence.digest(6);
     if (ev) app.render.write('\n  ' + ev.split('\n').join('\n  ') + '\n');
+    // ---- AND THE TASK RECORD, WHICH OUTLIVES THIS SESSION -----------------
+    //
+    // APPENDED, never substituted. Everything above is what this command has
+    // always said about the CONVERSATION — the objective, the lifecycle state,
+    // the evidence in context — and it still says all of it. What follows is
+    // the half the harness adds: a durable state, what has actually been
+    // proved, and where the receipts are. See harnesscommands.js.
+    try { require('./harnesscommands').status(app, C); } catch { /* no harness in this session */ }
   },
 });
 
@@ -637,10 +576,19 @@ require('./trustcommand').register({ define, C });
 // about running work that could not run while work was running would be
 // useless. See jobcommands.js.
 require('./jobcommands').register({ define, C });
-// AND /runtime + /session + /rc — ONE subject: the process that outlives this
-// one, and the windows onto it. rccommand.js registers /session too.
+// AND /ps, THE OTHER ALTITUDE OF THE SAME SUBJECT. `/bg` is the LOGICAL work —
+// what you asked for and whether it finished. `/ps` is what that work is
+// PHYSICALLY made of right now: the harness's managed services and the shell
+// jobs, projected, never re-registered. See pscommand.js on why there is no
+// `/ps all` and why nothing here scans the host.
+require('./pscommand').register({ define, C });
+// AND `/token` — the whole token account. One subject, its own file: the
+// header carries the live output number and this carries everything else.
+require('./tokencommand').register({ define });
+// AND /runtime + /session — ONE subject: the process that outlives this
+// one, and the windows onto it. sessionview.js registers /session.
 require('./runtimecommand').register({ define, C });
-require('./rccommand').register({ define, C });
+require('./sessionview').register({ define, C });
 // AND /stop + /observing, whose subject is A RUN BEING WATCHED. `/stop` exists
 // because "stop the bot" and "stop LAIN" were one key everywhere else, so
 // stopping a misbehaving run meant risking the investigation of it. See
@@ -663,6 +611,12 @@ require('./reportcommands').register({ define, C, config });
 // file because it orchestrates every instrument in the tree; see briefcommand.js
 // for why it is not called `/steer`.
 require('./briefcommand').register({ define, C });
+// THE HARNESS COMMANDS — /harness, /tasks, /verify, /artifacts, /env. Every one
+// of them is a projection of the SAME task state the dashboard and a remote
+// client read, which is what stops the terminal being the degraded surface.
+// See harnesscommands.js on why `/task` was extended rather than replaced.
+require('./harnesscommands').register({ define, DURING_TURN, C });
+require('./botcommand').register({ define });
 // AND /help, which is a VIEW OF THIS REGISTRY rather than a family of
 // commands: it renders what is defined here, plus the keys — which is the
 // half that grew, because a key nobody is told about is a key that does not

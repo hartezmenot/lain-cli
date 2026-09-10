@@ -316,8 +316,8 @@ async function runCommand(app, { rest }, { C } = {}) {
   //
   // GATED ON THE ACTOR BEING GENUINELY USABLE, not on a flag someone set. It
   // used to ask `external.settings(cfg).ok`, which is the question "is a MODEL
-  // configured" — so a browser companion or a human relay, which need no model
-  // at all, could never reach the relay however deliberately they were chosen.
+  // configured" — so a human relay, which needs no model at all, could never
+  // reach the relay however deliberately it was chosen.
   const reviewer = require('./actors').create(app);
   if (reviewer && reviewer.status().ok) {
     return require('./investigation').relay(app, rest, { C: col });

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * THE DASHBOARD COMMAND — starting, stopping and exposing the remote control.
+ * THE DASHBOARD COMMAND — starting, stopping and exposing the dashboard.
  *
  * Split out of commands.js, which had grown past the god-object guard when
  * autostart and the password gate were added. The seam is the same one the other
@@ -25,7 +25,7 @@ const config = require('./config');
  */
 function register({ define, C }) {
   /**
-   * `/dash` — THE REMOTE-CONTROL DASHBOARD. Not `/rc`, which is readiness.
+   * `/dash` — THE REMOTE-CONTROL DASHBOARD. Not readiness, which is `/ready`.
    *
    * Localhost and read-only by default, behind a password; LAN exposure
    * and the (four, fixed) control actions are each an explicit opt-in that says

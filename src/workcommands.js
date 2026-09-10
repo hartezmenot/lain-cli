@@ -50,20 +50,39 @@ function register({ define, DURING_TURN, C }) {
     surface: true,
     // READ, not glanced at — it waits for Esc.
     flashMs: 0,
-    desc: 'What changed since each checkpoint in this session',
-    run(app) {
-      const list = app.checkpoints.entries;
-      if (!list.length) { app.render.write(C.dim('  No changes recorded this session.\n')); return; }
-      app.render.write('\n' + C.bold('Changes') + '\n');
-      for (const e of list) {
-        for (const row of app.checkpoints.diff(e)) {
-          if (row.kind === 'unchanged' || row.kind === 'absent') continue;
-          const rel = path.relative(app.session.cwd, row.path);
-          const delta = row.kind === 'modified' ? C.dim(` ${row.beforeBytes} → ${row.afterBytes} bytes`) : '';
-          app.render.write(`  ${row.kind.padEnd(9)} ${rel}${delta}\n`);
-        }
-      }
-      app.render.write(C.dim('\n  /undo reverts the most recent one.\n'));
+    args: '[files]',
+    desc: 'What changed on disk this session — the diff, or `files` for the grouped list',
+    run(app, { rest }) {
+      // ------------------------------------------------------------------
+      // THIS IS WHERE THE DIFF AND FILES PANES WENT.
+      //
+      // `/changes` used to print a bare list — `modified  src/auth/login.js
+      // 412 → 480 bytes` — which answers "which files" and not "what changed",
+      // because the DIFF pane answered the second one and was one keystroke
+      // away. There is no pane, so the command has to be both, and the
+      // renderers it uses are the pane's own (ui/panes.js): the same bytes,
+      // the same grouping, the same line numbers.
+      //
+      // THE DIFF IS THE DEFAULT, deliberately. `diffView` shows every changed
+      // file in full under a heavy rule carrying its path and counts — the
+      // pane learned that lesson already, and its header records why: a diff
+      // view whose default state contains no diff is a table of contents.
+      // `/changes files` is the structural view, for a change too big to read.
+      // ------------------------------------------------------------------
+      const panes = require('./ui/panes');
+      const width = (app.render && app.render.width) || 80;
+      const cwd = app.session && app.session.cwd;
+      const files = panes.changedFiles({ checkpoints: app.checkpoints, cwd });
+      if (!files.length) { app.render.write(C.dim('  No changes recorded this session.\n')); return; }
+
+      const wantFiles = /^files?$/i.test(String(rest || '').trim());
+      const lines = wantFiles
+        ? panes.filesView({ checkpoints: app.checkpoints, cwd, width, tree: app.projectTree ? app.projectTree() : [] })
+        : panes.diffView({ checkpoints: app.checkpoints, cwd, width });
+      for (const line of lines) app.render.write(line + '\n');
+      app.render.write(C.dim(wantFiles
+        ? '\n  /changes shows the diff itself · /undo reverts the most recent one.\n'
+        : '\n  /changes files groups them by what happened · /undo reverts the most recent one.\n'));
     },
   });
 }

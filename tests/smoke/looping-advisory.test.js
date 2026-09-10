@@ -70,7 +70,7 @@ module.exports = async function () {
       timeoutMs: 90000,
     });
     const drawn = frames(r.out).map(plain).join('\n');
-    assert.match(drawn, /STILL GOING ROUND/, 'the advisory was raised while the loop was happening');
+    assert.match(drawn, /STILL\s+GOING\s+ROUND/i, 'the advisory was raised while the loop was happening');
     assert.match(drawn, /read_file a\.txt/, 'and it names what is repeating');
 
     // NOTHING WAITED. The steps after the advisory ran and the turn reached its
@@ -83,7 +83,7 @@ module.exports = async function () {
     // over, both would do nothing, and a box offering actions that no longer
     // exist is the footer-that-lies bug in slow motion.
     const last = plain(lastFrameRows(r.out).join('\n'));
-    assert.ok(!/STILL GOING ROUND/.test(last),
+    assert.ok(!/STILL\s+GOING\s+ROUND/i.test(last),
       `the advisory outlived the turn it was about:\n${last}`);
   });
 
@@ -124,9 +124,9 @@ module.exports = async function () {
       timeoutMs: 90000,
     });
     const drawn = frames(r.out).map(plain).join('\n');
-    assert.match(drawn, /STILL GOING ROUND/, 'it was raised at some point');
+    assert.match(drawn, /STILL\s+GOING\s+ROUND/i, 'it was raised at some point');
     const last = plain(lastFrameRows(r.out).join('\n'));
-    assert.ok(!/STILL GOING ROUND/.test(last),
+    assert.ok(!/STILL\s+GOING\s+ROUND/i.test(last),
       `it retracted itself; the closing frame still showed it:\n${last}`);
     assert.match(plain(r.out), /MOVED_ON/);
   });
@@ -145,7 +145,7 @@ module.exports = async function () {
       timeoutMs: 90000,
     });
     const out = plain(r.out);
-    assert.ok(!/STILL GOING ROUND/.test(out), 'two different reads are not a loop');
+    assert.ok(!/STILL\s+GOING\s+ROUND/i.test(out), 'two different reads are not a loop');
     assert.ok(!/\[looping\]/.test(out));
     assert.match(out, /FINE/);
   });
@@ -224,7 +224,7 @@ module.exports = async function () {
     // guards against: a panel left visible after close() blocks every other
     // panel from opening at all — ui/menus.js's showMenu checks `!panel.visible`).
     const last = plain(lastFrameRows(r.out).join('\n'));
-    assert.ok(!/STILL GOING ROUND/.test(last), 'the advisory is not still showing at the end');
+    assert.ok(!/STILL\s+GOING\s+ROUND/i.test(last), 'the advisory is not still showing at the end');
     assert.match(plain(r.out), /session\s+2\d{7}-/, '/status opened and rendered normally afterward');
   });
 

@@ -45,6 +45,14 @@ class UI {
     this.phase = null;
     this.phaseSince = 0;
     this.interrupting = false;
+    /**
+     * ONE ELAPSED-WORK CLOCK FOR THE WHOLE FOREGROUND TASK — see
+     * ui/workclock.js. It is started by the turn lifecycle, paused and resumed
+     * from the same `liveState` the window title reads, and it is the only
+     * duration this surface shows: the per-phase `12s` it replaced restarted at
+     * every read, every write and every retry.
+     */
+    this.clock = require('./workclock').create();
     this._tick = null;
     // ---- THE ACTIVITY TIMELINE — see ui/activity.js ----------------------
     //
@@ -149,6 +157,51 @@ class UI {
   }
 
   noteOutput(command, output, exitCode) { this.story.noteOutput(command, output, exitCode); this.refresh(); }
+
+  /**
+   * OUTPUT ARRIVING, COUNTED — the one number on the header.
+   *
+   * ------------------------------------------------------------------------
+   * WHY THIS IS AN ESTIMATE, AND WHY IT SAYS SO.
+   *
+   * No provider LAIN speaks to states output tokens while a response is being
+   * produced. Anthropic states them once, in `message_delta`, at the end; the
+   * OpenAI shape states them in the final chunk. That is not a limitation of
+   * this code — it is what is on the wire, and ui/tokenview.js has a whole
+   * vocabulary for the difference (MEASURED, ESTIMATED, PENDING, UNKNOWN).
+   *
+   * So the finest TRUTHFUL granularity available during a response is the one
+   * thing that genuinely arrives continuously: the characters. Divided by the
+   * same pessimistic `CHARS_PER_TOKEN` src/session.js compacts against, so the
+   * figure a person watches and the figure that acts on the conversation cannot
+   * drift apart.
+   *
+   * IT IS DRAWN WITH A `~` IN FRONT OF IT until the receipt lands. That is the
+   * whole of the honesty requirement: an estimate that looks like a measurement
+   * is worse than no number, and `/token` says which is which in words.
+   *
+   * NOTHING IS FABRICATED AND NOTHING IS INTERPOLATED. Every increment here is
+   * caused by bytes that actually arrived from the model. There is no timer
+   * behind it: if the model goes quiet for ten seconds the number does not move
+   * for ten seconds, which is exactly the signal a person watching wants.
+   *
+   * NO REDRAW PER CHUNK. A repaint on every token is the redraw storm
+   * ui/turnevents.js already avoids by buffering prose; the ticker is running
+   * throughout a turn anyway (ui/activity.js `syncTicker`), so the count is
+   * picked up by the next frame either way.
+   */
+  noteOutputChars(n) {
+    const chars = Math.max(0, Number(n) || 0);
+    if (!chars) return;
+    if (!this.liveOutput) this.liveOutput = { chars: 0, tokens: 0, measured: false };
+    // A MEASURED FIGURE IS NEVER OVERWRITTEN BY AN ESTIMATE. Text can still
+    // arrive after a receipt on a multi-step turn; the receipt is the better
+    // number for what it covers, and the estimate resumes on the next turn.
+    if (this.liveOutput.measured) return;
+    this.liveOutput.chars += chars;
+    const { CHARS_PER_TOKEN } = require('../session');
+    this.liveOutput.tokens = Math.round(this.liveOutput.chars / CHARS_PER_TOKEN);
+  }
 
   /** A genuinely new task: the previous task's story is no longer the news. */
   // ---- THE TURN'S STATE MACHINE lives in ui/turnstate.js -----------------
@@ -262,33 +315,24 @@ class UI {
    * Enter the full-screen UI. Returns false when stdout is not a TTY.
    *
    * ------------------------------------------------------------------------
-   * THE PANE THAT IS OPEN AT STARTUP STARTS ITS PASS LIKE ANY OTHER.
+   * NOTHING IS WARMED HERE ANY MORE, AND NOTHING NEEDS TO BE.
    *
-   * `ensureReport` was reached only by NAVIGATION — Tab, Alt+N, a click. The
-   * first view is set in the Screen constructor and shown by the first draw,
-   * which goes through none of those. So CONTEXT, the pane LAIN opens ON, was
-   * the one pane whose survey never began: it sat on "reading the tree…" for
-   * the whole session unless the user happened to tab away and come back, and
-   * a person who never touched the tabs simply never saw a project briefing.
+   * This used to start the project SURVEY on startup — twice, in fact: once for
+   * whichever pane was open and once for CONTEXT, because CONTEXT was the pane
+   * whose survey never began and which therefore sat on "reading the tree…" for
+   * whole sessions. That was a real defect and the fix was right for the design
+   * it was in.
    *
-   * BEFORE `refresh`, not after, so the first frame already carries the cheap
-   * facts (ui/reports.js quickFacts) rather than painting a placeholder and
-   * replacing it a moment later.
-   *
-   * THE BRIEFING IS WARMED WHETHER OR NOT ITS PANE IS OPEN. LAIN lands on
-   * ACTIVITY, so starting only the open pane's pass would leave CONTEXT cold
-   * until somebody tabbed to it — and the first thing they would see is the
-   * placeholder, which is the same defect moved one keypress away. The survey
-   * is cheap, asynchronous and wanted regardless, so it begins with the session
-   * and CONTEXT is populated before anyone asks for it.
+   * With no CONTEXT pane there is no pane to warm. `/brief` runs the same
+   * survey when a person asks for it, which is the only moment anybody wants a
+   * tree read — and it means opening LAIN no longer spawns compilers to fill in
+   * a pane nobody has looked at.
    * ------------------------------------------------------------------------
    */
   enable() {
     if (!this.screen.enter()) return false;
     this.enabled = true;
     this.app.render.attachScreen(this.screen);
-    this.ensureReport(this.screen.view);
-    if (this.screen.view !== 'context') this.ensureReport('context');
     this.refresh();
     return true;
   }
@@ -309,6 +353,14 @@ class UI {
 
   refresh() {
     if (!this.enabled) return;
+    // ---- THE WORK CLOCK, BEFORE ANYTHING READS IT ------------------------
+    //
+    // `snapshot()` copies the clock's value into the frame state, so it has to
+    // be advanced first or the strip draws the previous frame's figure. It is
+    // an accumulator over wall time (ui/workclock.js), so calling this twice in
+    // one millisecond reads the same number twice — the redraw rate cannot
+    // affect what it says.
+    require('./projection').clock(this);
     const s = this.snapshot();
     this._title(s);
     this.screen.status = views.statusOf({
@@ -358,6 +410,11 @@ class UI {
     // draws it, and reading it here means there is one place it is copied.
     const reader = this.app.input;
     this.screen.inputSelection = reader && typeof reader.range === 'function' ? reader.range() : null;
+    // WHAT ARRIVED AS A PASTE, for the composer's DRAWING only — the reader
+    // owns the record, the screen only projects it, and `s` above is the whole
+    // of what will be sent. See ui/composer.js on why this is payloads rather
+    // than offsets, and on the invariant it must never break.
+    this.screen.inputPastes = (reader && Array.isArray(reader.pastesInLine)) ? reader.pastesInLine : [];
     this.refresh();
   }
 
@@ -524,27 +581,17 @@ class UI {
    * and the view simply renders whatever was chosen.
    */
   async workspaceSelect() {
-    if (!this.enabled || this.panel.visible) return false;
-    const app = this.app;
-    const screen = this.screen;
-
-    if (screen.view === 'diff' || screen.view === 'files') {
-      // Inside an open diff, Enter goes back to the list rather than nowhere.
-      if (screen.view === 'diff' && screen.diffFile) { screen.diffFile = null; this.refresh(); return true; }
-      const files = require('./panes').changedFiles({ checkpoints: app.checkpoints, cwd: app.session.cwd });
-      if (!files.length) return false;
-      const picked = await this.ask(panelMod.changedFilesAdapter({ files }));
-      if (picked) { screen.diffFile = picked; screen.setView('diff'); }
-      return true;
-    }
-
-    if (screen.view === 'plan') {
-      const plan = app.session.plan;
-      if (!plan || !plan.steps.length) return false;
-      const picked = await this.ask(panelMod.planStepsAdapter({ steps: plan.steps, expanded: screen.expandedSteps }));
-      if (picked != null) { screen.toggleStep(picked); screen.planCursor = picked; }
-      return true;
-    }
+    // ------------------------------------------------------------------------
+    // ENTER ON AN EMPTY LINE USED TO OPEN WHAT THE PANE OFFERED — a file
+    // picker on DIFF and FILES, a step picker on PLAN. Those panes are gone,
+    // and with them the only thing this could open.
+    //
+    // It is KEPT as a seam rather than deleted: src/repl.js routes an empty
+    // Enter here, and a method that answers "no, nothing to open" is a better
+    // seam than a call site that has to know there is nothing. Returning false
+    // lets the keystroke fall through exactly as it did on the six panes that
+    // never offered anything.
+    // ------------------------------------------------------------------------
     return false;
   }
 
@@ -606,19 +653,17 @@ class UI {
     return true;
   }
 
-  /** Cycle the workspace views. Tab is the key every terminal agrees on. */
-  nextView(delta = 1) {
-    // THE ORDER LIVES IN ui/tabs.js. It used to be spelled out here, in the
-    // strip, in the click hit-test and in the Alt+N bindings — four copies of
-    // one ordered list, free to disagree about which pane is number 4.
-    const next = require('./tabs').step(this.screen.view, delta);
-    this.screen.setView(next);
-    this.ensureReport(next);
-    return true;
-  }
-
-  /** The AUDIT/HEALTH panes read real state when opened. See ui/reports.js. */
-  ensureReport(view) { return require('./reports').ensureReport(this, view); }
+  // ------------------------------------------------------------------------
+  // `nextView` AND `ensureReport` STOOD HERE.
+  //
+  // `nextView` cycled the nine panes on Tab; `ensureReport` started the
+  // asynchronous project read a pane needed when it was OPENED. Both existed
+  // only because there was somewhere to navigate to. There is not, so a Tab
+  // that changed the surface would be a Tab that changed nothing.
+  //
+  // The survey itself is untouched — ui/reports.js still owns it, and `/brief`
+  // still runs it. What is gone is navigation as the trigger.
+  // ------------------------------------------------------------------------
 
   /**
    * WHICH KEY DOES WHAT lives in ui/keys.js — the routing of a keystroke is

@@ -25,49 +25,109 @@ const MARK = { done: '✓', active: '●', todo: '○', dropped: '✗', error: '
  * account of what happened. Durations and token counts are diagnostics; they
  * belong to `/status`, not to the thing you watch while LAIN works.
  */
+/**
+ * THE SUBJECT OF A SHELL COMMAND is the command, and its VERB is the program.
+ *
+ * `Ran python -c "import ast"` spends its first word on a fact every row on the
+ * screen shares — that something ran — and buries the only interesting one. The
+ * program IS the verb: `python`, `sed`, `git`, `node`. So the first token becomes
+ * the verb and the rest becomes the subject.
+ *
+ * MECHANICAL, NOT SUMMARISED. `python · -m py_compile a.py` rather than
+ * `python · compile a.py`: inventing a précis of somebody else's command means
+ * deciding which flags did not matter, and a row that quietly drops `--force` is
+ * a row that lies about what happened. The full command is still there, clipped
+ * by the width like everything else.
+ *
+ * A BARE PROGRAM has no subject and says so by having none.
+ */
+/**
+ * WHAT SEPARATES A TOOL ROW'S VERB FROM ITS SUBJECT.
+ *
+ * Named rather than typed twice: ui/feed.js `paintMark` splits on it to paint the
+ * two halves differently, and a literal in both places is a literal that can
+ * drift into a row nobody can colour.
+ */
+const SUBJECT_SEP = '·';
+
+function shellParts(command) {
+  const c = String(command || '').trim().replace(/\s+/g, ' ');
+  if (!c) return { verb: 'shell', subject: '' };
+  const cut = c.indexOf(' ');
+  const head = cut < 0 ? c : c.slice(0, cut);
+  const rest = cut < 0 ? '' : c.slice(cut + 1);
+  // THE PROGRAM, NOT THE PATH TO IT. `C:\\Python311\\python.exe` is `python`.
+  const prog = head.split(/[\\/]/).pop().replace(/\.(exe|cmd|bat|sh)$/i, '') || head;
+  return { verb: prog, subject: rest };
+}
+
+/**
+ * A TOOL CALL, AS `verb · subject`.
+ *
+ * ------------------------------------------------------------------------
+ * WHAT THIS REPLACED. Every row was a little sentence — `Ran python -c "import
+ * ast"`, `Searched for "SessionStrategist"`, `Found files matching *.ts` — and
+ * read together, twenty of them are prose competing with the prose they are
+ * evidence for. A tool row is not a sentence; it is a fact with two parts.
+ *
+ *     Ran python -m py_compile a.py      ->    python · -m py_compile a.py
+ *     Read src/router.js                 ->    read · src/router.js
+ *     Searched for "dispatch"            ->    search · dispatch
+ *
+ * The verb is lower case and dim, the subject wears the accent every path in
+ * LAIN wears, and the mark before them carries the outcome. Three weights on a
+ * row that used to have one.
+ *
+ * THE RUNNING FORM IS THE SAME SHAPE. It used to be a different sentence in a
+ * different tense (`Reading x` / `Read x`), so a row visibly rewrote itself at
+ * the moment the call finished. Now only the MARK changes, which is the one thing
+ * that actually changed.
+ */
 function phrase(name, target, running = false) {
   const t = String(target || '');
   // A search's subject is its PATTERN, and `describeTarget` hands it over
-  // wrapped in slashes. `✓ grep /./` is the tool's spelling of the question;
-  // `✓ Searched for "."` is the question. Unwrapped and quoted here because
-  // this is the layer whose job is to say things the way a person would.
+  // wrapped in slashes — the tool's own spelling of the question.
   const pat = /^\/(.*)\/$/.test(t) ? t.slice(1, -1) : t;
+  const two = (verb, subject) => (subject ? `${verb} ${SUBJECT_SEP} ${subject}` : verb);
+  if (/^run_(bash|powershell|cmd)$/.test(name)) {
+    const { verb, subject } = shellParts(t);
+    return two(verb, subject);
+  }
   const say = {
-    read_file: [`Reading ${t}`, `Read ${t}`],
-    write_file: [`Writing ${t}`, `Wrote ${t}`],
-    edit_file: [`Editing ${t}`, `Edited ${t}`],
-    list_dir: [`Listing ${t || 'the project'}`, `Listed ${t || 'the project'}`],
-    grep: [`Searching for "${pat}"`, `Searched for "${pat}"`],
-    glob: [`Looking for ${pat}`, `Found files matching ${pat}`],
-    run_bash: [`Running ${t}`, `Ran ${t}`],
-    run_powershell: [`Running ${t}`, `Ran ${t}`],
-    run_cmd: [`Running ${t}`, `Ran ${t}`],
-    web_fetch: [`Reading ${t}`, `Read ${t}`],
-    web_search: [`Searching the web for ${t}`, `Searched the web for ${t}`],
-    plan_write: ['Planning', 'Wrote the plan'],
-    plan_step_done: ['Finishing a step', 'Finished a step'],
-    ask_user: ['Waiting for you', 'Asked you'],
-    // THE SURGICAL EDITS, NAMED FOR WHAT THEY DID. `Wrote src/routes.js`
-    // reads the same whether eight lines were added or the file was replaced
-    // wholesale, and those are very different things to have done — so each
-    // says its own verb, and the reader can see the work was small.
-    apply_patch: [`Patching ${t}`, `Patched ${t}`],
-    append_file: [`Appending to ${t}`, `Appended to ${t}`],
-    insert_at: [`Inserting into ${t}`, `Inserted into ${t}`],
-    delete_range: [`Deleting lines in ${t}`, `Deleted lines in ${t}`],
-    move_file: [`Moving ${t}`, `Moved ${t}`],
-    delete_file: [`Deleting ${t}`, `Deleted ${t}`],
-    file_info: [`Checking ${t}`, `Checked ${t}`],
-    dependents: [`Finding what imports ${t}`, `Found what imports ${t}`],
-    // THE BRIDGE, NAMED AS THE BRIDGE. `probe input.mouse.click` reads as a
-    // command nobody typed; "Probe: input.mouse.click" reads as what it is —
-    // an action carried out by something other than LAIN.
-    probe: [`Probe: ${t}`, `Probe: ${t}`],
-    desktop: [`Desktop: ${t}`, `Desktop: ${t}`],
-    symbols: [`Finding ${t}`, `Found ${t}`],
+    read_file: () => two('read', t),
+    write_file: () => two('wrote', t),
+    edit_file: () => two('edited', t),
+    list_dir: () => two('list', t || 'the project'),
+    grep: () => two('search', pat),
+    glob: () => two('find', pat),
+    web_fetch: () => two('fetch', t),
+    plan_write: () => 'plan',
+    plan_step_done: () => 'plan · step done',
+    ask_user: () => 'asked you',
+    run_tests: () => two('test', t),
+    discover_tests: () => two('test', t || 'discover'),
+    verify_task: () => two('verify', t),
+    service_start: () => two('service', t),
+    service_check: () => two('service', t),
+    observe: () => two('observe', t),
+    // THE SURGICAL EDITS KEEP THEIR OWN VERBS. `wrote src/routes.js` reads the
+    // same whether eight lines were added or the file was replaced wholesale, and
+    // those are very different things to have done.
+    apply_patch: () => two('patched', t),
+    append_file: () => two('appended', t),
+    insert_at: () => two('inserted', t),
+    delete_range: () => two('deleted lines', t),
+    move_file: () => two('moved', t),
+    delete_file: () => two('deleted', t),
+    file_info: () => two('stat', t),
+    dependents: () => two('imports of', t),
+    symbols: () => two('symbol', t),
+    // THE BRIDGE, NAMED AS THE BRIDGE — an action carried out by something other
+    // than LAIN, which is worth a word of its own.
+    computer: () => two('computer', t),
   }[name];
-  if (!say) return running ? `${name} ${t}`.trim() : `${name} ${t}`.trim();
-  return running ? say[0] + '…' : say[1];
+  if (!say) return two(String(name || '').replace(/_/g, ' '), t);
+  return say();
 }
 
 /**
@@ -80,7 +140,7 @@ function phrase(name, target, running = false) {
  */
 const VERB_OF = {
   read_file: 'Read', list_dir: 'Read', file_info: 'Read',
-  probe: 'Probe', desktop: 'Desktop',
+  computer: 'Computer',
   grep: 'Searched', glob: 'Searched', symbols: 'Searched', dependents: 'Searched',
   write_file: 'Wrote', edit_file: 'Edited', apply_patch: 'Patched',
   append_file: 'Appended', insert_at: 'Inserted', delete_range: 'Deleted',
@@ -90,8 +150,10 @@ const VERB_OF = {
   // A LOOKUP IS A READ, and saying so keeps it in the same column as every
   // other read — but `Looked up` is what distinguishes a page somebody else
   // published from a file in this project, which is a distinction worth one
-  // word on screen.
-  web_fetch: 'Looked up', web_search: 'Searched the web',
+  // word on screen. (A `web_search` row lived here too, until the browser it
+  // drove was removed in 2026-09; a retired name falls back to itself, which
+  // is the honest spelling for a name that no longer names anything.)
+  web_fetch: 'Looked up',
 };
 function verbOf(name) { return VERB_OF[name] || String(name || 'Ran'); }
 
@@ -162,12 +224,38 @@ function trimRestatement(text) {
 const SELF_ASKED = Object.freeze({
   'external-advice': 'continuing the investigation with the external advice',
   'rate-limit-resume': 'continuing after the rate limit reset',
+  // EVERY KEY ANY CALLER ACTUALLY USES. Two were missing, so their captions
+  // fell through to the generic fallback and named an internal identifier at
+  // the user - `carrying on (provider-failover)`. A test now walks the tree and
+  // requires every `from:` a submission uses to be here.
+  'provider-failover': 'continuing on another provider',
+  handover: 'continuing from what LAIN observed',
+  steer: 'continuing with what you added',
 });
 
-/** What to draw instead of a user block, or null when a person really did type it. */
+/**
+ * What to draw instead of a user block, or null when a person really did type it.
+ *
+ * ------------------------------------------------------------------------
+ * AN UNKNOWN `from` MEANS A PERSON, NOT AN IDENTIFIER.
+ *
+ * It used to fall through to `carrying on (${from})`, which printed an internal
+ * key at the user — `carrying on (provider-failover)` — and, worse, SWALLOWED THE
+ * TEXT. That is the right trade for a continuation LAIN composed for itself: the
+ * prompt is control, not speech, and the caption says why there is a gap.
+ *
+ * It is the wrong trade for anything that might be a real message. A message
+ * relayed from a phone carries `from: 'messaging'`; captioning it would replace
+ * what somebody actually said with the name of the transport it arrived on.
+ *
+ * So the table is a CLOSED LIST of runtime continuations, and anything not on it
+ * is drawn as what it is — the user's own words. A new transport is then visible
+ * by default and a new synthetic prompt has to be declared here to be hidden,
+ * which is the safer direction for both to fail in.
+ */
 function selfAskedCaption(from) {
   if (!from) return null;
-  return SELF_ASKED[from] || `carrying on (${from})`;
+  return SELF_ASKED[from] || null;
 }
 
 /**
@@ -224,4 +312,5 @@ function routeOf(model, provider, connection) {
 }
 
 module.exports = {
+  shellParts, SUBJECT_SEP,
   SELF_ASKED, selfAskedCaption, routeOf, MARK, phrase, verbOf, VERB_OF, trimRestatement };

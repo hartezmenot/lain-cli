@@ -118,7 +118,7 @@ module.exports = async function () {
     });
     const steps = app._troubleshoot.investigation.map((i) => i.text);
     assert.strictEqual(steps.length, 3, 'the same search twice is one thing that was done');
-    assert.match(steps[0], /Searched for "except"/);
+    assert.match(steps[0], /search · except/);
     assert.match(steps[2], /^✗/, 'a failed check is not reported as a tick');
   });
 

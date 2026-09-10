@@ -96,6 +96,24 @@ const SLOTS = Object.freeze({
 /** Directories that exist because something writes into them per-session. */
 const SCRATCH = 'scratch';
 
+/**
+ * WHERE A TASK'S EVIDENCE LIVES — one directory per task, under `.lain/tasks/`.
+ *
+ * HERE, AND NOT IN THE ARTIFACT STORE, because of the rule at the top of this
+ * file: nothing outside this module joins a path inside `.lain/`. The artifact
+ * store (src/harness/artifacts.js) is the thing that decides WHAT is worth
+ * keeping and in what shape; where the bytes sit is this file's business, and
+ * the day `.lain/` is reorganised there must be exactly one place to change.
+ *
+ * A TASK DIRECTORY IS NOT A SLOT, and cannot be. Slots are a closed list with
+ * one document each — the whole reason the list is closed is that a module able
+ * to invent a filename will invent two. A task directory is unbounded by
+ * nature: one per task, with logs, screenshots and per-check output inside it.
+ * So it gets its own authority function with its own sanitiser, rather than
+ * being smuggled in as a slot with a wildcard in it.
+ */
+const TASKS = 'tasks';
+
 /** Bumped when an envelope's shape changes, so an old document is discarded. */
 const VERSION = 1;
 
@@ -118,6 +136,40 @@ function scratchDir(root, sessionId) {
 }
 
 function scratchRoot(root) { return path.join(dirFor(root), SCRATCH); }
+
+/** Every task directory, whoever wrote it. */
+function tasksRoot(root) { return path.join(dirFor(root), TASKS); }
+
+/**
+ * One task's evidence directory.
+ *
+ * The id is sanitised the same way a scratch id is, and for the same reason: an
+ * id is a string somebody else chose, and a `..` in it is a path traversal out
+ * of the project. Refusing is not an option here — the caller has a task and
+ * needs somewhere to put its receipts — so it is neutralised instead.
+ */
+function taskDir(root, taskId) {
+  const safe = String(taskId || 'unknown').replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 64) || 'unknown';
+  return path.join(tasksRoot(root), /^\.+$/.test(safe) ? 'unknown' : safe);
+}
+
+/**
+ * A file inside one task's directory, in a named sub-area.
+ *
+ * The AREAS are a closed list for the same reason SLOTS is: the CLI, the
+ * dashboard and a future remote client all list a task's evidence, and they can
+ * only agree on what they are looking at if the shape is fixed. `name` is a
+ * plain file name and is sanitised — it never contributes a directory
+ * separator, so no caller can write outside the area it asked for.
+ */
+const AREAS = Object.freeze(['logs', 'tests', 'browser', 'screenshots', 'observations', 'verification', 'diff', 'reports']);
+
+function taskFile(root, taskId, area, name) {
+  const a = String(area || '');
+  if (!AREAS.includes(a)) throw new Error(`unknown task artifact area "${a}" — the area list is closed on purpose`);
+  const safe = String(name || 'file').replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 120) || 'file';
+  return path.join(taskDir(root, taskId), a, safe);
+}
 
 /**
  * READ A SLOT, or the fallback.
@@ -208,7 +260,7 @@ function forget(root, slot) {
 }
 
 module.exports = {
-  DIR, SLOTS, VERSION, SCRATCH,
-  dirFor, pathOf, scratchDir, scratchRoot,
+  DIR, SLOTS, VERSION, SCRATCH, TASKS, AREAS,
+  dirFor, pathOf, scratchDir, scratchRoot, tasksRoot, taskDir, taskFile,
   read, write, has, updatedAt, survey, forget,
 };

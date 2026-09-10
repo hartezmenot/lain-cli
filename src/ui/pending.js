@@ -105,8 +105,10 @@ function draw(state, width = 80, height = 0) {
   // over something that is about to land at the next step is the wrong word,
   // and the difference is the whole reason the second Enter exists.
   const anyNow = items.some((s) => s.now);
-  const label = anyNow ? '─ STEERING NOW ' : '─ PENDING USER INPUT ';
-  out.push(T.fit(P.meta(label) + P.meta('─'.repeat(Math.max(0, width - label.length - 1))), width));
+  // A LABEL, NOT A RULE — see ui/jobsview.js for why the surface keeps exactly
+  // one horizontal line and it belongs to the header.
+  const label = anyNow ? 'Steering now' : 'Waiting to send';
+  out.push(T.fit(P.meta(label), width));
   for (let i = 0; i < shown; i++) {
     // The text is the USER's, painted as the user — it is not LAIN speaking and
     // it is not something that has happened.

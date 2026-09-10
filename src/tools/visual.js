@@ -18,11 +18,12 @@
  * suggestion, and the behaviour being prevented is precisely a model
  * persistently trying one more adjustment.
  *
- * WHAT IT WILL NOT DO. It does not capture screens (the Probe does that, gated
- * in its own window), does not generate the candidates (the caller does, from
- * real parameters), and does not decide anything. It refuses a candidate with
- * no machine evidence, because four pictures and a model's impressions of them
- * is not a choice — it is the model's guess wearing a person's authority.
+ * WHAT IT WILL NOT DO. It does not capture screens (a transport does that,
+ * behind the user's own gate), does not generate the candidates (the caller
+ * does, from real parameters), and does not decide anything. It refuses a
+ * candidate with no machine evidence, because four pictures and a model's
+ * impressions of them is not a choice — it is the model's guess wearing a
+ * person's authority.
  */
 
 const visualMod = require('../visual');

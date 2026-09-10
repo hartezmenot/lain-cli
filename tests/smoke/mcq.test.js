@@ -119,8 +119,8 @@ module.exports = async function () {
     const r = await askRun({
       question: 'level (please type a number)', options: ['1', '2'], keys: [ESC, ENTER],
     });
-    const rows = rowsOf(frames(r.out).find((f) => /LAIN NEEDS YOUR INPUT/.test(f)) || '');
-    const inPanel = rows.slice(rows.findIndex((l) => /LAIN NEEDS YOUR INPUT/.test(l)));
+    const rows = rowsOf(frames(r.out).find((f) => /lain\s+needs\s+your\s+input/i.test(f)) || '');
+    const inPanel = rows.slice(rows.findIndex((l) => /lain\s+needs\s+your\s+input/i.test(l)));
     const question = inPanel.find((l) => /level/.test(l));
     assert.ok(question, `the question must be drawn:\n${inPanel.join('\n')}`);
     assert.ok(!/please type a number/.test(question),
@@ -137,7 +137,7 @@ module.exports = async function () {
       keys: [`C${ENTER}`, `Preact, actually${ENTER}`],
     });
     const out = plain(r.out);
-    assertIncludes(out, 'YOUR ANSWER', 'picking Other must open a state you can type in');
+    assert.match(out, /your\s+answer/i, 'picking Other must open a state you can type in');
     assertIncludes(out, 'ANSWER — type your answer', 'and the input border must say so');
     const chose = chosenIn(r.configDir);
     assertIncludes(chose, 'Preact, actually', `free text must come back verbatim:\n${out.slice(-800)}`);
@@ -161,7 +161,7 @@ module.exports = async function () {
       keys: [`C${ENTER}`, ESC, `2${ENTER}`],
     });
     const out = plain(r.out);
-    assertIncludes(out, 'YOUR ANSWER', 'it went into the text state');
+    assert.match(out, /your\s+answer/i, 'it went into the text state');
     // …and came back out to a question that is still there and still answerable.
     assertIncludes(chosenIn(r.configDir), 'The user chose: Svelte',
       `Escape must not throw the question away:\n${out.slice(-900)}`);

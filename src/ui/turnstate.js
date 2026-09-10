@@ -49,6 +49,26 @@ function beginTurn(ui) {
   // count stays on the screen through the pause between turns instead of
   // blinking out the instant the model stops.
   ui.liveUsage = null;
+  // ---- THE RESPONSE COUNTER GOES BACK TO ZERO --------------------------
+  //
+  // The header carries ONE number and it is THIS RESPONSE's output. A new turn
+  // is a new response, so it starts at nothing and climbs — see
+  // ui/index.js `noteOutputChars` for why it climbs from characters and how it
+  // says so.
+  ui.liveOutput = { chars: 0, tokens: 0, measured: false };
+  // ---- AND THE WORK CLOCK STARTS, HERE AND NOWHERE ELSE ----------------
+  //
+  // "Start it at the moment the user submits the turn" — this function is that
+  // moment, and it is the only place the figure goes back to zero. Every phase
+  // change, tool call, retry and verification step inside the turn leaves it
+  // alone, which is the difference between one clock for the task and six
+  // little ones for its steps. See ui/workclock.js.
+  require('./workclock').start(ui.clock);
+  // AND THE LIVE ROW GOES BACK TO THE WORK. A transient operation note —
+  // "Recovering interrupted turn", "Copied 3 lines" — shares that row with the
+  // turn's phase and must never outlive the moment it described. See
+  // ui/operation.js.
+  require('./operation').clear(ui);
 }
 
 /**
@@ -60,10 +80,41 @@ function beginTurn(ui) {
  */
 function endTurn(ui) {
   ui.story.endTurn();
+  // ---- THE ESTIMATE IS REPLACED BY THE RECEIPT -------------------------
+  //
+  // While the response streamed, the header's number was an ESTIMATE from the
+  // characters that had arrived, drawn with a `~` in front of it, because no
+  // provider LAIN speaks to states output tokens before the end. The receipt
+  // has landed by now, so the same number becomes MEASURED and the `~` goes.
+  //
+  // The turn that just finished is the last entry in `session.turns` — the
+  // same record `/token` reads, so the header and the detail cannot report a
+  // different figure for one response.
+  try {
+    const turns = (ui.app.session && ui.app.session.turns) || [];
+    const last = turns[turns.length - 1];
+    const measured = last && last.usage && Number(last.usage.outputTokens);
+    if (measured > 0) ui.liveOutput = { chars: (ui.liveOutput && ui.liveOutput.chars) || 0, tokens: measured, measured: true };
+  } catch { /* the estimate is still true, and still says it is one */ }
   // THE OPEN REQUEST IS CLOSED. Its input tokens are in the session total by
   // now — turnclose.js added them — so continuing to draw them as an open
   // `+18.3K` beside that total would show the same tokens twice.
   ui.liveUsage = null;
+  // ---- AND THE WORK CLOCK STOPS, KEEPING ITS VALUE ---------------------
+  //
+  // THE TURN, NOT A MODEL RESPONSE. `runTurn` has by now finished its whole
+  // loop — every model call, every tool call, the checks and the settlement —
+  // so this is the task reaching a terminal state rather than one iteration of
+  // it ending. A stopped clock holds its figure on purpose: `✓ DONE 00:12:08`
+  // is the receipt, and a receipt that blanks itself answers nothing.
+  require('./workclock').settle(ui.clock);
+  // ---- AND THE TRANSIENT ROW IS HANDED BACK ----------------------------
+  //
+  // An operation describes something happening NOW. Once the turn is over it is
+  // not, and a stale one sits there for its full lifetime saying so: Escape out of
+  // a rate-limit wait and the row still read `Rate limited · retry in 30s` over a
+  // session that had already stopped waiting. Cleared at both ends of a turn.
+  require('./operation').clear(ui);
   ui.refresh();
 }
 

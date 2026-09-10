@@ -53,12 +53,63 @@ function sandbox() {
   return dir;
 }
 
+/**
+ * REMOVE THE SANDBOX, TOLERATING THE GIT PREFETCH THAT IS STILL LETTING GO.
+ *
+ * ---- WHY A PLAIN rmSync IS NOT ENOUGH HERE, AND WHAT THIS IS NOT -----------
+ *
+ * `submit` fires `gitsnapshot.prefetch` deliberately unawaited — it measures
+ * git state while the request is in flight so the section it feeds costs the
+ * turn nothing. That spawns `git` with the SANDBOX as its working directory,
+ * and on Windows a directory cannot be removed while any process has it as a
+ * cwd. So the instant `submit` resolves there is a short window in which this
+ * teardown gets EPERM, and it is nobody's bug: the child is short-lived, holds
+ * no file open, and exits on its own.
+ *
+ * Measured rather than assumed: three consecutive runs failed immediately and
+ * all three succeeded 600ms later.
+ *
+ * WHAT IS NOT BEING PAPERED OVER: a leak. If the directory is still held after
+ * the budget below, this throws exactly as it always did.
+ */
+function removeSandbox(dir, budgetMs = 4000) {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); return; } catch (e) {
+      if (Date.now() >= deadline) throw e;
+      // A busy-wait, deliberately: this runs inside a `finally` that cannot
+      // await, and the window being covered is tens of milliseconds.
+      const until = Date.now() + 50;
+      while (Date.now() < until) { /* let the child exit */ }
+    }
+  }
+}
+
 const PLAN = [
   { text: 'Planning the work.', tool_calls: [{ name: 'plan_write', input: { objective: 'fix the reconnect', steps: ['inspect provider', 'fix reconnect', 'test', 'summary'] } }] },
   { text: 'Provider inspected.', tool_calls: [{ name: 'plan_step_done', input: { n: 1, note: 'read the provider' } }] },
 ];
 
 module.exports = async function () {
+  if (process.platform === 'win32') {
+    for (const persistent of [false, true]) {
+      await test(`TEARDOWN: a ${persistent ? 'persistent cwd lock still fails visibly' : 'temporary cwd lock is retried until removal succeeds'}`, async () => {
+        const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'lain-cwd-lock-'));
+        const { spawnOwned, stopTree } = require('../../src/harness/processes');
+        const child = spawnOwned({ command: process.execPath, cwd: dir, args: ['-e', persistent ? 'console.log("ready");setInterval(()=>{},1000)' : 'console.log("ready");setTimeout(()=>process.exit(0),300)'] });
+        try {
+          await require('events').once(child.stdout, 'data');
+          if (persistent) {
+            assert.throws(() => removeSandbox(dir, 100), /EPERM|EBUSY|ENOTEMPTY/);
+            assert.ok(fs.existsSync(dir));
+          } else {
+            removeSandbox(dir, 4000);
+            assert.ok(!fs.existsSync(dir));
+          }
+        } finally { await stopTree(child); removeSandbox(dir); }
+      });
+    }
+  }
   await test('CONTINUATION: a provider death mid-task does NOT restart the task', async () => {
     const cwd = sandbox();
     // A QUOTA refusal, which is not retriable — so the turn dies once rather
@@ -90,7 +141,7 @@ module.exports = async function () {
       assert.ok(app.session.task.steers.some((s) => /latency/.test(s.text)),
         'the steer is attached to the ACTIVE task');
     } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeSandbox(cwd);
       delete process.env.LAIN_PROVIDER;
       delete process.env.LAIN_MOCK_SCRIPT;
     }
@@ -115,7 +166,7 @@ module.exports = async function () {
       assert.ok(/inspect provider/.test(sys), 'the plan is in the prompt');
       assert.ok(/✓ 1\./.test(sys), 'including which step is already done');
     } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeSandbox(cwd);
       delete process.env.LAIN_PROVIDER;
       delete process.env.LAIN_MOCK_SCRIPT;
     }
@@ -162,7 +213,7 @@ module.exports = async function () {
       assert.ok(/Still outstanding:[\s\S]*- verify it/.test(sys),
         'the unfinished step, by name — "continue" needs a there');
     } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeSandbox(cwd);
       delete process.env.LAIN_PROVIDER;
       delete process.env.LAIN_MOCK_SCRIPT;
     }
@@ -232,7 +283,7 @@ module.exports = async function () {
       if (id) {
         try { fs.rmSync(path.join(require('../../src/config').sessionsDir(), `${id}.json`), { force: true }); } catch { /* already gone */ }
       }
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeSandbox(cwd);
       delete process.env.LAIN_PROVIDER;
       delete process.env.LAIN_MOCK_SCRIPT;
     }
@@ -249,7 +300,7 @@ module.exports = async function () {
       await app.submit('what does reconnect.js export?');
       assert.ok(!/did NOT finish/.test(app.systemPrompt()), 'no interruption note on a clean turn');
     } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeSandbox(cwd);
       delete process.env.LAIN_PROVIDER;
       delete process.env.LAIN_MOCK_SCRIPT;
     }
@@ -277,7 +328,7 @@ module.exports = async function () {
       assert.ok(/nothing has been run to check/.test(app.pendingCompletion), app.pendingCompletion);
       assert.strictEqual(app.session.plan.isLive, true, 'the plan is not retired on a refusal');
     } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeSandbox(cwd);
       delete process.env.LAIN_PROVIDER;
       delete process.env.LAIN_MOCK_SCRIPT;
     }
@@ -313,7 +364,7 @@ module.exports = async function () {
       assert.notStrictEqual(app.session.lifecycle.state, 'DONE', 'a refusal completes nothing');
       assert.ok(app.session.task, 'and the task still exists');
     } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeSandbox(cwd);
       delete process.env.LAIN_PROVIDER;
       delete process.env.LAIN_MOCK_SCRIPT;
     }
@@ -342,7 +393,7 @@ module.exports = async function () {
       assert.strictEqual(e.requests, rec.usage.requests,
         'the ledger and the turn record agree about how many requests happened');
     } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeSandbox(cwd);
       delete process.env.LAIN_PROVIDER;
       delete process.env.LAIN_MOCK_SCRIPT;
     }

@@ -110,6 +110,7 @@ impl Link {
 }
 
 pub struct Remote {
+    pub gateway: crate::bot::Mailbox,
     dir: PathBuf,
     /// THE SECRET. Private, and there is no accessor that returns it to a
     /// client — `telegram.rs` takes a copy to make a request with and that is
@@ -156,6 +157,7 @@ pub fn now() -> u64 {
 impl Remote {
     pub fn open(dir: PathBuf) -> Remote {
         let mut r = Remote {
+            gateway: crate::bot::Mailbox::open(dir.clone()),
             dir,
             token: String::new(),
             identity: Identity::default(),

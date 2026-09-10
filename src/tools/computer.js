@@ -13,10 +13,13 @@
  * LAIN decides how, whether, and what may be claimed afterwards. Which bridge
  * carries it is an implementation detail the model never has to learn.
  *
- * THE RAW `probe` TOOL STAYS, and is a different thing. Memory, breakpoints,
- * disassembly and findings ARE the Probe's domain — an external instrument LAIN
- * asks. Screen and input are not: they are how anyone uses a computer, and LAIN
- * owns them.
+ * THE RAW INSTRUMENT IS NOT THIS. Memory, breakpoints, disassembly and
+ * findings belong to an external instrument (lain-probe, owned by the LAIN
+ * Harness, not this CLI) — screen and input are not that: they are how anyone
+ * uses a computer, and LAIN owns them. (The raw `probe` tool that exposed the
+ * instrument directly — `probe{op:"memory.read"}` — was removed from LAIN CLI
+ * with the Probe integration in 2026-09; the desktop bridge below is the only
+ * transport.)
  *
  * IT ONLY EXISTS WHEN SOMETHING CAN CARRY IT. `tools/index.js` includes this
  * only while a transport is connected, so an ordinary coding session is never

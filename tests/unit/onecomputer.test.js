@@ -34,6 +34,25 @@ module.exports = async function () {
     assert.throws(() => require('../../src/tools/desktop'), /Cannot find module/);
   });
 
+  // The remaining tests here were pinned against the `probe` TOOL — the
+  // redirect, the dialect-derived movedTo, the schema groups — and that tool was
+  // removed from LAIN CLI with the Probe integration in 2026-09 (the instrument
+  // it exposed belongs to the LAIN Harness now; see the header of
+  // src/tools/computer.js). Their coverage falls as follows:
+  //
+  //   `desktop` is not a tool name      kept above — the consolidation it pinned
+  //                                     happened and is permanent
+  //   everything desktop did, computer  kept below — still the reason the
+  //     can do                          subtraction is safe
+  //   the probe redirect (×2) and the   DIED with the tool. A redirect is a
+  //     schema-not-advertising-screen   migration aid for a live tool; with the
+  //                                     tool gone there is nothing to redirect
+  //                                     and nothing to advertise, and keeping
+  //                                     the assertions would be test coverage
+  //                                     pretending the tool exists.
+  //   the Probe keeps what is genuinely DIED with the tool — that was a test of
+  //     its own                          the Harness's instrument, not of LAIN.
+
   await test('ONE: everything `desktop` could do, `computer` can do', () => {
     // The reason the subtraction is safe. `computer` speaks both dialects, so
     // removing the bridge's own tool removed no capability at all.
@@ -46,51 +65,14 @@ module.exports = async function () {
     assert.ok(computer.NAMES.includes('ocr'), 'and it does more: the bridge never had OCR');
   });
 
-  await test('ONE: the probe tool REDIRECTS screen and input, and says where', () => {
-    // Redirected, not silently dropped: the model is told the operation exists
-    // and what it is called now, so this costs one call and never a capability.
-    const src = require('fs').readFileSync(require.resolve('../../src/tools/probe.js'), 'utf8');
-    assert.ok(/MOVED_TO_COMPUTER/.test(src), 'the redirect must exist');
-    assert.ok(/movedTo/.test(src), 'and it must name the replacement');
-  });
-
-  await test('ONE: the redirect is DERIVED from the dialect, so they cannot drift', () => {
-    // Adding an operation to computer.js retires the probe spelling by itself.
-    // Anything hand-written here would be a second list to keep in step, which
-    // is the very problem being removed.
-    const src = require('fs').readFileSync(require.resolve('../../src/tools/probe.js'), 'utf8');
-    assert.ok(/DIALECT/.test(src), 'the map must come from computer.js, not be retyped');
-    const moved = (op) => {
-      for (const [ours, theirs] of Object.entries(computer.DIALECT.probe)) {
-        if (theirs && theirs === op) return ours;
-      }
-      return null;
-    };
-    assert.strictEqual(moved('input.keyboard.tap'), 'key');
-    assert.strictEqual(moved('input.mouse.click'), 'click');
-    assert.strictEqual(moved('vision.ocr'), 'ocr');
-    assert.strictEqual(moved('memory.scan'), null, 'memory is genuinely the Probe\'s');
-    assert.strictEqual(moved('investigate.behavior'), null, 'and so is an investigation');
-  });
-
-  await test('ONE: the probe SCHEMA no longer advertises screen or input', () => {
-    // What the model reads is the schema, not the dispatch. A tool that refuses
-    // an operation it still advertises is a tool that wastes a call to say no.
-    const src = require('fs').readFileSync(require.resolve('../../src/tools/probe.js'), 'utf8');
-    const groups = src.slice(src.indexOf('const GROUPS'), src.indexOf('const schema'));
-    assert.ok(!/^\s*vision:/m.test(groups), 'vision must not be an advertised group');
-    assert.ok(!/^\s*input:/m.test(groups), 'input must not be an advertised group');
-    const desc = src.slice(src.indexOf('description:'), src.indexOf('parameters:'));
-    assert.ok(/computer/.test(desc), 'and the description must point at the tool that owns them');
-  });
-
-  await test('ONE: the Probe keeps what is genuinely its own', () => {
-    const src = require('fs').readFileSync(require.resolve('../../src/tools/probe.js'), 'utf8');
-    const groups = src.slice(src.indexOf('const GROUPS'), src.indexOf('const schema'));
-    for (const kept of ['memory', 'debug', 'code', 'finding', 'process', 'investigate']) {
-      assert.ok(new RegExp(`^\\s*${kept}:`, 'm').test(groups),
-        `${kept} is the Probe's domain and must stay`);
-    }
+  await test('ONE: the `probe` tool is not a tool name either, in any configuration', () => {
+    // The third way to press one key, retired with the Probe integration in
+    // 2026-09 (the instrument it exposed belongs to the LAIN Harness, not this
+    // CLI). Gone means gone: not advertised, not dispatchable, not on disk.
+    assert.ok(!tools.names().includes('probe'),
+      'one vocabulary — the instrument is not a tool here any more');
+    assert.strictEqual(tools.has('probe'), false);
+    assert.throws(() => require('../../src/tools/probe'), /Cannot find module/);
   });
 
   await test('ONE: schemas and dispatch still match exactly', () => {

@@ -85,4 +85,31 @@ function backoffFor(attempt) {
   return Math.max(1, Math.round(base - spread + Math.random() * spread * 2));
 }
 
-module.exports = { MAX_RETRIES, BACKOFF_MS, JITTER, backoffFor };
+
+/**
+ * AN ABORTABLE WAIT — `await sleep(ms, signal)`.
+ *
+ * It lived in turn.js, beside the retry loop that uses it, until that file reached
+ * the god-object guard. It belongs here: this module decides HOW LONG to wait
+ * before trying again, and this is the waiting.
+ *
+ * ABORT RESOLVES, IT DOES NOT REJECT. Escape during a rate-limit wait is not an
+ * error — it is the user declining to wait — and the caller checks the signal
+ * afterwards to tell the two endings apart. The listener is removed either way, so
+ * a long session cannot accumulate one per retry.
+ */
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal && signal.aborted) return resolve();
+    const t = setTimeout(done, ms);
+    function done() {
+      clearTimeout(t);
+      if (signal) signal.removeEventListener('abort', done);
+      resolve();
+    }
+    if (signal) signal.addEventListener('abort', done, { once: true });
+  });
+}
+
+module.exports = { MAX_RETRIES, BACKOFF_MS, JITTER, backoffFor, sleep };
+

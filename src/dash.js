@@ -3,9 +3,9 @@
 /**
  * `/dash` — REMOTE CONTROL, from a phone on the sofa.
  *
- * Not `/rc`. `/rc` is release-candidate readiness and answers "is LAIN ready?";
- * this is a small web dashboard that answers "what is LAIN doing, and can I
- * nudge it from over here?". The two are never merged again.
+ * Not readiness, which answers "is LAIN ready?" and lives at `/ready`. This is
+ * a small web dashboard that answers "what is LAIN doing, and can I nudge it
+ * from over here?". The two are never merged again.
  *
  * WHAT MAKES IT SAFE ENOUGH TO EXIST:
  *
@@ -196,6 +196,15 @@ function dashState(app) {
       active: Boolean(desktop.permissions && desktop.permissions.active),
       activity: (desktop.activity || []).slice(-6).map((a) => a.text),
     },
+    // ---- THE HARNESS, AS A PROJECTION AND NOT A SECOND OPINION -----------
+    //
+    // The dashboard has always been a WINDOW: it renders what LAIN owns and
+    // computes nothing of its own. The harness gave it a task state, a
+    // verification verdict and a list of receipts that no window could have
+    // derived from a transcript — so they are handed over here, in the one
+    // shape every surface reads. `null` when no task has been opened, which is
+    // a real state and must not render as an empty one. See harnesssurface.js.
+    harness: (() => { try { return require('./harnesssurface').project(app); } catch { return null; } })(),
     control: {
       actions: state ? state.actions : false,
       bind: state ? state.host : null,

@@ -65,18 +65,22 @@ module.exports = async function () {
     const narration = [];
     for (let g = 0; g < 5; g++) {
       for (let k = 0; k < 6; k++) {
-        actions.push({ step: g, name: 'read_file', target: 'f' + g + '_' + k + '.js', ok: true });
+        // EDITS, NOT READS. A successful read is live state and no longer takes a
+        // row in the conversation at all (ui/feed.js `durable`), so a flood of
+        // them cannot test the run compaction any more. A thirty-edit turn is
+        // just as real and is exactly the shape this guards against.
+        actions.push({ step: g, name: 'edit_file', target: 'f' + g + '_' + k + '.js', ok: true });
       }
       narration.push({ step: g, text: 'Finding ' + g + ': module ' + g + ' never dispatches.' });
     }
     const session = { turns: [{ userInput: 'audit', text: 'Done.', narration, actions }] };
     const rows = views.activity({ session, width: 96 }).map(strip);
 
-    const callRows = rows.filter((r) => /✓ Read/.test(r));
+    const callRows = rows.filter((r) => /✓ edited/.test(r));
     assert.ok(callRows.length < 20,
       'thirty calls do not become thirty rows: ' + callRows.length + NL + rows.join(NL));
     // THE COUNT IS STILL TRUE — a folded run says how many it stands for.
-    assert.ok(rows.some((r) => /✓ Read ×\d+/.test(r)), 'a folded run states its count');
+    assert.ok(rows.some((r) => /✓ edited ×\d+/.test(r)), 'a folded run states its count');
     // AND THE CURRENT RUN IS NOT FOLDED WITH THE REST.
     for (const f of ['f4_0.js', 'f4_1.js', 'f4_2.js', 'f4_3.js', 'f4_4.js', 'f4_5.js']) {
       assert.ok(rows.some((r) => r.includes(f)), 'the current run keeps ' + f);
@@ -127,12 +131,20 @@ module.exports = async function () {
       ],
     }] };
     const rows = views.activity({ session, width: 96 }).map(strip);
-    assert.ok(rows.some((r) => /Edited python\.js\s+\+75 -40/.test(r)),
+    assert.ok(rows.some((r) => /edited · python\.js\s+\+75 -40/.test(r)),
       `the edit keeps its size:${NL}${rows.join(NL)}`);
-    assert.ok(rows.some((r) => /Edited config\.js\s+\+4 -1/.test(r)), 'and so does the next one');
+    assert.ok(rows.some((r) => /edited · config\.js\s+\+4 -1/.test(r)), 'and so does the next one');
     // A READ CHANGED NOTHING, and must not wear a `+0 -0` that says it did.
-    assert.ok(rows.some((r) => /Read router\.js\s*$/.test(r)),
-      `a call that changed nothing carries no counts:${NL}${rows.join(NL)}`);
+    //
+    // IT IS NOT DRAWN AT ALL NOW, which is the stronger form of the same
+    // property: a successful read is live state and leaves no row behind
+    // (ui/feed.js `durable`). So both halves are asserted — the read is gone,
+    // and nothing that IS drawn invents a `+0 -0` for a call that changed
+    // nothing.
+    assert.ok(!rows.some((r) => /read · router\.js/.test(r)),
+      `a routine read leaves no row:${NL}${rows.join(NL)}`);
+    assert.ok(!rows.some((r) => /\+0 -0/.test(r)),
+      `no row claims a change it did not make:${NL}${rows.join(NL)}`);
   });
 
   // ------------------------------------------------------- tool compaction --
@@ -147,12 +159,12 @@ module.exports = async function () {
     const run = [...calls(8, 'grep'), ...calls(8, 'read_file')];
     const out = feed.compactRuns(run);
     assert.ok(out.length < run.length, 'sixteen calls must not cost sixteen rows');
-    assert.match(out[0].text, /Searched ×8 · Read ×4/, `got: ${out[0].text}`);
+    assert.match(out[0].text, /searched ×8 · read ×4/, `got: ${out[0].text}`);
     assert.strictEqual(out[0].compacted, true);
     // The most recent four survive verbatim: what it is doing NOW is the part
     // worth reading in full.
     assert.strictEqual(out.length, 1 + feed.KEEP);
-    assert.match(out[out.length - 1].text, /Read src\/f7\.js/);
+    assert.match(out[out.length - 1].text, /read · src\/f7\.js/);
   });
 
   await test('FLOOD: the count is TRUE — nothing is dropped without being counted', () => {
@@ -245,7 +257,10 @@ module.exports = async function () {
     const story = new Story();
     story.noteAction({ name: 'grep', target: '/x/', ok: true });
     story.noteSystem('read_file has returned identical output 3 times', 'warn');
-    story.noteAction({ name: 'read_file', target: 'a.js', ok: true });
+    // AN EDIT, so there is still a row BELOW the notice to be above. A
+    // successful read no longer takes one (ui/feed.js `durable`), and this test
+    // is about the notice's POSITION among the calls.
+    story.noteAction({ name: 'edit_file', target: 'a.js', ok: true });
     assert.strictEqual(story.notes[0].after, 1, 'anchored to what had happened when it was said');
 
     const lines = views.activity({
@@ -256,7 +271,7 @@ module.exports = async function () {
     });
     const body = lines.join('\n');
     const noteAt = body.indexOf('identical output 3 times');
-    const lastCall = body.indexOf('Read a.js');
+    const lastCall = body.indexOf('edited · a.js');
     assert.ok(noteAt > 0, 'the notice must be on screen');
     assert.ok(noteAt < lastCall, 'and above the call that came after it, not below everything');
     // Labelled as the PROGRAM speaking, which is a different voice from the
@@ -372,13 +387,67 @@ module.exports = async function () {
     assert.strictEqual(good.word, 'DONE');
   });
 
+  await test('SAID: a reasoning-only turn shows the thinking, not a blank answer', () => {
+    // ------------------------------------------------------------------
+    // THE REGRESSION THIS PINS, and it was introduced by removing the pinned
+    // task banner rather than by anything about reasoning.
+    //
+    // Some models put all their prose in `reasoning` and leave `content` empty.
+    // The feed draws the turn's reasoning when LAIN said nothing, so the pane
+    // is not blank. That check used to be `!said.length` — and it worked only
+    // because the FIRST user message was suppressed, the banner being the thing
+    // showing it. With the banner gone the feed draws every message, so the
+    // list was never empty, and a reasoning-only reply produced a conversation
+    // containing the question and no answer at all.
+    //
+    // "Nothing was said" is a claim about LAIN, so that is what is asked.
+    // ------------------------------------------------------------------
+    const lines = views.activity({
+      session: {
+        task: { objective: 'hello' },
+        turns: [{
+          userInput: 'hello',
+          text: '',
+          reasoning: 'DISTINCTIVE_THOUGHT the user said hello, so I greet them.',
+          actions: [], errors: [],
+        }],
+      },
+      width: 90,
+    });
+    const text = strip(lines.join(NL));
+    assert.ok(/hello/.test(text), 'the question the user asked is drawn');
+    assert.ok(/DISTINCTIVE_THOUGHT/.test(text),
+      `a model that produced only reasoning must not leave a blank answer:${String.fromCharCode(10)}${text}`);
+  });
+
+  await test('SAID: a turn WITH an answer does not replay its working-out underneath', () => {
+    // The other half, and the reason the fallback is conditional at all:
+    // thinking is not speech, and burying an answer in the reasoning that led
+    // to it is worse than showing neither.
+    const lines = views.activity({
+      session: {
+        turns: [{
+          userInput: 'hello',
+          text: 'Hello there.',
+          reasoning: 'DISTINCTIVE_THOUGHT working out how to greet them.',
+          actions: [], errors: [],
+        }],
+      },
+      width: 90,
+    });
+    const text = strip(lines.join(NL));
+    assert.ok(/Hello there\./.test(text), 'the answer is drawn');
+    assert.ok(!/DISTINCTIVE_THOUGHT/.test(text), 'and the working-out is not');
+  });
+
   // ------------------------------------------------------------- viewport --
 
   await test('VIEWPORT: the three states are distinguishable', () => {
     const sc = new Screen({ out: { write() {}, columns: 80, rows: 24 } });
-    // FOLLOW_LIVE is a property of a FEED. The default view is CONTEXT, which
-    // is a document and does not follow anything — see ui/tabs.js growsUpward.
-    sc.setView('activity');
+    // FOLLOW_LIVE is the surface's own default. It used to be a per-pane
+    // property — a document pinned to its end does not follow anything — and
+    // with one surface, which is a running account, the answer is fixed.
+    assert.strictEqual(sc.stickToBottom, true, 'the conversation follows live from the first frame');
     assert.strictEqual(sc.viewportState(5), 'FOLLOW_LIVE');
     sc.stickToBottom = false;
     sc._anchorSpoken = 5;
@@ -403,7 +472,7 @@ module.exports = async function () {
 
   await test('VIEWPORT: following means nothing is unread', () => {
     const sc = new Screen({ out: { write() {}, columns: 80, rows: 24 } });
-    sc.setView('activity');                       // following is a FEED property
+    // Following is what the one surface does; there is no pane to select.
     const lines = Object.assign(new Array(5).fill('x'), { spoken: 9 });
     assert.strictEqual(sc.scrollHint(lines, 20), '', 'no indicator while at the bottom of a short feed');
   });
@@ -428,10 +497,16 @@ module.exports = async function () {
     assert.strictEqual(describeTarget('read_file', { path: 'src/a.js' }), 'src/a.js', 'a read is still about its file');
   });
 
-  await test('OUTPUT: Context points at OUTPUT rather than carrying a test log', () => {
+  await test('OUTPUT: the conversation POINTS AT a long result rather than carrying it', () => {
+    // THE POINTER NAMES A COMMAND, NOT A PANE. It used to read `full output in
+    // OUTPUT (4)` — a keystroke for a pane that went with the tabs in the
+    // one-surface rewrite, so the row spent its life directing people to a
+    // place that no longer existed. `/jobs` is where a command's whole account
+    // actually is.
     const out = [];
     feed.pushAction(out, { name: 'run_bash', target: 'npm test', ok: true, brief: false, output: true });
-    assert.match(texts(out).join('\n'), /full output in OUTPUT/);
+    assert.match(texts(out).join('\n'), /\/jobs/, 'the pointer names a command that exists');
+    assert.ok(!texts(out).join('\n').includes('OUTPUT'), 'and not a pane that does not');
     const quiet = [];
     feed.pushAction(quiet, { name: 'read_file', target: 'a.js', ok: true, brief: false, file: true });
     assert.strictEqual(quiet.length, 1, 'a file read points nowhere — the file went to the model');
@@ -456,10 +531,13 @@ module.exports = async function () {
     const out = [];
     feed.pushModel(out, 'First paragraph.\n\nSecond paragraph.');
     const rows = feed.renderFeed(out, 80);
-    // NO LABEL AND NO INDENT. `LAIN` named the application to the person who
-    // typed `lain` to start it, and dragged four spaces behind it — spent on
-    // the one thing on screen they were actually reading.
-    assert.deepStrictEqual(rows, ['  First paragraph.', '', '  Second paragraph.']);
+    // NO LABEL AND NO INDENT AT ALL. `LAIN` named the application to the person
+    // who typed `lain` to start it, and dragged four spaces behind it — spent on
+    // the one thing on screen they were actually reading. The remaining two went
+    // with the base indent: the content frame owns the outer margin now and the
+    // layout applies it (ui/frame.js `contentBounds`), so a row this function
+    // returns starts at the margin by construction.
+    assert.deepStrictEqual(rows, ['First paragraph.', '', 'Second paragraph.']);
   });
 
   await test('SHAPE: a long line still folds to the pane', () => {
@@ -503,11 +581,11 @@ module.exports = async function () {
     feed.pushModel(out, 'Decision: implement the think-ahead via worker threads.');
     const rows = feed.renderFeed(out, 96);
     assert.deepStrictEqual(rows, [
-      '  That IS the experiment: measure how much TT reuse there is.',
+      'That IS the experiment: measure how much TT reuse there is.',
       '',
-      '  TRUE parallelism needs workers.',
+      'TRUE parallelism needs workers.',
       '',
-      '  Decision: implement the think-ahead via worker threads.',
+      'Decision: implement the think-ahead via worker threads.',
     ]);
   });
 
@@ -529,7 +607,7 @@ module.exports = async function () {
     feed.pushAction(out, { name: 'read_file', target: 'a.js', ok: true });
     feed.pushModel(out, 'One.');
     const text = feed.renderFeed(out, 90).join('\n');
-    assert.match(text, /│ ✓ Read a\.js/, 'the call keeps its quoted gutter');
-    assert.match(text, /^ {2}One\.$/m, 'and the prose sits at the margin');
+    assert.match(text, /│ ✓ read · a\.js/, 'the call keeps its quoted gutter');
+    assert.match(text, /^One\.$/m, 'and the prose sits at the margin');
   });
 };

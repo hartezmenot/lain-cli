@@ -82,6 +82,14 @@ async function ensureTrusted(app) {
  * @returns {boolean} whether the operation may proceed
  */
 async function askOutside(app, { target, why, write = false } = {}) {
+  if (require('./interaction').port(app)) {
+    const answer = await require('./interaction').ask(app, {
+      title: write ? 'Allow this machine change?' : 'Allow access to this path?',
+      question: `${target}\n${why || ''}`,
+      options: ['Allow just this one', 'No'],
+    });
+    return answer === 'Allow just this one';
+  }
   if (!app.ui || !app.ui.enabled) return false;   // nobody to ask means no
 
   const { KIND, MODE } = require('./ui/panel');

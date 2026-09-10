@@ -25,7 +25,7 @@
  */
 
 const assert = require('assert');
-const { test, runCli, tmpdir, frames, rowsOf, assertIncludes, firstTabLabel } = require('../helpers');
+const { test, runCli, tmpdir, frames, rowsOf, assertIncludes, isRuleRow } = require('../helpers');
 
 const E = String.fromCharCode(27);
 const plain = (s) => String(s).split(new RegExp(E + '\\[[0-9;?]*[A-Za-z]', 'g')).join('');
@@ -60,7 +60,16 @@ function framePair(out, marker) {
 }
 
 /** The row index of the input box's own border, or -1. */
-const inputAt = (rows) => rows.findIndex((l) => l.includes('─ INPUT ─'));
+/**
+ * WHERE THE INPUT IS, on a set of drawn rows.
+ *
+ * It used to be found by its border label (`─ INPUT ─`). The region has no
+ * border and no label now — it is a grey fill (ui/inputbox.js) — so the anchor
+ * is what it says when it is empty, which is the row a person looks at anyway.
+ */
+const inputAt = (rows) => rows.findIndex((l) => /Ask LAIN|ANSWER — /.test(l));
+/** The header's rule — the boundary between metadata and the conversation. */
+const feedAt = (rows) => rows.findIndex((l) => isRuleRow(l));
 
 const TUI = { LAIN_FORCE_TUI: '1', COLUMNS: '100', LINES: '32' };
 
@@ -80,16 +89,16 @@ module.exports = async function () {
     // IN THE PANEL `/` AND `/model` ALREADY OPEN, titled by the command. The
     // first attempt drew a second window of its own just above the input, which
     // overlapped this one; the title is what proves which surface this is.
-    assertIncludes(out, '/DASH', 'the command panel is titled by the command');
+    assertIncludes(out, '/dash', 'the command panel is titled by the command');
 
     // AND IT MUST BE BELOW THE CONVERSATION.
-    const { withIdx, withRows } = framePair(r.out, '/DASH');
+    const { withIdx, withRows } = framePair(r.out, '/dash');
     assert.ok(withIdx >= 0, 'a frame must have shown the panel');
-    const panelAt = withRows.findIndex((l) => l.includes('/DASH'));
-    const ctxAt = withRows.findIndex((l) => l.includes(firstTabLabel()));
+    const panelAt = withRows.findIndex((l) => l.includes('/dash'));
+    const ctxAt = feedAt(withRows);
     assert.ok(panelAt > 0, `the panel must be drawn as its own row:\n${withRows.join('\n')}`);
-    assert.ok(ctxAt >= 0, 'the context pane must be drawn');
-    assert.ok(panelAt > ctxAt, `the panel must be BELOW the conversation (panel ${panelAt}, context ${ctxAt})`);
+    assert.ok(ctxAt >= 0, 'the conversation must be drawn');
+    assert.ok(panelAt > ctxAt, `the panel must be BELOW the conversation (panel ${panelAt}, rule ${ctxAt})`);
   });
 
   await test('SURFACE: the URL and token are NOT glued into the transcript', async () => {
@@ -106,7 +115,7 @@ module.exports = async function () {
       script: [],
       timeoutMs: 40000,
     });
-    const { withIdx, withoutIdx, withoutRows } = framePair(r.out, '/DASH');
+    const { withIdx, withoutIdx, withoutRows } = framePair(r.out, '/dash');
     assert.ok(withIdx >= 0, 'the surface must have been shown in the first place');
     assert.ok(withoutIdx > withIdx, 'Esc must have produced a frame without it');
     const screen = withoutRows.join('\n');
@@ -124,7 +133,7 @@ module.exports = async function () {
       script: [],
       timeoutMs: 40000,
     });
-    const { withIdx, withoutIdx, withRows, withoutRows } = framePair(r.out, '/DASH');
+    const { withIdx, withoutIdx, withRows, withoutRows } = framePair(r.out, '/dash');
     assert.ok(withIdx >= 0, 'a frame must have shown the panel');
     assert.ok(withoutIdx > withIdx, 'Esc must have closed it');
 
@@ -138,7 +147,7 @@ module.exports = async function () {
     // with the status strip between it and the line you type into. The CLUSTER
     // is what stays on the floor and the conversation gives up the rows.
     // Measured properly in smoke/geometry.test.js.
-    const panelTop = withRows.findIndex((l) => l.includes('/DASH'));
+    const panelTop = withRows.findIndex((l) => l.includes('/dash'));
     const inputRow = inputAt(withRows);
     assert.ok(inputRow >= 0, 'the input box must be drawn');
     assert.ok(panelTop > inputRow,
@@ -171,7 +180,14 @@ module.exports = async function () {
     });
     const out = plain(r.out);
     assertIncludes(out, 'check the parser', 'the step itself must be recorded');
-    assert.ok(!out.includes('/PLAN'),
-      'the work record must not be routed into the machinery panel');
+    // ---- THE PANEL'S TITLE ROW, NOT THE WORD -------------------------
+    //
+    // It was `!out.includes('/PLAN')`, which worked only because the panel
+    // SHOUTED its title: the command the user typed is `/plan step …` and appears
+    // in the conversation, so the lower-case word is in the output either way. The
+    // panel titles itself in a sentence-case row now, so the landmark has to be
+    // the ROW — which is what the claim was always about.
+    const titled = frames(r.out).some((f) => rowsOf(f).some((row) => row.trim() === '/plan'));
+    assert.ok(!titled, 'the work record must not be routed into the machinery panel');
   });
 };

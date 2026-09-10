@@ -35,6 +35,12 @@ const paste = require('./pastebuffer');
 const { PASTE_START, PASTE_END } = paste;
 
 const MAX_HISTORY = 200;
+/**
+ * How many pasted blocks one line remembers, for the COMPOSER's drawing only.
+ * Forgetting the oldest makes that block render in full — a cosmetic
+ * regression; the content is in the buffer regardless. See ui/composer.js.
+ */
+const MAX_PASTE_RECORDS = 16;
 /** How long a lone ESC waits to see whether it is really an arrow key. */
 const ESC_WAIT_MS = 40;
 
@@ -53,6 +59,14 @@ class Input extends EventEmitter {
     this.pasteBuf = '';
     /** Did any part of the line being edited arrive as a paste? */
     this.pastedInLine = false;
+    /**
+     * WHAT arrived as a paste in the line being edited, oldest first — never
+     * WHERE it is. PRESENTATION ONLY: the composer finds each block by
+     * searching the buffer, so nothing here moves when the line is edited and
+     * nothing here can point at the wrong bytes. `this.line` is the whole of
+     * what is sent, and `_emitInput` never looks at this. See ui/composer.js.
+     */
+    this.pastesInLine = [];
     this.closed = false;
     this.promptStr = '';
     /** When the TUI owns the input row, the reader must not echo. */
@@ -146,9 +160,9 @@ class Input extends EventEmitter {
    * it is a dead end: there was no way to turn this off and no way to copy.
    *
    * So the capture is now a preference rather than a fact. Off, LAIN loses the
-   * click-to-position caret and the clickable tabs and the terminal behaves
-   * exactly as it did before LAIN started — which is a trade only the person
-   * looking at the screen can make.
+   * click-to-position caret and the feed's click targets, and the terminal
+   * behaves exactly as it did before LAIN started — which is a trade only the
+   * person looking at the screen can make.
    */
   disableMouse() {
     this.mouse = false;
@@ -172,7 +186,7 @@ class Input extends EventEmitter {
     // nothing; submitting it spends a request on something nobody agreed to.
     const pending = (this.line + this.buf).trim();
     const wasPasted = this.pastedInLine;
-    if (pending && !wasPasted) { this.line = ''; this.cursor = 0; this.buf = ''; this.pastedInLine = false; this._emitInput(pending, false); }
+    if (pending && !wasPasted) { this.line = ''; this.cursor = 0; this.buf = ''; this.pastedInLine = false; this.pastesInLine.length = 0; this._emitInput(pending, false); }
     this.closed = true;
     this.emit('close');
   }
@@ -208,6 +222,7 @@ class Input extends EventEmitter {
     this.line = String(text == null ? '' : text);
     this.cursor = this.line.length;
     this.pastedInLine = false;
+    this.pastesInLine.length = 0;
     this._resetUndo();
     this.emit('edit', this.line);
     return this.line;
@@ -282,7 +297,7 @@ class Input extends EventEmitter {
     this.line = this.line.slice(0, r.start) + this.line.slice(r.end);
     this.cursor = r.start;
     this.clearSelection();
-    if (this.line === '') this.pastedInLine = false;
+    if (this.line === '') { this.pastedInLine = false; this.pastesInLine.length = 0; }
     return true;
   }
 
@@ -313,7 +328,12 @@ class Input extends EventEmitter {
     const s = String(text == null ? '' : text);
     if (!s) return false;
     this._insert(s, pasted ? 'paste' : 'insert');
-    if (pasted) this.pastedInLine = true;
+    if (pasted) {
+      this.pastedInLine = true;
+      // RECORDED FOR THE DRAWING, AND ONLY FOR THE DRAWING — see the field.
+      this.pastesInLine.push(s);
+      if (this.pastesInLine.length > MAX_PASTE_RECORDS) this.pastesInLine.shift();
+    }
     return true;
   }
 
@@ -376,7 +396,7 @@ class Input extends EventEmitter {
     this._pushUndo('delete-word');
     this.line = before.slice(0, i) + this.line.slice(this.cursor);
     this.cursor = i;
-    if (this.line === '') this.pastedInLine = false;
+    if (this.line === '') { this.pastedInLine = false; this.pastesInLine.length = 0; }
     this.emit('edit', this.line);
     return true;
   }
@@ -398,7 +418,7 @@ class Input extends EventEmitter {
     this.cursor = Math.max(0, Math.min(this.line.length, snap.cursor));
     this.sel.anchor = snap.selAnchor;
     this.sel.head = snap.selHead;
-    if (this.line === '') this.pastedInLine = false;
+    if (this.line === '') { this.pastedInLine = false; this.pastesInLine.length = 0; }
     this.emit('edit', this.line);
   }
 
@@ -598,7 +618,7 @@ class Input extends EventEmitter {
         this._pushUndo('delete-back');
         this.line = this.line.slice(0, this.cursor - 1) + this.line.slice(this.cursor);
         this.cursor -= 1;
-        if (this.line === '') this.pastedInLine = false;
+        if (this.line === '') { this.pastedInLine = false; this.pastesInLine.length = 0; }
         if (this._echoing) this.stdout.write('\b \b');
         this.emit('edit', this.line);
       }

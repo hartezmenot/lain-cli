@@ -236,4 +236,40 @@ function explain(err) {
   return { ...c, layer: LAYER[c.kind] || LAYER[KIND.UNKNOWN] };
 }
 
-module.exports = { KIND, LIMIT, LAYER, classify, explain, isProviderFailure, retryAfterMs };
+/**
+ * ------------------------------------------------------------------------
+ * HOW A RETRY IS NAMED, AND HOW THE PROVIDER'S OWN WORDS ARE CLIPPED.
+ *
+ * These lived in turn.js, beside the retry loop that uses them, until that file
+ * reached the god-object guard. The seam is a real one and was always here:
+ * everything in turn.js RUNS a turn, and this file decides what a failure IS.
+ * Naming one and quoting one are the same concern as classifying one.
+ */
+/**
+ * THE CONDITION, IN ONE WORD — what a retry is called on screen.
+ *
+ * `RATE_LIMITED` is the one a person acts on differently (wait, or change route),
+ * so it keeps its own word; everything else retriable is the road being busy.
+ */
+function retryWord(failure) {
+  return failure && failure.kind === KIND.RATE_LIMITED ? 'Rate limited' : 'Provider busy';
+}
+
+/**
+ * THE PROVIDER'S OWN REASON, AS ONE SENTENCE.
+ *
+ * Some answer a refusal with a whole JSON object, and the durable notice that used
+ * to carry this printed all of it. The status code and the first clause are the
+ * useful part; the rest is on `record.errors` for /status to show.
+ */
+function shortReason(failure) {
+  const code = failure && failure.status ? `${failure.status} ` : '';
+  const raw = String((failure && failure.message) || 'no answer').replace(/\s+/g, ' ').trim();
+  const head = raw.split(/ [-—] |[{[]/)[0].trim() || raw;
+  return (code + head).slice(0, 60);
+}
+
+module.exports = {
+  KIND, LIMIT, LAYER, classify, explain, isProviderFailure, retryAfterMs,
+  retryWord, shortReason,
+};

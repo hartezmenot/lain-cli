@@ -162,6 +162,11 @@ fn poll_loop(kernel: Arc<Kernel>, generation: u64) {
             return;
         }
 
+        if !lock(&kernel).gateway.can_poll() {
+            thread::sleep(Duration::from_millis(500));
+            continue;
+        }
+
         // NO LOCK IS HELD ACROSS THIS. It can take 25 seconds, and `/rc status`
         // in the terminal must answer in one.
         let r = http::call(
@@ -172,7 +177,7 @@ fn poll_loop(kernel: Arc<Kernel>, generation: u64) {
                 ("timeout", POLL_SECS.to_string()),
                 // Only what this adapter understands: no edits, joins,
                 // reactions or channel posts will ever arrive.
-                ("allowed_updates", "[\"message\"]".to_string()),
+                ("allowed_updates", "[\"message\",\"callback_query\"]".to_string()),
             ],
             HTTP_TIMEOUT_SECS,
         );
@@ -222,6 +227,7 @@ fn poll_loop(kernel: Arc<Kernel>, generation: u64) {
             _ => Vec::new(),
         };
         for u in updates {
+            if !lock(&kernel).gateway.can_poll() { break; }
             handle_update(&kernel, generation, &token, &u);
         }
     }
@@ -235,6 +241,21 @@ fn handle_update(kernel: &Arc<Kernel>, generation: u64, token: &str, u: &Value) 
         Some(n) => n as i64,
         None => return,
     };
+
+    // Gateway mode is latched across crashes. Never fall through to the legacy
+    // brain or machine-wide session commands when the messaging App is absent.
+    {
+        let mut rem = lock(kernel);
+        if rem.generation != generation { return; }
+        if rem.gateway.enabled {
+            if update_id <= rem.offset { return; }
+            if let Some(event) = crate::bot::normalize(u, &rem) {
+                if !rem.gateway.push(event) { return; }
+            }
+            rem.set_offset(update_id);
+            return;
+        }
+    }
 
     // THE CURSOR MOVES WHETHER OR NOT THE MESSAGE WAS UNDERSTOOD. A sticker LAIN
     // cannot read must still be acknowledged, or Telegram redelivers it forever
@@ -312,6 +333,7 @@ fn send(token: &str, chat_id: i64, text: &str) {
 /// and authorization without standing up a fake Telegram as well is worth the
 /// one extra symbol.
 pub fn respond(kernel: &Arc<Kernel>, chat_id: i64, label: &str, text: &str) -> Option<String> {
+    if lock(kernel).gateway.enabled { return None; }
     let trimmed = text.trim();
     let first = trimmed.split_whitespace().next().unwrap_or("");
     // `/status@lain_remote_bot` — Telegram appends the bot name in groups.
@@ -452,7 +474,7 @@ fn notify_loop(kernel: Arc<Kernel>, generation: u64) {
         if !mine {
             return;
         }
-        if chats.is_empty() {
+        if chats.is_empty() || lock(&kernel).gateway.enabled {
             continue;
         }
 

@@ -52,7 +52,6 @@ const KIND = Object.freeze({
   REFACTOR: 'REFACTOR',
   NEW_PROJECT: 'NEW_PROJECT',
   RESUME: 'RESUME',
-  PROBE: 'PROBE',
 });
 
 /** Read-only modes. Nothing here should be writing to the user's files. */
@@ -199,24 +198,6 @@ function classify(text, ctx = {}) {
     // In an existing project, "build a dashboard" is a feature, not a new repo.
     if (ctx.projectEmpty) return decide(KIND.NEW_PROJECT, 'names a whole project and there is nothing here yet');
     return decide(KIND.IMPLEMENT, 'names a component to build inside the existing project');
-  }
-
-  // 4c. A PROBE TASK, BEFORE AUDIT — a runtime-investigation request, which is
-  //     a different WORKSPACE, not just a different paragraph of guidance. The
-  //     whole point of the Probe being a first-class environment is that
-  //     "inspect this target" must not arrive as a generic request about the
-  //     codebase and let the model search the source tree for a value that only
-  //     exists in a live process. BEFORE AUDIT because the probe verbs overlap
-  //     the audit ones — "inspect" reads as an assessment verb, but what is
-  //     being inspected is a target (a process), which is not something the
-  //     codebase audit covers. A genuine defect report about the codebase does
-  //     not match the probe vocabulary, because nothing in it names a runtime
-  //     value, a target or a probe stage.
-  //     Advisory like every mode: with no Probe connected this still says PROBE,
-  //     and the guidance the mode carries is the honest answer ("none is
-  //     connected").
-  if (require('./probetask').PROBE_TASK_RE.test(one)) {
-    return decide(KIND.PROBE, 'runtime-investigation task: the live target owns it, not the codebase');
   }
 
   // 5. AUDIT before EXPLAIN: "review this project" is an assessment, and both

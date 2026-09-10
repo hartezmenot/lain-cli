@@ -110,6 +110,14 @@ module.exports = async function () {
       // nothing has been run to check" is the record of the work, and a box
       // that closes on Esc is not where a record lives.
       '/plan', '/task',
+      // AND `/verify`, for exactly the same reason and a sharper one. A
+      // verification verdict — what was run, what passed, what could not be
+      // checked — is not LAIN talking about itself; it is the EVIDENCE the task
+      // is judged on. Routed to the command panel it would sit in a box that
+      // closes on Esc, absent from the next turn's context, so the model would
+      // carry on unaware that the suite it was told about is red. The record of
+      // what was proved belongs in the record of the work.
+      '/verify',
     ]);
     const leaking = [];
     for (const [name, cmd] of REGISTRY) {

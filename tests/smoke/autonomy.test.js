@@ -133,7 +133,9 @@ module.exports = async function () {
       timeoutMs: 60000,
     });
     const out = plain(r.out);
-    assert.match(out, /retry \d+\/\d+/, 'the same request must be retried');
+    // `Provider busy · 503 Service Unavailable · retry in 1s · 1/5` — the compact
+    // transient form (turn.js). It was a durable WARN carrying the raw body.
+    assert.match(out, /retry in \d+s/, 'the same request must be retried');
     assert.match(out, /Recovered/, 'and the work must complete once transport recovers');
     assert.ok(!/CONTINUING/.test(out), 'a retry is not a continuation');
   });

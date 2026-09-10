@@ -13,8 +13,9 @@
  * the guarantees. It proves nothing whatever about a key arriving anywhere: a
  * double answers `{ok:true}` whether or not an operating system did anything,
  * which is the very failure under investigation. Delivery is decided by a
- * target that logs what it received — live/wininput.test.js for the machine,
- * live/mcp-input.test.js for the Probe path — and nothing here may claim it.
+ * target that logs what it received — live/wininput.test.js for the machine
+ * (the transport-path test died with the Probe transport in 2026-09) — and
+ * nothing here may claim it.
  */
 
 const assert = require('assert');

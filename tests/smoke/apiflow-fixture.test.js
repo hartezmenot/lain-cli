@@ -110,7 +110,7 @@ const readCfg = (configDir) => JSON.parse(fs.readFileSync(path.join(configDir, '
  * panel, and a leak assertion that fires is a leak.
  */
 function reachedCredentialPanel(out) {
-  assertIncludes(out, 'API CREDENTIAL',
+  assert.match(out, /api credential/i,
     'the masked credential panel never opened — the keystroke arrived before the flow did, '
     + 'so nothing below is testing what it means to test');
 }
@@ -163,15 +163,15 @@ module.exports = async function () {
         'the credential was not sent as the bearer token — masking must not reach the request');
 
       // ---- WHAT THE USER SAW, in order -----------------------------------
-      assertIncludes(out, 'API CREDENTIAL', 'the masked credential question opened');
-      assertIncludes(out, 'WHICH PROVIDER IS THIS CREDENTIAL FOR?', 'the provider picker opened');
+      assert.match(out, /api credential/i, 'the masked credential question opened');
+      assert.match(out, /which provider is this credential for/i, 'the provider picker opened');
       // THE ESCAPE HATCH IS ON THE FIRST SCREEN. The panel shows about ten rows
       // and the list is twenty-one; `Other...` is the one row that works for
       // every provider in existence, so it may not sit below the fold. It was
       // last, and fell two screens down when the list grew.
       assertIncludes(out, 'Other', 'the row that asks rather than guesses must be visible');
-      assertIncludes(out, 'BASE URL', 'Other... asked for an endpoint');
-      assertIncludes(out, 'FETCHING AVAILABLE MODELS', 'discovery was announced');
+      assert.match(out, /base url/i, 'Other... asked for an endpoint');
+      assert.match(out, /fetching available models/i, 'discovery was announced');
       assertIncludes(out, `${SERVED.length} model(s) available`,
         'discovery reported the real count — the defect reported "listed no models" here');
       assert.ok(SERVED.some((m) => out.includes(m)), 'the discovered models reached the screen');

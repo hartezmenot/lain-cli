@@ -35,9 +35,10 @@ module.exports = async function () {
   }
 
   await test('EXEC: a program is spawned DIRECTLY — pid and exit code are its own', async () => {
-    const r = await exec.execute(process.execPath, ['-e', 'process.exit(3)'], { cwd: process.cwd() });
+    const r = await exec.execute(process.execPath, ['-e', 'console.log(process.pid);process.exit(3)'], { cwd: process.cwd() });
     assert.strictEqual(r.exitCode, 3, 'the true exit code, not a shell\'s idea of it');
     assert.ok(r.pid > 0, 'and the real pid, not a shell\'s');
+    assert.strictEqual(r.pid, Number(r.stdout.trim()), 'the public PID belongs to the executed program');
     assert.strictEqual(r.ok, false);
   });
 

@@ -30,6 +30,65 @@ const plain = (s) => String(s).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
  */
 const frames = (out) => String(out).split('\x1b[?25l').slice(1).map(plain);
 
+/**
+ * WHAT THE INPUT REGION HELD, on the raw frames.
+ *
+ * ------------------------------------------------------------------------
+ * IT USED TO BE FOUND BY ITS BORDER AND PROMPT — `│ > text`, `│   continuation`.
+ * The region has neither now: it is a subtle grey fill across the full width,
+ * inset by the content frame's own gutter and with no `> ` at all
+ * (ui/inputbox.js, ui/views.js `content`).
+ *
+ * So the region is found by the CARET, which is a better anchor than the border
+ * ever was: `draw()` ends every frame by parking the cursor on the row being
+ * edited, so the row it names IS the row the user is typing into. `inputRows`
+ * hands back that row and the few above it, which is the span the border used
+ * to enclose — enough for a multi-line prompt, and nothing from the
+ * conversation above it.
+ */
+function rawFrames(out) {
+  return String(out).split('\x1b[?25l');
+}
+
+function inputRows(raw, back = 8) {
+  const marks = [...String(raw).matchAll(/\x1b\[(\d+);(\d+)H/g)];
+  if (!marks.length) return [];
+  const caretRow = Number(marks[marks.length - 1][1]);
+  const rows = {};
+  // ANY COLUMN: the content frame moved every region off column 1
+  // (ui/frame.js `contentBounds`).
+  const re = /\x1b\[(\d+);\d+H((?:[^\x1b]|\x1b\[(?!\d+;\d+H)[0-9;?]*[A-Za-z])*)/g;
+  let m;
+  // THE CARET PARK IS A CURSOR MOVE WITH NO TEXT, and it is the LAST address in
+  // every frame. Letting it win blanks whatever row the caret is on — which,
+  // now that the composer centres its text, is the row the text is ON.
+  while ((m = re.exec(raw))) {
+    const row = Number(m[1]);
+    const text = m[2].replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').trimEnd();
+    if (!text.trim() && rows[row] !== undefined) continue;
+    rows[row] = text;
+  }
+  const out2 = [];
+  for (let r = Math.max(1, caretRow - back); r <= caretRow; r++) {
+    // TRIMMED, NOT UN-PADDED BY ONE. The composer's inset was one column; it is
+    // two now, the same inset the conversation uses so that the prompt and the
+    // prose begin on one column (ui/views.js `content`). A helper that knows the
+    // number breaks when the number changes - and the inset is GEOMETRY, while
+    // this reads CONTENT.
+    if (rows[r] !== undefined) out2.push(rows[r].trim());
+  }
+  return out2;
+}
+
+/** The input region of the first raw frame whose input holds `needle`. */
+function inputShowing(out, needle) {
+  for (const raw of rawFrames(out)) {
+    const rows = inputRows(raw);
+    if (rows.some((l) => needle.test(l))) return rows;
+  }
+  return null;
+}
+
 /** A command-looking, multi-line payload ending in /exit. */
 const PAYLOAD = 'Continue from step 4.\n\nThen run /models.\n\nFinally say done.\n\n/exit';
 
@@ -43,18 +102,22 @@ module.exports = async function () {
       stdinSteps: [PASTE_ON + PAYLOAD + PASTE_OFF, ...leave], stepDelayMs: 900,
       script: [{ text: 'should never run' }], timeoutMs: 40000,
     });
-    // WAS `│ > /exit  [7/7]` on a single row. The input box now GROWS with the
-    // buffer (, layout.geometry), so a seven-line paste is drawn across seven
-    // rows: the FIRST carries the `> ` prompt, the rest are indented under it,
-    // and the caret's row — the last, since a paste leaves the caret at its end
-    // — carries the `[7/7]` marker. What this test is for is unchanged: the
-    // paste reached the box, whole, and started nothing.
-    const seen = frames(r.out);
-    const withText = seen.find((f) => /│ {3}\/exit\s+\[7\/7\]/.test(f));
-    assert.ok(withText, `the pasted text never reached the input box:\n${seen[seen.length - 1] || ''}`);
+    // WAS `│ > /exit  [7/7]` on a single row, then seven bordered rows. The
+    // region now GROWS with the buffer and has no border or prompt at all, so a
+    // seven-line paste is seven plain rows on the grey ground, the caret's row —
+    // the last, since a paste leaves the caret at its end — carrying the `[7/7]`
+    // marker. What this test is for is unchanged: the paste reached the region,
+    // whole, and started nothing.
+    //
+    // THIS PAYLOAD IS DELIBERATELY NOT COLLAPSED. It is 67 characters, well
+    // under the attachment threshold (ui/pasted.js), so it is ordinary text —
+    // which is the point of §11: the composer collapses a WALL, not every paste.
+    const rows = inputShowing(r.out, /\/exit\s+\[7\/7\]/);
+    assert.ok(rows, `the pasted text never reached the input region:\n${frames(r.out).pop() || ''}`);
+    const withText = rows.join('\n');
     // SEVERAL OF THE PASTED LINES ARE ON SCREEN AT ONCE — which a single-row
     // box could never have shown. Not necessarily the FIRST: seven lines do not
-    // fit a six-row box on a 28-row terminal, so the window follows the caret
+    // fit a six-row region on a 28-row terminal, so the window follows the caret
     // and the top scrolls out. That is the bound working, not a failure to draw.
     const visible = ['Then run /models.', 'Finally say done.', '/exit']
       .filter((line) => withText.includes(line));
@@ -69,8 +132,9 @@ module.exports = async function () {
       stdinSteps: [PASTE_ON + PAYLOAD + PASTE_OFF, ...leave], stepDelayMs: 900,
       script: [], timeoutMs: 40000,
     });
-    const withText = frames(r.out).find((f) => /│ {3}\/exit\s+\[7\/7\]/.test(f));
-    assert.ok(withText, 'the paste never reached the input box');
+    const found = inputShowing(r.out, /\/exit\s+\[7\/7\]/);
+    assert.ok(found, 'the paste never reached the input region');
+    const withText = found.join('\n');
     // WAS "ONE row, not seven" — the box was a single row and the `[7/7]`
     // marker was the only report of the real size. The box now grows to show
     // the lines ().
@@ -99,7 +163,11 @@ module.exports = async function () {
     });
     const out = plain(r.out);
     assert.ok(!/MODELS\s+\d/.test(out), 'a pasted command opened the picker');
-    assertIncludes(out, '> /models', 'and it must sit in the input box as text');
+    // AND IT MUST SIT IN THE INPUT REGION AS TEXT. Read off the caret's row
+    // rather than by looking for `> ` — the prompt symbol is gone with the
+    // border, so the row is the row the cursor is parked on.
+    const rows = inputShowing(r.out, /^\/models$/);
+    assert.ok(rows, `the pasted command must sit in the input region as text:\n${out.slice(-400)}`);
   });
 
   await test('PASTE: a pasted /exit does NOT exit', async () => {
@@ -110,9 +178,9 @@ module.exports = async function () {
     });
     // Proof it did not exit: the paste sits in the input box, and LAIN went on
     // drawing frames afterwards — the exit came from the Ctrl+C we sent.
-    const seen = frames(r.out);
-    const at = seen.findIndex((f) => /│ > \/exit/.test(f));
-    assert.ok(at >= 0, 'the pasted text never reached the input box');
+    const seen = rawFrames(r.out);
+    const at = seen.findIndex((f) => inputRows(f).some((l) => /^\/exit$/.test(l)));
+    assert.ok(at >= 0, 'the pasted text never reached the input region');
     assert.ok(seen.length > at + 1, 'LAIN stopped drawing at the paste — it took the /exit');
     assertIncludes(plain(r.out), 'Session saved', 'and it left only when actually asked to');
   });
@@ -149,7 +217,7 @@ module.exports = async function () {
       stdinSteps: ['/', ...leave], stepDelayMs: 900,
       script: [], timeoutMs: 40000,
     });
-    assertIncludes(plain(r.out), 'COMMANDS', 'a typed / must still open the palette');
+    assert.match(plain(r.out), /commands/i, 'a typed / must still open the palette');
   });
 
   await test('PASTE: a paste while the model is working stays text and leaves the task alone', async () => {
@@ -187,8 +255,10 @@ module.exports = async function () {
       script: [{ text: 'a' }, { text: 'b' }], timeoutMs: 45000,
     });
     // ↑ after both were submitted must recall the TYPED one.
-    const recalled = frames(r.out).reverse().find((f) => /│ > \S/.test(f));
-    assert.ok(recalled, 'nothing was ever recalled into the input box');
-    assert.ok(!/│ > pasted body/.test(recalled), `↑ recalled a paste:\n${recalled}`);
+    const recalled = rawFrames(r.out).reverse()
+      .map((f) => inputRows(f, 0)[0] || '')
+      .find((l) => l.trim() && l.trim() !== 'Ask LAIN…');
+    assert.ok(recalled, 'nothing was ever recalled into the input region');
+    assert.ok(!/pasted body/.test(recalled), `↑ recalled a paste: ${JSON.stringify(recalled)}`);
   });
 };

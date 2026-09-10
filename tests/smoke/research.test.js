@@ -18,10 +18,12 @@
  * can be exact about. Reaching the real internet from a test suite makes it
  * fail for reasons that have nothing to do with the code.
  *
- * The network path itself — a real fetch of a real documentation site, and a
- * real search through a real Chromium — was verified live by hand and is
- * recorded in src/research.js and src/searchextract.js. It is deliberately not
- * asserted here.
+ * The network path itself — a real fetch of a real documentation site — was
+ * verified live by hand and is recorded in src/research.js. (A search through
+ * a real Chromium was once recorded alongside it, in src/searchextract.js;
+ * that actor went with the browser in 2026-09, and web search went with it —
+ * what remains is plain fetching, which this tier asserts end to end.) It is
+ * deliberately not asserted here.
  */
 
 const assert = require('assert');
@@ -124,7 +126,8 @@ module.exports = async function () {
       assertIncludes(web[0].text, 'Widget API', 'and it says what was read');
 
       const frame = String(r.out).split('\x1b[?25l').pop() || '';
-      const rows = frame.split(/\x1b\[\d+;1H/).slice(1).map(plain).map((x) => x.replace(/\s+$/, ''));
+      // ANY COLUMN: the content frame moved every region off column 1.
+      const rows = frame.split(/\x1b\[\d+;\d+H/).slice(1).map(plain).map((x) => x.replace(/\s+$/, ''));
       const feed = rows.join(NL);
       assertIncludes(feed, 'Widget API', 'the lookup must be drawn in the conversation');
       // AND IT MUST NOT READ AS SOMETHING THE MODEL SAID. An actor line drawn

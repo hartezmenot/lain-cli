@@ -93,4 +93,135 @@ function rowsIn(lines) {
   return rows.filter((r, i) => i === 0 || rows[i - 1] !== r - 1);
 }
 
-module.exports = { kindOf, label, rowsIn, DECISION, MAX_WORDS };
+/** How much of a long prompt the anchor shows before it trails off. */
+const ANCHOR_MAX = 52;
+
+/**
+ * THE PROMPT AS ONE LINE — what the anchor previews.
+ *
+ * ------------------------------------------------------------------------
+ * A PREVIEW IS NOT THE MESSAGE. A submitted prompt can be four paragraphs with a
+ * forty-kilobyte paste in the middle of it; the anchor is exactly one row. So the
+ * text is flattened for DISPLAY ONLY — and the word display is the whole of it:
+ * the turn record, the conversation and what the model received are untouched.
+ *
+ *   newlines and runs of whitespace  ->  single spaces, so four paragraphs read
+ *                                       as one sentence rather than as a row of
+ *                                       fragments
+ *   terminal control sequences       ->  removed, because a pasted log can carry
+ *                                       them and they would move the caret
+ *   a big paste                      ->  the marker it already shows in the
+ *                                       composer, so the surrounding TYPED text
+ *                                       survives instead of being buried
+ *
+ * WHY THE PASTE MARKER AND NOT THE PASTE. `fix this <40KB of traceback> focus on
+ * auth` has two pieces of human intent in it and one wall. Flattening the wall to
+ * its marker keeps both pieces; flattening the lot keeps neither.
+ *
+ * TRUNCATED BY VISIBLE WIDTH, not by `.length`: a double-width glyph takes two
+ * columns, and a preview measured by characters is a preview that wraps — which
+ * would make the anchor two rows, which it may never be.
+ */
+function preview(text, width = ANCHOR_MAX) {
+  const T = require('./text');
+  let t = T.strip(String(text == null ? '' : text));
+  // ---- A WALL IS MARKED, NOT QUOTED ------------------------------------
+  //
+  // When the prompt is a paste, the first line is almost always the person's own
+  // sentence and everything after it is the payload. Keeping the line and MARKING
+  // the rest preserves the intent; flattening the lot preserves neither the intent
+  // nor the payload, and spends the whole row on a stack trace.
+  try {
+    if (require('./pasted').isPaste(t)) {
+      const lines = t.split(/\r?\n/);
+      const first = lines.find((l) => l.trim()) || '';
+      const rest = lines.slice(lines.indexOf(first) + 1).some((l) => l.trim());
+      t = rest ? `${first.trim()} ${require('./composer').PLACEHOLDER}` : first.trim();
+    }
+  } catch { /* a preview that cannot mark a paste still previews the text */ }
+  // NEWLINES AND RUNS OF WHITESPACE COLLAPSE: four paragraphs read as one
+  // sentence rather than as a row of fragments.
+  t = t.replace(/\s+/g, ' ').trim();
+  // TRUNCATED BY VISIBLE WIDTH. `clip` appends the ellipsis itself, so adding one
+  // here produced `……` — which is what happens when two layers both own the mark.
+  return T.width(t) <= Math.max(8, Math.floor(width)) ? t : T.clip(t, Math.max(8, Math.floor(width)));
+}
+
+/**
+ * THE SCROLL ANCHOR — `USER · fix the continuation bug…`, or null.
+ *
+ * ------------------------------------------------------------------------
+ * THE PROBLEM IT SOLVES. A turn that runs for ten minutes produces enough rows
+ * that the message which STARTED it scrolls off the top, and from then on the
+ * screen shows an answer with no question on it. Worse, a person who has scrolled
+ * back to read something has no quick way to return to the work in hand.
+ *
+ * So the top boundary of the conversation carries a compact representation of the
+ * most recent thing the user said, and clicking it goes back to the real message.
+ *
+ * ------------------------------------------------------------------------
+ * IT IS NOT A TOOLBAR AND COSTS NO ROWS. It rides on the header's rule, which
+ * already exists and already carries the scroll hint on its other end
+ * (ui/layout.js `separator`). A permanent panel restating the prompt would be a
+ * second copy of the conversation's own content, which is the duplication the
+ * one-surface architecture exists to refuse.
+ *
+ * IT DOES NOT COMPETE WITH THE MESSAGE ITSELF. `null` while the block is on
+ * screen — there is nothing to anchor to when you are looking at it.
+ *
+ * ------------------------------------------------------------------------
+ * THE TARGET IS A ROW THE FEED ITSELF RECORDED, not a text search. `userAt` is
+ * the side-channel `renderFeed` writes as it draws: drawn-line index to the
+ * message that produced it. So the row this returns is a row the user really
+ * saw, the label is that message's own text rather than something reconstructed
+ * from painted output, and the two cannot disagree — they come from one index.
+ * A search through the rendered lines for a prompt's words would find the wrong
+ * one the moment a model quoted the user back at itself.
+ */
+function scrollAnchor(lines, scroll = 0, height = 0) {
+  const rows = rowsIn(lines);
+  if (!rows.length) return null;
+  const row = rows[rows.length - 1];
+  // ---- ALREADY IN VIEW: THERE IS NOTHING TO ANCHOR TO -------------------
+  //
+  // THE WINDOW, not just its top edge. The first version asked only whether the
+  // row was above `scroll`, which is the wrong half for the row this cares
+  // about: the NEWEST message is at the END of the feed, so it leaves the
+  // viewport by falling off the BOTTOM when somebody scrolls back — it is never
+  // above the top. Measured against the real Screen, that test returned null at
+  // every scroll position and the anchor never appeared once.
+  //
+  // With no height given, nothing is assumed to be off-screen — a caller that
+  // does not know its viewport cannot be told what is outside it.
+  const rowsShown = Math.max(0, Math.floor(height));
+  if (!rowsShown) return null;
+  if (row >= scroll && row < scroll + rowsShown) return null;
+  const text = String((lines.userAt && lines.userAt[row]) || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  const kind = label(text);
+  const body = preview(text, ANCHOR_MAX);
+  // ---- THE MARK IS NAVIGATION, NOT CONTENT -----------------------------
+  //
+  // `USER DECISION · continue` on the header's rule read as a SECOND HEADER: a
+  // label and a quotation, in the most prominent position on the screen, for
+  // something whose only job is to be clickable. The submitted turn is in the
+  // conversation; this is a way back to it.
+  //
+  // So what is drawn is `↑ user` — a direction and a word. The full text and the
+  // kind still travel on the object for anything that wants them (a tooltip, a
+  // test, a future surface); they are simply not what the rule says.
+  // ---- THE MARK CARRIES THE REAL PROMPT --------------------------------
+  //
+  // It was `↑ user` — a direction and a word, which is de-emphasised to the point
+  // of saying nothing: a person looking at it cannot tell WHICH turn it goes back
+  // to, and on a long session that is the only thing they need from it.
+  //
+  // `USER · continue with the Toralink smoke test…` is one line, on its own quiet
+  // ground, and it is the SUBMITTED TEXT — not the task name, not the objective,
+  // not a model-written summary, not the current plan step. Those can all drift
+  // from what was actually asked, and an anchor that lies about its destination is
+  // worse than no anchor.
+  return { row, kind, text, mark: `USER · ${body}`, label: `${kind} · ${body}` };
+}
+
+module.exports = { kindOf, label, rowsIn, scrollAnchor, preview, DECISION, MAX_WORDS, ANCHOR_MAX };

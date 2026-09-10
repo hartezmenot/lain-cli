@@ -40,23 +40,39 @@ function sessionOf(configDir) {
 }
 
 module.exports = async function () {
-  await test('SCREEN: progress is two rows, not a block that buries the work', async () => {
+  await test('SCREEN: progress is a few compact rows, not a block that buries the work', async () => {
+    // ------------------------------------------------------------------
+    // THIS USED TO ASSERT THE PINNED TASK BANNER — `TASK  fix the telegram
+    // toggle   STEP 2/2` — and that progress followed the objective on the very
+    // next cells, with no STATUS heading and no spelled-out percentage row
+    // between them. The block it replaced spelled those over NINE rows.
+    //
+    // The banner is gone with the panes. The objective is the first thing the
+    // user said, so the conversation says it; progress is `/plan`, which is
+    // where it is now asked for. The property that survives is the one this
+    // test was always really about: PROGRESS IS COMPACT. The nine-row block
+    // must not come back, and the percentage must be a figure rather than a
+    // sentence.
+    // ------------------------------------------------------------------
     const r = await runCli([], {
       cwd: tmpdir('scr-'), env: tui(),
-      stdin: 'fix the telegram toggle\n/plan step one\n/plan step two\n/plan done first\n/exit\n',
+      stdin: 'fix the telegram toggle\n/plan step one\n/plan step two\n/plan done first\n/plan\n/exit\n',
       script: [{ text: 'ok' }], timeoutMs: 40000,
     });
     // A drawn frame positions every row with a cursor escape rather than a
     // newline, so once the escapes are stripped the frame is ONE string and
     // order is what can be asserted — which is the claim anyway.
     const f = frames(r.out).reverse().find((x) => /STEP \d\/\d/.test(x));
-    assert.ok(f, 'the banner never drew');
-    assert.match(f, /TASK {2}fix the telegram/, 'the objective shares its row with the TASK label');
-    assert.match(f, /TASK {2}fix the telegram toggle *STEP \d\/\d/,
-      'progress follows the objective immediately — no blank row, no STATUS heading between them');
+    assert.ok(f, 'the plan never drew its progress');
+    assert.match(f, /PLAN {2}1\/2 done/, 'the plainest statement of it leads');
+    assert.match(f, /STEP \d\/\d/, 'with the position');
+    assert.match(f, /\d+%/, 'and the percentage as a figure');
     // The old block spelled these out over nine rows.
     assert.ok(!/STATUS/.test(f), 'the STATUS heading is gone');
     assert.ok(!/% complete/.test(f), 'the spelled-out percentage row is gone');
+    // AND THE OBJECTIVE IS NOT REPEATED BESIDE IT. It is in the conversation,
+    // once, which is the whole of what the banner's removal bought.
+    assert.ok(!/TASK {2}fix the telegram/.test(f), 'no banner pins it a second time');
   });
 
   await test('SCREEN: what the MODEL said and what LAIN DID are labelled apart', async () => {
@@ -99,7 +115,7 @@ module.exports = async function () {
     const out = plain(r.out);
     assert.ok(!/^\s+ACTIONS\s*$/m.test(out), 'labels are the decoration that goes first');
     assertIncludes(out, '✓', 'but the action marker still separates a call from a sentence');
-    assertIncludes(out, '┌─ INPUT', 'and the input region is never sacrificed');
+    assertIncludes(out, 'Ask LAIN', 'and the input region is never sacrificed');
   });
 
   // ------------------------------------------------------------- context ---

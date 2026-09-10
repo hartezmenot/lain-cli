@@ -11,11 +11,83 @@ runtime, local or hosted: a provider is configured, not built in.
 > [`docs/STATUS.md`](docs/STATUS.md) records the verification tier for each one.
 > Nothing is documented before it exists.
 
+> **The harness.** LAIN no longer ends a task when the model stops talking — it
+> ends one when EVIDENCE says so, and keeps the receipts. There is no method
+> anywhere that marks a task done; the only route to `PASSED` runs through a
+> verification contract. See [`docs/HARNESS.md`](docs/HARNESS.md) for the
+> architecture, the commands (`/harness`, `/verify`, `/artifacts`, `/env`,
+> `/tasks`) and the stated limitations, and
+> [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) for how `lain` gets onto a
+> machine and what was verified rather than assumed.
+
 ## Install
+
+Messaging access through Telegram, Discord and WhatsApp is available as an
+optional surface of the same runtime. See [LAIN Bot setup and limits](docs/BOT.md)
+for `lain --bot`, `/bot`, authorization, credentials and tested capabilities.
+
+**One product, one install, one command.** Installing LAIN Harness gives you the
+`lain` executable with the harness inside it. There is no separate LAIN CLI to
+install first, and no integration step.
+
+```bash
+npm install -g lain
+```
+
+Then, in any project:
+
+```bash
+lain --version
+lain --doctor
+lain
+```
+
+`--doctor` is the check to run after installing: it reports what works on this
+machine and why anything does not, contacts no provider and creates no session.
+
+### From a clone, or without npm
+
+```bash
+node distribution/install.js
+```
+
+This writes a launcher into `~/.lain-v2/bin`, adds that one directory to your
+**user** PATH (never the machine PATH, never with administrator rights), and
+then *verifies the result by actually running `lain --version`*. It does not
+copy the runtime — the launcher points at your checkout, so there is exactly one
+LAIN on the machine.
+
+If PATH cannot be written it still installs, says so, and prints the exact
+command to add it yourself. It never claims global availability it has not
+proved. Undo it with `node distribution/uninstall.js`, which removes the
+launcher and the PATH entry and leaves your config, your sessions and your
+checkout alone.
+
+### Developing on LAIN
+
+Nothing needs installing:
 
 ```bash
 node bin/lain.js --help        # zero runtime dependencies, Node >= 18
+node tests/run.js              # unit · integration · smoke · distribution
 ```
+
+### What is required, and what is optional
+
+Core needs Node 18+ and nothing else — LAIN has **no runtime dependencies**, so
+an install cannot fail on a transitive package. Everything below is optional,
+degrades honestly, and never blocks installation:
+
+| Optional | Without it |
+|---|---|
+| Chrome/Chromium (Node 22+ for the client) | browser checks report INCONCLUSIVE, with the reason |
+| a git repository | change observation falls back to the filesystem |
+| a declared test/build script | `/verify full` says the project declares nothing to prove |
+| the Rust supervisor | background work does not outlive the process |
+| a desktop bridge (MCP) | `computer` is simply absent |
+
+`lain --doctor` lists all of it, and marks an absent optional capability `○`
+rather than `✗` — it is a fact, not a fault.
 
 ## Concepts
 
@@ -44,6 +116,11 @@ answers ("the server is down" vs "log in" vs "you disabled it"):
 | **Tools** | filesystem, search (`grep`/`glob`/`symbols`/`dependents`), semantic edits by symbol name, unrestricted shell, plans, `ask_user` — the model asks YOU a question and the panel renders the choices — and `web_fetch`/`web_search`, so a question whose answer is in a changelog is not answered from a training cut-off. |
 | **Execution** | every command states the shell it ran in and the directory it ran in; every failure comes back CLASSIFIED, with the fact about that shell that explains it, and with what the same command already did. |
 | **Mode** | what KIND of work this is (implement / bugfix / audit / …), inferred locally and for free. Selects workflow guidance; never blocks anything. |
+| **Task record** | the harness half of a task: a durable state (`PLANNED`/`RUNNING`/`BLOCKED`/`VERIFYING`/`PASSED`/`FAILED`/`INCONCLUSIVE`/`CANCELLED`) under `.lain/tasks/<id>/`, outliving the session. `PASSED` is reachable only from `VERIFYING`. |
+| **Verification contract** | requirements, each naming the evidence that would establish it — a suite, a build, an endpoint, a file, a service, a browser flow. Every check returns PASSED / FAILED / **INCONCLUSIVE**, and the task verdict is arithmetic over them. A model's claim is never evidence. |
+| **Managed service** | a long-running process (dev server, API) with a port, a health check, restarts and an **owner task** that takes it down. Distinct from a *job*, which is a command that ends and yields a result. |
+| **Observation** | a question — element, page, errors, screen, changes, logs, endpoint — routed to the cheapest source that can answer it: DOM before screenshot, git before reading files. A source that cannot answer says so. |
+| **Artifacts** | durable evidence per task: verification reports, test output, logs, real PNG screenshots. Never compacted, addressable long after the transcript has been folded. |
 
 ## How LAIN approaches a request
 
@@ -231,13 +308,21 @@ each phase from the point in the loop where it becomes true, and the UI shows it
 | `READY` | nothing is running |
 
 **Nothing here is fabricated.** The spinner frame is derived from the clock, so
-it cannot animate while nothing is happening, and the elapsed seconds beside it
-are real. When the turn ends the row disappears rather than spinning on. There
-is exactly one timer in the program — it redraws the existing state during a
-genuine wait, costs no tokens, and stops the moment the wait does.
+it cannot animate while nothing is happening, and the elapsed figure beside it is
+real: an accumulator over wall time that cannot be advanced by drawing a frame.
+When the turn ends the row rests rather than spinning on. There is exactly one
+timer in the program — it redraws the existing state during a genuine wait, costs
+no tokens, and stops the moment the wait does.
 
-Work already done stays on screen **while the next step runs**: the calls of the
-turn in flight are shown as they happen, not only once the turn ends.
+**The clock is the TASK's, not the phase's.** It starts when you press Enter and
+runs until the task reaches a real terminal state — through every model call,
+tool call, test run and retry in between. It does not count time LAIN could not
+work: a rate limit, a retry-after wait, an interruption or a question waiting on
+you all PAUSE it and hold the figure, because four minutes of 429 backoff
+reported as four minutes of work is a lie about what the machine did.
+
+Work already done stays on screen **while the next step runs**: the changes and
+verdicts of the turn in flight are shown as they happen, not only once it ends.
 
 `STEP`, `PROGRESS` and `STATUS` are three separate things and are never
 collapsed into one indicator — where the work is, how much is *finished*, and
@@ -245,41 +330,92 @@ what is happening this second. Progress counts completed steps only: starting
 step 1 of 5 is 0%, not 20%.
 
 ```
-┌─ L A I N ──────────────────────────────────────────────────┐   HEADER
-│ scalppbot                            C:\Projects\scalppbot │
-│ Claude Opus 5   anthropic · omniroute   effort high  ◆ RUNNING │
-│ ██████████░░░░░░░░░░░░░░  2 / 5   40%                      │
-└────────────────────────────────────────────────────────────┘
-┌─[1 activity] 2 plan  3 diff  4 files  5 output ────────────┐   WORKSPACE
-TASK
-Fix the authentication flow
+    LAIN   scalppbot   claude-opus-5                                 ~1204
+     USER · fix the authentication flow ──────────── ↓ 3 new · End ──
 
-STEP 3 / 5
-████████████████░░░░░░░░░░░░░░░░░░░░░░░░
-40% complete
+    USER
+    ❯ fix the authentication flow
 
-STATUS
-◐ Running npm test…  12s
+    │ ✓ edited · src/auth/token.js   +18 -4
+    │ ✓ npm · test
 
-  ✓ Inspect authentication
-  ● Implement refresh handling
-  ○ Run verification
+    Summary
 
-ACTIVITY
+    The refresh handler was never reached. It is reached now, and the
+    test covers the empty case.
 
-  Tracing where the token is validated.
-  ✓ Read src/auth/token.js
-  ✓ Edited src/auth/token.js
+    ───────────────────────────────────────────────
 
-┌─ INPUT ────────────────────────────────────────────────────┐   INTERACTION
- │ > /mo                                            │
- └────────────────────────────────────────────────┘
- ┌────────────────────────────────────────────────┐   PANEL
- │ COMMANDS                                         │   (hidden until needed)
- │ ❯ /models   [name]    canonical model list       │
- │   /model    <name>    select the model           │
- └────────────────────────────────────────────────┘
+    USER
+    ❯ now run the smoke test
+
+    ◐ Verifying  the contract                    ↑2.1K ↓4   00:01:37
+
+     Ask LAIN…
+
+    Commands
+
+      ❯ /exit        Save the session and leave
+        /status      Session, provider and tool state
+        /token       Where this conversation's tokens went
+
+      ↑↓ select · Tab complete · Enter run · Esc cancel
 ```
+
+**ONE CONTENT FRAME.** Every region — the header, the conversation, the live row,
+the composer, the command menu — is laid out inside one rectangle with EQUAL
+gutters, computed once and handed to each of them. No renderer works out its own
+horizontal margins, which is how the left and right whitespace used to stop
+matching. The gutter scales gently with the terminal (one column at 40, two at 80,
+four at 200) and is never asymmetric, at any width, odd or even.
+
+**PROSE GETS A READABLE MEASURE; STRUCTURE DOES NOT.** A paragraph stretched
+across two hundred columns is harder to read than the same paragraph at ninety, so
+prose narrows on a very wide terminal. Code, diagrams, tables and diff hunks keep
+the whole frame — their width is part of what they mean.
+
+**NO BOXES.** The composer is a filled grey region with no outline, three rows
+tall, with what you are typing centred in it. The command menu is a list: no
+frame, no rules, no shouted title, and as wide as its contents rather than as wide
+as the screen. There is exactly ONE horizontal line on the surface and it belongs
+to the header.
+
+**THE HIERARCHY IS INVERTED FROM WHERE IT STARTED.** The final answer has the
+highest contrast on the screen; the user's own words are bold on their own ground;
+a tool row is dim apart from its outcome mark and the path it names; metadata is
+dimmer still. Tool progress is transient and subdued. The thing it was evidence
+for is not.
+
+The header's rule carries two things that have nowhere better to be: a **one-line
+preview of the prompt the running turn came from**, on its own quiet ground, once
+that prompt has scrolled away — click it to go back to the message itself — and
+news about content you have not read. The preview is the SUBMITTED TEXT, flattened
+to one line and truncated; never a task name, an objective or a summary, because
+an anchor that lies about its destination is worse than no anchor.
+
+**A DIVIDER MARKS WHERE ONE EXCHANGE ENDS**, and nothing smaller. Between every
+paragraph it would be card borders arrived at by another route.
+
+**NOTHING THE RUNTIME SAYS TO ITSELF REACHES THE CONVERSATION.** A provider retry,
+the end of a rate-limit wait, a continuation LAIN composes to resume with, a steer
+acknowledgement, an interruption — all of those are transient: the live row says
+them and then replaces them. A rate limit reads `Ⅱ Rate limited · 6s · attempt 4/5`
+and not a paragraph of upstream JSON; the provider's own words stay on the turn
+record where `/status` and the diagnostics read them. What stays durable is what
+you would come back for: a missing credential, a failing check, a question waiting
+on you, a verdict. **And streamed reasoning is not speech** — it is counted as
+output because it is billed as output, and it is kept off the conversation. The row above the caret
+says what is happening **this second**, and the figure on its right is **one
+elapsed-work clock for the whole task** — `HH:MM:SS`, which does not restart
+between a read, a write, a test run or a retry, and which **pauses** rather than
+accumulating while a provider is rate limiting us.
+
+What the conversation KEEPS is what somebody comes back for: what was said, what
+CHANGED, what failed, and the verdict the turn ended on. A successful read, search
+or mechanics command is live state — shown in the row above the caret while it
+happens, replaced in place by the next one, and then over. The full account of
+every call is still in the turn record, the Harness timeline and its artifacts, and
+is reachable through `/brief`, `/jobs <n>` and `/ps`.
 
 Launching shows a start screen rather than an empty dashboard:
 
@@ -300,36 +436,126 @@ Launching shows a start screen rather than an empty dashboard:
                    /  commands        @  files
 ```
 
-**Header** — project, then model, provider, connection and effort as SEPARATE
-fields, and the state: `READY` `WORKING` `NEEDS USER` `BLOCKED` `NEEDS AUTH`
-`FAILED` `COMPLETE` `MAINTENANCE`. Waiting on you is `NEEDS USER`, never
-`WORKING`. Nothing else lives here — tool counts, token counts and timings are
-`/status` questions.
+## One surface
 
-**Progress is COMPLETED work.** Five steps with step 1 merely *started* reads
-`0 / 5` and **0%** — not 20%. An unknown total shows no percentage rather than an
-invented one. The step, a bar and the percentage are **pinned beneath the task
-objective** in the activity view (compact `STEP 3/5 ██░ 40%` on a small terminal)
-so "how far along?" is answered without scrolling or switching views.
+LAIN has ONE screen. There are no tabs, no panes and nothing to navigate.
 
-**Workspace** — one view at a time: `Tab` / `Shift+Tab` to cycle, `Alt+1`..`Alt+5`
-to jump. Everything scrolls, and an overflow indicator appears beside the tabs.
+```
+LAIN   lain-v2   claude-opus-5                                       ~624
+────────────────────────────────────────────────────────────────────────
 
-- **activity** — the task, the plan at a glance, then what LAIN said and did,
-  interleaved in the order it happened: `✓ Read src/auth/token.js`. Command
-  output (`/status`, `/plan`, …) lands here too — in TTY mode the screen owns
-  stdout, so nothing is ever painted over the regions.
-- **plan** — one line per step. `Enter` expands one to show **Why**, **Files** and
-  **Status**; expansion is display-only and cannot alter plan state.
-- **diff** — changed files with `+N -M`, from the bytes captured before each
-  mutating call. `Enter` opens one, line-numbered; `Esc` goes back.
-- **files** — the project as a bounded tree, changed files marked `●`.
-- **output** — real shell and test output with exit codes.
+  YOU
+  ❯ fix the frontend routing issue
 
-**The interaction panel** is ONE surface with different modes: the `/` palette,
-`@` completion, `/models`, `/config`, `/provider`, `ask_user`, the diff file
-picker and the plan step picker. Completion palettes stay small beside the input;
-the workspace remains visible above them.
+  Implemented the route correction and re-ran the unit suite.
+
+  · Read src/router.js
+  · Patched src/router.js  +12 -3
+
+
+
+
+  ◐ TOOL   VERIFYING   unit tests                                     8s
+ Ask LAIN…
+```
+
+Four regions, and nothing else is ever permanently on screen:
+
+**Header** — one dim row: `LAIN`, the project folder, the model, and the
+**output tokens of the response in front of you**. That last number climbs while
+the model writes, which is what makes it worth a permanent row. It carries a `~`
+while it is an estimate from the characters received, and loses it when the
+provider's own count arrives. Everything else about tokens — the session
+account, context occupancy, cache reads, what the last request was made of — is
+`/token`.
+
+The route, the effort and a status word used to live here. Routing is LAIN
+choosing correctly rather than announcing its classifier (`/status` still shows
+it); effort is a setting (`/effort`); and what LAIN is *doing* is the live row,
+one line above the caret, where it is said in more detail and nearer the eye.
+
+**Conversation** — what you said and what LAIN said and did, interleaved in the
+order it happened. It reads from the top and grows downward, follows new output
+unless you have scrolled away, and gets every row the other three do not need.
+Command output (`/status`, `/ps`, …) opens in a panel under the input rather
+than over it.
+
+**Live activity** — ONE row, directly above the input, and only ever the current
+operation: `VERIFYING · unit tests`, `READING · src/router.js`, `WAITING · user
+approval`. It is projected from the turn loop's real phase — never a timer,
+never an inferred verb — and it disappears when nothing is running. What
+happened *before* is the conversation above it.
+
+**Input** — one region on a subtle grey ground, full width, no border and no
+prompt symbol. The contrast is the region. A large paste is collapsed to
+`<pasted text>` **while you are composing** so it cannot bury the sentence you
+typed in front of it; the full content is what gets sent, what the transcript
+records, and what the model receives.
+
+Two more regions cost nothing when there is nothing to say: a steer you have
+typed while a turn runs, and one row per background task.
+
+### Everything else is a command
+
+The nine panes LAIN used to have are all still reachable, and none of them is a
+place you can be in by mistake:
+
+| was a pane | is now |
+|---|---|
+| activity | the surface |
+| context / detail | `/brief` · `/brief detail` |
+| plan | `/plan` |
+| diff / files | `/changes` |
+| output | `/jobs <n>` |
+| memory | `/note` |
+| tokens | `/token` |
+
+`/help` lists the rest, grouped by what you are doing rather than by the order
+they happen to be defined in.
+
+### Background work
+
+```
+/bg run the complete integration suite     start something beside the conversation
+/bg                                        what is running, and how it went
+/bg stop 17                                end one
+/ps                                        the processes and services that work IS
+```
+
+`/bg` is LOGICAL work — what you asked for. `/ps` is the PHYSICAL projection —
+pids, ports, services, state. One request can be several processes, or none yet,
+or none any more, which is why they are two commands.
+
+Neither invents machinery. `/bg` delegates to the same job runner the model's own
+`run_background` uses, and whether your request becomes a **job** (it ends and
+yields a result) or a **service** (it stays up and has a health) is decided by
+the tools LAIN reaches for. `/ps` keeps no registry: every row is projected from
+the harness's process manager and the job collection.
+
+**Background is not unverified.** A `/bg` task obeys the same contract as the
+conversation — execution, then verification, then settlement. A row reads
+`COMPLETED` when the work ended and `task PASSED` only once the harness has
+settled it from evidence. A process exiting zero has proved nothing.
+
+### The window title
+
+The terminal's own title is a glanceable signal for when LAIN is behind another
+window: the project folder, with one symbol in front of it.
+
+```
+lain-v2       nothing is happening
+◐ lain-v2     work in flight — the glyph turns while it lasts
+✓ lain-v2     the last turn finished cleanly, briefly, then back to idle
+Ⅱ lain-v2     stopped: interrupted, rate limited, blocked, or waiting on you
+✕ lain-v2     it failed
+```
+
+The glyph comes from the same live state the row above the caret is drawn from,
+so the two cannot disagree — and the spinner turns only because redraws are
+happening, which only happens while the turn loop has a phase. A rate limit gets
+the pause bar rather than a spinner that would turn for four hours while every
+request is refused.
+
 
 ### While the model is working
 
@@ -352,13 +578,13 @@ under it. Press Ctrl+C to stop the turn first, or wait for it to finish.
 
 | Key | Does |
 |---|---|
-| `Tab` / `Shift+Tab` | cycle views when nothing is typed; `Tab` completes when a menu is open |
-| `Alt+1`..`Alt+5` | jump straight to a view |
-| `↑` `↓` | the open menu if there is one, otherwise prompt history |
-| `Enter` | run/select in a menu; with an empty line, open what the view offers |
+| `Tab` | completes when a menu is open. It no longer cycles anything — there is one surface |
+| `↑` `↓` | the open menu if there is one, otherwise move within a multi-line prompt, then history |
+| `Enter` | run/select in a menu; otherwise send the prompt |
+| `Shift+Enter` `Alt+Enter` `Ctrl+J` | a new line in the prompt |
 | `→` | accept a completion · `←` back in a drill-down |
-| `Esc` | close a menu, leave an open diff, dismiss a question |
-| `PgUp` `PgDn` `Home` `End` | scroll the workspace |
+| `Esc` | close a menu, dismiss a question, stop a retry wait |
+| `PgUp` `PgDn` `Home` `End` | scroll the conversation |
 | `Alt+↑` `Alt+↓` | jump to the previous / next thing **you** said — an instruction, a decision, a pasted attachment |
 | `Ctrl+C` | while working, cancel it; when idle, press once to confirm then again to exit |
 
@@ -933,7 +1159,7 @@ is sent until you say so, and drafting costs no tokens and opens no socket.
 ```
 /external create a plan for this
 /external this looks like a bug
-/external browser write a complaint about the build
+/external human write a complaint about the build
 ```
 
 Then `Send it` in the panel, or `/external send` where there is no panel.

@@ -171,7 +171,16 @@ function summarise(rows) {
     n++;
   }
   if (!n) return '';
-  const parts = [...counts.entries()].map(([v, c]) => (c > 1 ? `${v} ×${c}` : v));
+  // LOWER CASE, to match the rows it stands for. `verbOf` is the GROUPING
+  // vocabulary — `Edited`, `Read`, `Searched` — and ui/durable.js reads those
+  // exact words to decide what is durable, so they are not changed. But a folded
+  // row sits in the same column as the unfolded ones, which say `edited · f4.js`,
+  // and one capital in a list of eight was the only thing distinguishing a
+  // summary from a call.
+  const parts = [...counts.entries()].map(([v, c]) => {
+    const verb = String(v).toLowerCase();
+    return c > 1 ? `${verb} ×${c}` : verb;
+  });
   return `${V().MARK.done} ${parts.join(' · ')}`;
 }
 module.exports = { compactRuns, summarise, compactRetries, KEEP, KEEP_OLD, RETRY_NOTE };

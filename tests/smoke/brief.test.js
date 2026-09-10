@@ -115,13 +115,16 @@ module.exports = async function () {
     assert.ok(/Explanation:/.test(r.out), 'and an explanation of what the message means');
   });
 
-  await test('BRIEF: the five health axes are separate, and UNVERIFIED survives to the screen', async () => {
+  await test('BRIEF: the four health axes are separate, and UNVERIFIED survives to the screen', async () => {
+    // (A FRONTEND axis was a fifth until the browser that observed it was
+    // removed in 2026-09; the four that remain are still each named, still
+    // separate, and an unmeasured one is still on the screen as unmeasured.)
     const dir = project();
     const r = await runCli([], {
       cwd: dir, script: [{ text: 'ok.' }], stdin: `/brief --full${CR}/exit${CR}`, timeoutMs: 120000,
     });
     assert.strictEqual(r.code, 0, r.out.slice(-2000));
-    for (const axis of ['BUILD', 'TESTS', 'RUNTIME', 'FRONTEND', 'ENGINEERING']) {
+    for (const axis of ['BUILD', 'TESTS', 'RUNTIME', 'ENGINEERING']) {
       assert.ok(new RegExp(`${axis}\\s+\\w`).test(r.out), `the ${axis} axis is missing from the report`);
     }
     // This fixture cannot build; the report must say so rather than grading the

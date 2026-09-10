@@ -83,8 +83,21 @@ module.exports = async function () {
     // sending — so it belongs here beside /compact and /new for the identical
     // reason: rewriting the conversation under a live request is a corruption,
     // not a convenience. /clean is still absent, and still means the screen.
+    // ---- /verify JOINED THIS LIST, and for a different reason from the rest --
+    //
+    // Everything else here is blocked because it REWRITES the session under a
+    // live request. `/verify` is blocked because it EXECUTES: it spawns test
+    // runners, build commands and browsers. Two suites racing over one build
+    // directory manufacture failures that belong to neither, and a browser
+    // launched beside a turn that is launching one fights it for the debug
+    // port. Same conclusion, different argument, and worth stating so nobody
+    // later "corrects" it to safe-during-a-turn on the grounds that it changes
+    // no session state.
+    //
+    // /troubleshoot was deliberately removed; the registry describes the
+    // current product, including the remaining verification command.
     const blocked = [...commands.REGISTRY.entries()].filter(([, c]) => c.duringTurn === 'blocked').map(([n]) => n).sort();
-    assert.deepStrictEqual(blocked, ['/backup', '/clear', '/compact', '/cwd', '/exit', '/new', '/plan', '/quit', '/resume', '/troubleshoot', '/undo'].sort());
+    assert.deepStrictEqual(blocked, ['/backup', '/clear', '/compact', '/cwd', '/exit', '/new', '/plan', '/quit', '/resume', '/undo', '/verify'].sort());
     assert.notStrictEqual(commands.REGISTRY.get('/clean').duringTurn, 'blocked',
       'clearing the SCREEN never needs to stop the work');
   });

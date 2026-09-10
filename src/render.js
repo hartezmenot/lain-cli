@@ -75,7 +75,14 @@ const C = {
    * writes the foreground INSIDE it, because an inner reset closes the
    * background too (see ui/paint.js on nesting).
    */
-  onGray: (s) => (useColor() ? `\x1b[48;5;236m${s}\x1b[49m` : s),
+  // AND IT SURVIVES A FOREGROUND COLOUR INSIDE IT, for the reason spelled out
+  // at `onSurface` below: an inner `\x1b[0m` resets the BACKGROUND too, so a
+  // row with one dim or reverse-video run in it lost its ground from that run
+  // onwards and the panel came apart down the middle. Every reset inside the
+  // row re-opens the ground behind it.
+  onGray: (s) => (useColor()
+    ? `\x1b[48;5;236m${String(s).replace(/\x1b\[0m/g, '\x1b[0m\x1b[48;5;236m')}\x1b[49m`
+    : s),
   bold: (s) => (useColor() ? `\x1b[1m${s}\x1b[0m` : s),
   green: (s) => (useColor() ? `\x1b[32m${s}\x1b[0m` : s),
   yellow: (s) => (useColor() ? `\x1b[33m${s}\x1b[0m` : s),

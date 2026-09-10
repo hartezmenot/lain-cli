@@ -35,7 +35,7 @@ module.exports = async function () {
     });
     const took = (Date.now() - started) / 1000;
     const out = plain(r.out);
-    assertIncludes(out, 'INTERRUPTED', 'the cancel must reach a resting state');
+    assert.match(out, /INTERRUPTED/i, 'the cancel must reach a resting state');
     // The command was 40 seconds. Anything near that means the interface waited
     // for work the user had already cancelled.
     assert.ok(took < 30, `the whole run took ${took.toFixed(1)}s — Ctrl+C did not actually stop the command`);

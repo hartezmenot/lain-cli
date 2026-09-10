@@ -16,24 +16,11 @@ const { test, tmpdir, runCli, assertIncludes, assertNotIncludes } = require('../
 const tui = { LAIN_FORCE_TUI: '1', COLUMNS: '100', LINES: '30' };
 const CR = '\n';
 
-/**
- * THE Alt+N THAT REACHES A PANE, ASKED OF ui/tabs.js RATHER THAN WRITTEN DOWN.
- *
- * These tests spelled out their own numbers — `\x1b3` for DIFF, `\x1b4` for
- * OUTPUT, `\x1b5` for FILES — which made each of them a private copy of the tab
- * order. When ACTIVITY was inserted at position 2 and AUDIT and HEALTH were
- * retired, every one of those numbers moved and the tests went on pressing the
- * old keys, opening the wrong pane and failing about a pane they never reached.
- *
- * The order has exactly one owner. Asking it cannot go stale; copying it
- * already did.
- */
-const ALT = (view) => {
-  const { VIEWS } = require('../../src/ui/tabs');
-  const n = VIEWS.indexOf(view);
-  assert.ok(n >= 0, `there is no "${view}" pane — ui/tabs.js lists ${VIEWS.join(', ')}`);
-  return `\x1b${n + 1}`;
-};
+// ---- `ALT()` STOOD HERE ------------------------------------------------
+//
+// It asked ui/tabs.js which number reached which pane, so these tests could
+// press Alt+N without keeping a private copy of the order. There are no panes
+// and no numbers; what each of them reached is now a command.
 const ESC = '\x1b';
 const CLEAR = '\x7f'.repeat(40);
 
@@ -106,16 +93,26 @@ module.exports = async function () {
     // asking the landing pane for it was the test's mistake, not the pane's.
     const r = await runCli([], {
       cwd: project(), env: tui, script: workScript,
-      stdinSteps: [`fix the login bug${CR}`, ALT('activity'), `/exit${CR}`],
+      stdinSteps: [`fix the login bug${CR}`, `/exit${CR}`],
       stepDelayMs: 800, timeoutMs: 45000,
     });
     assert.strictEqual(r.code, 0);
     const f = lastFrameWith(r.out, /fix the login bug/);
     assertIncludes(f, 'fix the login bug', 'what was asked');
     assertIncludes(f, 'guard clause', 'what the model said');
-    assert.ok(/Read src\/auth\/login\.js/.test(f), `human phrasing, not a verb column: ${f.slice(0, 700)}`);
-    assert.ok(/Wrote src\/auth\/login\.js/.test(f), 'and the write');
-    assert.ok(/Ran echo tests passed/.test(f), 'and the command that ran');
+    // ---- EACH CALL THAT LEAVES A RECORD, WITH ITS SUBJECT ---------------
+    //
+    // `verb · subject`, and the verb of a shell command is its program — `Ran` said
+    // only that something ran, which every row on the screen shares (ui/phrasing.js).
+    //
+    // AND THE READ IS NOT HERE, which is the other half of the rule: a successful
+    // read is live state, shown in the row above the caret while it happens and
+    // gone afterwards (ui/durable.js). What persists is what CHANGED and the
+    // verdict the turn ended on.
+    assert.ok(/wrote · src\/auth\/login\.js/.test(f), `the write is the record: ${f.slice(0, 700)}`);
+    assert.ok(/echo · tests passed/.test(f), 'and the command that ran');
+    assert.ok(!/read · src\/auth\/login\.js/.test(f),
+      'a routine read must not take a row in the conversation');
     assert.ok(!/\d+ms/.test(f), 'no per-call timings in the default view');
     // ---- NO ACCOUNTING ON THE CALL ROWS -----------------------------------
     //
@@ -142,17 +139,21 @@ module.exports = async function () {
       stdin: `fix the login bug${CR}/exit${CR}`, timeoutMs: 45000,
     });
     const f = lastFrameWith(r.out, /fix the login bug/);
-    const head = f.split('\n').filter(Boolean).slice(0, 4).join(' | ');
+    // THE HEADER ROW ITSELF — the one carrying the model, which is the only
+    // row of metadata there is. Taking "the first few rows" would now catch the
+    // top of the conversation, which is exactly where the task SHOULD be.
+    const head = f.split('\n').find((l) => /LAIN\s+\S+\s+mock-model/.test(l)) || '';
     // THE TASK IS STILL NAMED, AND NOW ONLY ONCE.
     //
-    // It used to be named in the HEADER and again in the TASK banner two rows
-    // below it — the same sentence twice, in the part of the screen with the
-    // least room to spare. The header's copy went; the banner keeps it, because
-    // the banner also carries the progress. The guarantee is unchanged and the
-    // duplication is now itself asserted against.
+    // It used to be named in the HEADER and again in the pinned TASK banner two
+    // rows below it — the same sentence twice, in the part of the screen with
+    // the least room to spare. Both are gone: the objective IS the first thing
+    // the user said, so the CONVERSATION says it, once, and nothing else does.
     assert.ok(/fix the login bug/.test(f), 'the screen must still name the task');
     assert.ok(!/fix the login bug/.test(head),
-      `and the header must not repeat what the banner says: ${head}`);
+      `the header carries metadata, not the task: ${head}`);
+    const times = (f.match(/fix the login bug/g) || []).length;
+    assert.strictEqual(times, 1, `the task is named ONCE, and was named ${times} times`);
     assert.ok(!/\d+ms|↑\d+|toolCalls|turn=/.test(head), `and nothing diagnostic: ${head}`);
   });
 
@@ -182,125 +183,101 @@ module.exports = async function () {
 
   // ---- the change views ---------------------------------------------------
 
-  await test('WS: diff opens ON the change, with line numbers, and FILES groups what happened', async () => {
+  // ---- WHAT THE PANES BECAME ---------------------------------------------
+  //
+  // DIFF, FILES, OUTPUT and PLAN were four of the nine workspace panes, reached
+  // with Alt+N and cycled with Tab. The tests below used to press those keys.
+  //
+  // §12 of the subtraction: move visibility behind commands, do not delete
+  // capability. So the assertions did not go — they moved to the door each
+  // pane's content is reached through now, and what they check is exactly what
+  // they checked before: that the CONTENT is real, and that it is complete.
+  //
+  //     diff, files   `/changes`
+  //     output        `/jobs <n>`, and the conversation itself
+  //     plan          `/plan`
+  //
+  // Reaching them by command rather than by keystroke is also why these are
+  // shorter: there is no navigation left to get wrong, so there is nothing to
+  // assert about navigation.
+
+  await test('WS: `/changes` opens ON the change, with line numbers and the real text', async () => {
     const r = await runCli([], {
       cwd: project(), env: tui, script: workScript,
-      // DIFF, then FILES. No Enter: the diff is the DEFAULT state of the pane
-      // now, which is the point. FILES is where the grouping moved.
-      stdinSteps: [`fix the login bug${CR}`, ALT('diff'), ALT('files'), `/exit${CR}`],
+      stdinSteps: [`fix the login bug${CR}`, `/changes${CR}`, `/exit${CR}`],
+      stepDelayMs: 2000,
       timeoutMs: 45000,
     });
     assert.strictEqual(r.code, 0);
-    // THE DIFF ITSELF, WITHOUT ASKING FOR IT.
+    // THE DIFF ITSELF, WITHOUT ASKING TWICE FOR IT. The pane used to open on a
+    // grouped LIST and need two more Enters to reach the change, so its default
+    // state contained no diff at all. The command has no default state to get
+    // wrong: it prints the change.
     //
-    // This used to open on a grouped LIST and need two more Enters to reach the
-    // change — so the pane's default state contained no diff at all. The
-    // grouping was not lost: it moved to FILES, which is the structural view,
-    // and the second half of this test holds it there.
-    // Matched on the DIVIDER, not merely on the filename: the FILES pane names
-    // the same file, and a looser match would happily pass against it.
+    // Matched on the DIVIDER, not merely on the filename: the grouped list
+    // names the same file, and a looser match would happily pass against it.
     const diff = lastFrameWith(r.out, /━━ src\/auth\/login\.js/);
     assertIncludes(diff, 'src/auth/login.js', 'the file is named on its divider');
     assert.ok(/\d+ \+ /.test(diff), `added lines are numbered: ${diff.slice(0, 500)}`);
     assertIncludes(diff, 'if(!u||!p) return false;', 'and the real change is shown unprompted');
-
-    const files = lastFrameWith(r.out, /~ MODIFIED/);
-    assertIncludes(files, 'src/auth/login.js', 'the changed file is listed under its group');
-    assert.ok(/~ MODIFIED[\s\S]*src\/auth\/login\.js\s+\+\d+ -\d+/.test(files),
-      `with its size: ${files.slice(0, 400)}`);
+    // AND THE GROUPING IS STILL THERE, above it — what FILES carried.
+    assertIncludes(diff, 'MODIFIED', 'the change is grouped by what happened to the file');
   });
 
-  await test('WS: files shows the project tree with changed files marked', async () => {
+  await test('WS: the command result is in the conversation, where it happened', async () => {
+    // The OUTPUT pane held real shell and test output with exit codes. The
+    // conversation holds it now, in the order it happened, beside the prose
+    // that asked for it — which is where somebody reading back looks for it.
     const r = await runCli([], {
       cwd: project(), env: tui, script: workScript,
-      // ui/tabs.js is the single list that says which number reaches FILES.
-      stdin: `fix the login bug${CR}${ALT('files')}${CR}/exit${CR}`, timeoutMs: 45000,
+      stdin: `fix the login bug${CR}/exit${CR}`, timeoutMs: 45000,
     });
-    const f = lastFrameWith(r.out, /PROJECT/);
-    assertIncludes(f, 'src/', 'the tree is there before anything is opened');
-    assertIncludes(f, 'backend.js', 'including files the task never touched');
-    assert.ok(/[├└]─/.test(f), `drawn as a tree: ${f.slice(0, 600)}`);
-    assert.ok(/login\.js\s*●/.test(f), `the changed file is marked: ${f.slice(0, 600)}`);
-    assertIncludes(f, 'changed this session');
+    const f = lastFrameWith(r.out, /tests passed/);
+    assertIncludes(f, 'tests passed', 'the real stdout of the command that ran');
   });
 
-  await test('WS: output carries the real command result', async () => {
-    const r = await runCli([], {
-      cwd: project(), env: tui, script: workScript,
-      stdin: `fix the login bug${CR}${ALT('output')}${CR}/exit${CR}`, timeoutMs: 45000,
-    });
-    const f = lastFrameWith(r.out, /echo tests passed/);
-    assertIncludes(f, 'OUTPUT');
-    assertIncludes(f, 'echo tests passed', 'the command');
-    assertIncludes(f, 'tests passed', 'and its real stdout');
-  });
-
-  await test('WS: Alt+N really switches views — the tabs are not decoration', async () => {
-    // ---- ASKED OF ui/tabs.js, NOT SPELLED OUT -----------------------------
-    //
-    // This named both the panes it expected and the numbers that reach them,
-    // which made it a private copy of the tab order. When ACTIVITY was inserted
-    // at position 2 the test went on asserting that Alt+4 opens OUTPUT — it
-    // failed, and said nothing useful about why. Driving the numbers FROM the
-    // one list means the assertion is the property that matters (the number
-    // keys really move between panes) and cannot go stale when a pane moves.
-    const VIEWS = require('../../src/ui/tabs').VIEWS;
-    const want = ['plan', 'output', 'context'].filter((v) => VIEWS.includes(v));
-    const keys = want.map((v) => `\x1b${VIEWS.indexOf(v) + 1}${CR}`).join('');
-    const r = await runCli([], {
-      cwd: project(), env: tui, script: workScript,
-      stdin: `fix the login bug${CR}${keys}/exit${CR}`, timeoutMs: 45000,
-    });
-    const re = new RegExp(`\\[\\d (${VIEWS.join('|')})`);
-    const seen = new Set();
-    for (const f of frames(r.out)) {
-      const m = re.exec(f);
-      if (m) seen.add(m[1]);
-    }
-    for (const v of want) {
-      assert.ok(seen.has(v), `Alt+${VIEWS.indexOf(v) + 1} did not open ${v}: ${[...seen].join(',')}`);
-    }
-  });
-
-  await test('WS: Tab cycles views when nothing is typed', async () => {
-    const r = await runCli([], {
-      cwd: project(), env: tui, script: [{ text: 'ok.' }],
-      stdin: `\t\t/exit${CR}`, timeoutMs: 45000,
-    });
-    assert.strictEqual(r.code, 0);
-    const seen = new Set();
-    for (const f of frames(r.out)) {
-      const m = /\[\d (context|plan|diff|files|output)/.exec(f);
-      if (m) seen.add(m[1]);
-    }
-    assert.ok(seen.size >= 2, `Tab moved between views: ${[...seen].join(',')}`);
-  });
-
-  // ---- plan step navigation ------------------------------------------------
-
-  await test('WS: plan-step expansion is reachable from the keyboard, not just display code', async () => {
+  await test('WS: `/plan` shows the steps, their status and the progress', async () => {
+    // The PLAN pane's own content, reached by the command that owns plans.
+    // `Enter` used to open a step picker over it; a plan you can read in full
+    // does not need one.
     const r = await runCli([], {
       cwd: project(), env: tui, script: [{ text: 'Starting.' }],
-      // STAGED: the PLAN STEPS panel only has steps to show after /plan step
-      // has run, and the PLAN pane must be open before Enter opens the panel.
       stdinSteps: [
         `build the parser${CR}`,
         `/plan step design the grammar${CR}`,
         `/plan step write the tokenizer${CR}`,
-        ALT('plan'),
-        CR,        // Enter on an empty input line -> open the PLAN STEPS panel
-        CR,        // select the cursored (first) step
+        `/plan${CR}`,
         `/exit${CR}`,
       ],
+      stepDelayMs: 1500,
       timeoutMs: 45000,
     });
     assert.strictEqual(r.code, 0);
-    const panel = lastFrameWith(r.out, /PLAN STEPS/);
-    assertIncludes(panel, 'design the grammar', 'the panel lists the real steps');
-    assertIncludes(panel, 'active', 'and their real status, not a fixed placeholder');
-    const after = lastFrameWith(r.out, /design the grammar/);
-    assertIncludes(after, 'Status', 'selecting a step expands it in the real plan view');
-    assertIncludes(after, 'working', 'showing the step\'s real status');
+    const f = lastFrameWith(r.out, /design the grammar/);
+    assertIncludes(f, 'PLAN', 'the pane\'s own heading, drawn by the command now');
+    assertIncludes(f, 'design the grammar', 'the real steps');
+    assertIncludes(f, 'write the tokenizer');
+    // THEIR STATUS, as the view draws it: the active step is filled, the rest
+    // are not. And the progress — which is COMPLETED work, so two steps with
+    // the first merely STARTED is `STEP 1/2` at 0%, never 50%.
+    assert.ok(/●/.test(f) && /○/.test(f), `the active step is marked: ${f.slice(0, 400)}`);
+    assertIncludes(f, 'STEP 1/2', 'where in the plan');
+    assert.ok(/\b0%/.test(f) && !/50%/.test(f),
+      `progress is completed work, never the active index: ${f.slice(0, 400)}`);
+  });
+
+  await test('WS: Tab and Alt+N move nothing, because there is nothing to move to', async () => {
+    // The keys are unbound. What must be true is that they are HARMLESS: not a
+    // throw, not a scroll, not stray bytes typed into the prompt. The pane
+    // labels they used to reveal must never appear.
+    const r = await runCli([], {
+      cwd: project(), env: tui, script: [{ text: 'ok.' }],
+      stdin: `\t\t${ESC}2${ESC}4/exit${CR}`, timeoutMs: 45000,
+    });
+    assert.strictEqual(r.code, 0, 'the session survived every one of them');
+    for (const label of ['1 activity', '2 context', '3 plan', '4 diff', '5 output']) {
+      assertNotIncludes(r.out, label, `a key revealed a pane: ${label}`);
+    }
   });
 
   // ---- command output has somewhere to go ---------------------------------
@@ -313,7 +290,7 @@ module.exports = async function () {
     const f = lastFrameWith(r.out, /session\s+\d/);
     assertIncludes(f, 'Status', '/status rendered inside the workspace');
     assertIncludes(f, 'messages');
-    assertIncludes(f, '│ >', 'and the input row survived it');
+    assertIncludes(f, 'Ask LAIN', 'and the input region survived it');
   });
 
   // ---- /config actually edits ---------------------------------------------
@@ -331,7 +308,7 @@ module.exports = async function () {
     assert.strictEqual(r.code, 0);
     const saved = JSON.parse(fs.readFileSync(path.join(configDir, 'config.json'), 'utf8'));
     assert.strictEqual(saved.stream, false, 'the toggle was written to the config store');
-    const f = lastFrameWith(r.out, /CONFIG/);
+    const f = lastFrameWith(r.out, /CONFIG/i);
     assertIncludes(f, 'OFF', 'and the panel redrew with the new value');
   });
 
@@ -340,7 +317,20 @@ module.exports = async function () {
       cwd: project(), env: tui, script: [{ text: 'ok.' }],
       stdin: `/config${CR}${ESC}${CLEAR}/exit${CR}`, timeoutMs: 45000,
     });
-    const f = lastFrameWith(r.out, /CONFIG/);
-    assertIncludes(f, 'NEEDS USER', 'waiting on a person is not "working"');
+    // ------------------------------------------------------------------
+    // `NEEDS USER` WAS A HEADER STATUS WORD, and the header no longer carries
+    // one: what LAIN is doing has a single owner, the live row above the caret.
+    //
+    // The property this test exists for is untouched and is the important
+    // half — LAIN MUST NOT CLAIM TO BE WORKING WHILE A PICKER IS OPEN. With an
+    // open `/config` nothing is running, and the row says so.
+    // ------------------------------------------------------------------
+    const f = lastFrameWith(r.out, /CONFIG/i);
+    assert.ok(!/\bWorking\b|\bThinking\b|\bReceiving\b/i.test(f),
+      `a modal panel is LAIN waiting on a person, not LAIN working:
+${f}`);
+    // NO ACTOR COLUMN FOR LAIN'S OWN WORK — one identity is enough, and the header
+    // already carries it (ui/status.js).
+    assert.match(f, /\b(READY|DONE)\b/, 'and the live row says plainly that nothing is running');
   });
 };

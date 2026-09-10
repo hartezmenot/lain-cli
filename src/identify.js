@@ -46,33 +46,11 @@ function identify(app, text, isPaste, forceMode = null, sameTask = false) {
   verdict.modeReason = forceMode && modeId.KIND[forceMode] ? 'requested by command' : verdictMode.reason;
   app.session.mode = verdict.mode;
 
-  // ---- THE CLI -> PROBE HANDOFF --------------------------------------------
-  //
-  // The mode says WHAT this is; the environment says WHERE it runs. A new task
-  // classified PROBE with a live Probe performs the real handoff: the session's
-  // execution environment becomes PROBE, the objective transfers verbatim, and
-  // from here on tool ownership is enforced (environment.checkToolAllowed, from
-  // tools/index.js). Turning a Probe task into PROBE mode only matters when the
-  // Probe is actually there; without one the mode guidance says honestly that
-  // none is connected, and the session stays CLI.
-  //
-  // DELIBERATELY NOT HERE: anything that talks to the Probe. The classifier and
-  // the handoff stay synchronous and local — a Probe call from inside identify
-  // would make the routing depend on a round trip, and the Probe's own state
-  // (target, stage) rides the system prompt on the turn anyway (probeskill.js).
-  if (verdict.mode === modeId.KIND.PROBE && !verdict.sameTask) {
-    const envMod = require('./environment');
-    const probeMod = require('./probe');
-    const live = probeMod.live();
-    if (live) {
-      const r = envMod.enterProbe(app, {
-        objective: String(text || '').slice(0, 400),
-        probeSessionId: live.connectionId || null,
-        reason: 'new task classified PROBE with a live Probe — handing off',
-      });
-      verdict.probeEntry = r;   // rides the verdict for tests and the activity trail
-    }
-  }
+  // (The CLI -> PROBE handoff that lived here — flipping the session's
+  // execution environment when a PROBE-mode task arrived with a live Probe —
+  // was removed with the Probe integration in 2026-09, along with PROBE as a
+  // mode: such a request now classifies as whatever its own text says, which
+  // is the honest answer for a tool whose workspace is the codebase.)
 
   if (!verdict.sameTask) {
     // A genuinely new task: fresh lifecycle, fresh liveness. Evidence is

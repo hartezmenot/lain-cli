@@ -17,30 +17,46 @@ const assert = require('assert');
 const { test } = require('../helpers');
 
 const A = require('../../src/ui/answer');
-const tabs = require('../../src/ui/tabs');
 const views = require('../../src/ui/views');
 const T = require('../../src/ui/text');
 const { Screen } = require('../../src/ui/layout');
 const { handleMouse } = require('../../src/ui/mouse');
 const { askAdapter, multiAdapter } = require('../../src/ui/askframes');
 
-/** A Screen drawn at a real geometry, with the rows it painted. */
-function drawn(view, session, { rows = 26, cols = 90 } = {}) {
+/**
+ * A Screen drawn at a real geometry, with the rows it painted.
+ *
+ * `view` USED TO BE THE FIRST ARGUMENT and selected which of the nine panes was
+ * drawn. There is one surface, so it is gone; every caller now gets the
+ * conversation, which is what every caller here was asking for anyway.
+ */
+function drawn(session, { rows = 26, cols = 90 } = {}) {
   let wrote = '';
   const s = new Screen({
     out: { columns: cols, rows, isTTY: true, write(x) { wrote += x; }, on() {}, removeListener() {} },
   });
   s.active = true;
-  s.setView(view);
   s.state = {
     cwd: '/p', session, llm: { phase: null },
     liveActions: [], liveNarration: [], extras: [],
   };
   s.draw();
+  // ---- ANY COLUMN, NOT COLUMN 1 --------------------------------------
+  //
+  // Every region is drawn inside the content frame now, so the address carries
+  // the frame's left edge rather than 1 (ui/frame.js `contentBounds`). A helper
+  // that matched `;1H` found nothing at all.
+  //
+  // THE CARET PARK IS SKIPPED: it is a cursor move with no text, and letting it
+  // win would blank whatever row the caret happens to be on - the composer's.
   const painted = {};
-  const re = /\x1b\[(\d+);1H((?:[^\x1b]|\x1b\[(?!\d+;1H)[0-9;]*[A-Za-z])*)/g;
+  const re = /\x1b\[(\d+);(\d+)H((?:[^\x1b]|\x1b\[(?!\d+;\d+H)[0-9;]*[A-Za-z])*)/g;
   let m;
-  while ((m = re.exec(wrote))) painted[Number(m[1])] = m[2];
+  while ((m = re.exec(wrote))) {
+    const row = Number(m[1]);
+    if (!String(m[3]).trim() && painted[row] !== undefined) continue;
+    painted[row] = m[3];
+  }
   return { screen: s, rows: painted };
 }
 
@@ -111,18 +127,21 @@ module.exports = async function () {
 
   // ============================================== 2 — the feed's anchoring ==
 
-  await test('FEED: the conversation reads from the TOP; only OUTPUT keeps its floor', () => {
-    // `growsUpward` (pad above short content) and `followsLive` (scroll new
-    // output into view) were one flag, so ACTIVITY could not read from the top
-    // without also going deaf to new lines.
-    assert.strictEqual(tabs.growsUpward('activity'), false);
-    assert.strictEqual(tabs.followsLive('activity'), true);
-    assert.strictEqual(tabs.growsUpward('output'), true);
-    assert.strictEqual(tabs.followsLive('output'), true);
+  await test('FEED: the conversation reads from the TOP and still follows new output', () => {
+    // TWO RULES THAT WERE ONE FLAG. `growsUpward` (pad above short content) and
+    // `followsLive` (scroll new output into view) shared `stickToBottom`, so
+    // the conversation could not read from the top without also going deaf to
+    // new lines. ui/tabs.js separated them per pane; with one surface the
+    // answer is fixed and lives on the Screen itself.
+    const { screen } = drawn(oneTurn('fix the stalling engine'));
+    assert.strictEqual(screen.stickToBottom, true,
+      'new output must scroll itself into view — a reply nobody sees is an agent that did nothing');
+    assert.strictEqual(screen.rowMap.feedPad, 0,
+      'and it must NOT pad above: the conversation starts at the top and grows down');
   });
 
   await test('FEED: a short conversation is NOT padded down to the input box', () => {
-    const { screen, rows } = drawn('activity', oneTurn('fix the stalling engine'));
+    const { screen, rows } = drawn(oneTurn('fix the stalling engine'));
     assert.strictEqual(screen.rowMap.feedPad, 0, 'padding above is what glued it to the floor');
     const first = screen.rowMap.feedStart;
     const last = first + screen.rowMap.feedRows - 1;
@@ -138,7 +157,7 @@ module.exports = async function () {
   await test('SAID: a user message is a BLOCK on its own ground, full width', () => {
     process.env.LAIN_FORCE_COLOR = '1';
     try {
-      const { screen, rows } = drawn('activity', oneTurn('fix the stalling engine'));
+      const { screen, rows } = drawn(oneTurn('fix the stalling engine'));
       const first = screen.rowMap.feedStart;
       const gray = [];
       for (let r = first; r < first + screen.rowMap.feedRows; r++) {
@@ -182,7 +201,7 @@ module.exports = async function () {
 
   await test('SAID: clicking a message puts it back on the INPUT line', () => {
     const said = 'fix the stalling engine\nand check the book';
-    const { screen } = drawn('activity', oneTurn(said));
+    const { screen } = drawn(oneTurn(said));
     const idx = Object.keys(screen.lastFeedLines.userAt || {}).map(Number);
     assert.ok(idx.length, 'the drawn feed must carry the mapping');
 
@@ -190,7 +209,7 @@ module.exports = async function () {
     const ui = {
       enabled: true, screen, panel: { visible: false },
       app: { input, render: { notice() {} } },
-      refresh() {}, ensureReport() {},
+      refresh() {},
     };
     // The LAST row of the block — a click there must still recall the whole thing.
     const y = screen.rowMap.feedStart + (idx[idx.length - 1] - (screen.rowMap.feedScroll || 0))
@@ -209,14 +228,14 @@ module.exports = async function () {
     // copying a sentence out of your own message, which is the one thing the
     // feed's selection exists for.
     const said = 'fix the stalling engine' + String.fromCharCode(10) + 'and check the book';
-    const { screen } = drawn('activity', oneTurn(said));
+    const { screen } = drawn(oneTurn(said));
     const idx = Object.keys(screen.lastFeedLines.userAt || {}).map(Number);
     const input = { line: '', setLine() { throw new Error('a drag must never recall'); }, emit() {}, selectFrom() {} };
     const notices = [];
     const ui = {
       enabled: true, screen, panel: { visible: false },
       app: { input, render: { notice: (l, m) => notices.push(m) } },
-      refresh() {}, ensureReport() {},
+      refresh() {},
     };
     const row = (i) => screen.rowMap.feedStart + (i - (screen.rowMap.feedScroll || 0)) + (screen.rowMap.feedPad || 0);
     handleMouse(ui, { kind: 'press', x: 3, y: row(idx[0]) });
@@ -227,7 +246,7 @@ module.exports = async function () {
   });
 
   await test('SAID: a click on the model\'s own text still begins a selection, not a recall', () => {
-    const { screen } = drawn('activity', oneTurn('a question', 'the answer LAIN gave'));
+    const { screen } = drawn(oneTurn('a question', 'the answer LAIN gave'));
     const userRows = new Set(Object.keys(screen.lastFeedLines.userAt || {}).map(Number));
     let modelRow = -1;
     for (let i = 0; i < screen.lastFeedLines.length; i++) {
@@ -238,7 +257,7 @@ module.exports = async function () {
     const ui = {
       enabled: true, screen, panel: { visible: false },
       app: { input, render: { notice() {} } },
-      refresh() {}, ensureReport() {},
+      refresh() {},
     };
     const y = screen.rowMap.feedStart + (modelRow - (screen.rowMap.feedScroll || 0)) + (screen.rowMap.feedPad || 0);
     assert.doesNotThrow(() => handleMouse(ui, { kind: 'press', x: 5, y }));

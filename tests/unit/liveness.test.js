@@ -15,6 +15,9 @@
 const assert = require('assert');
 const { test } = require('../helpers');
 
+/** A newline, as a value. */
+const NL = String.fromCharCode(10);
+
 const views = require('../../src/ui/views');
 const { PHASE } = require('../../src/turn');
 const S = views.STATE;
@@ -80,23 +83,41 @@ module.exports = async function () {
 
   await test('LIVE: waiting on the model says so, in words', () => {
     const line = at({ phase: PHASE.WAITING_MODEL }, 0, 1000);
-    assert.match(line, /THINKING/);
+    assert.match(line, /Thinking/);
     assert.match(line, /waiting for the model/, 'the state word alone is jargon; say what it means');
   });
 
   await test('LIVE: a running tool names what it is running', () => {
     const line = at({ phase: PHASE.RUNNING_TOOL, tool: 'read_file', target: 'src/auth.js' }, 0, 1000);
-    assert.match(line, /READING/, 'reading a file and running a command are different states');
+    // SENTENCE CASE: a transient state is SPOKEN, not shouted (ui/status.js
+    // `sentence`). The distinction this test is about - which KIND of work is in
+    // flight - is unchanged.
+    assert.match(line, /Reading/, 'reading a file and running a command are different states');
     assert.match(line, /src\/auth\.js/, 'and the subject must be named');
     const shell = at({ phase: PHASE.RUNNING_TOOL, tool: 'run_bash', target: 'npm test' }, 0, 1000);
-    assert.match(shell, /RUNNING\s+npm test/);
+    assert.match(shell, /Running\s+npm test/);
   });
 
   await test('LIVE: a long wait shows HOW LONG — the difference between slow and hung', () => {
-    const short = at({ phase: PHASE.WAITING_MODEL }, 1000, 1200);
-    const long = at({ phase: PHASE.WAITING_MODEL }, 1000, 46000);
-    assert.ok(!/\d+s/.test(short), `a brief wait needs no number: ${short}`);
-    assert.match(long, /45s/, 'a 45-second wait must say 45s, or it reads as a hang');
+    // THE NUMBER IS THE TASK'S CLOCK NOW, not the age of this phase.
+    //
+    // It used to be `liveState`'s `age` — `45s`, restarted at every phase
+    // change, so a turn that read, thought and wrote showed three small numbers
+    // none of which was how long the person had been waiting. The property this
+    // test exists for is unchanged and is what is asserted: a long wait must
+    // carry a figure, or a working LAIN reads as a dead one. See
+    // ui/workclock.js for why that figure is `HH:MM:SS` and why it does not
+    // count time a rate limit spent refusing us.
+    const wc = require('../../src/ui/workclock');
+    const clockAt = (ms) => { const c = wc.create(); wc.start(c, 0); return wc.reading(c, ms); };
+    const short = at({ phase: PHASE.WAITING_MODEL }, 1000, 1200, { clock: clockAt(1200) });
+    const long = at({ phase: PHASE.WAITING_MODEL }, 1000, 46000, { clock: clockAt(45000) });
+    assert.match(long, /00:00:45/, 'a 45-second wait must say so, or it reads as a hang');
+    assert.ok(!/\d+s\b/.test(short), `the per-phase age is gone: ${short}`);
+    // AND IT IS ONE CLOCK. The same turn a minute later reads a minute later —
+    // it does not start again because the phase did.
+    const next = at({ phase: PHASE.RUNNING_TOOL, tool: 'read_file' }, 46000, 46000, { clock: clockAt(45000) });
+    assert.match(next, /00:00:45/, 'a new phase must not restart the task clock');
   });
 
   await test('LIVE: NOTHING is claimed when nothing is running', () => {
@@ -122,7 +143,7 @@ module.exports = async function () {
   await test('LIVE: a rate-limit wait says when it ends, counts down, and offers a way out', () => {
     const phase = { phase: PHASE.RETRYING, attempt: 1, of: 2, waitMs: 20000, rateLimited: true, resumeAt: 21000 };
     const wide = status.statusStrip({ phase, phaseSince: 1000 }, 100, 1, 6000).join('');
-    assert.match(wide, /RATE LIMITED/, 'name the actual problem, not just "retrying"');
+    assert.match(wide, /Rate limited/, 'name the actual problem, not just "retrying"');
     assert.match(wide, /00:15 remaining/, 'a countdown from the real wait it was given');
     assert.match(wide, /attempt 1\/2/);
     assert.match(wide, /retrying at \d\d:\d\d:\d\d/, 'an absolute time answers "can I go and do something else"');
@@ -131,7 +152,7 @@ module.exports = async function () {
     // it from the right would throw away the way out first, which is the one
     // part the user cannot do without.
     const narrow = status.statusStrip({ phase, phaseSince: 1000 }, 40, 1, 6000).join('');
-    assert.match(narrow, /RATE LIMITED/);
+    assert.match(narrow, /Rate limited/);
     assert.match(narrow, /00:15/, 'the countdown survives');
     assert.match(narrow, /Esc/, 'and so does the way out');
   });
@@ -140,7 +161,7 @@ module.exports = async function () {
     // Escape during a wait and Ctrl+C during work are two different things the
     // user did, and the resting state must not blur them together.
     const cancelled = status.statusStrip({ retryCancelled: true, interrupted: true }, 80, 1, 1000).join('\n');
-    assert.match(cancelled, /RETRY CANCELLED/);
+    assert.match(cancelled, /Retry cancelled/);
     assert.ok(!/INTERRUPTED/.test(cancelled), `the more specific ending wins: ${cancelled}`);
   });
 
@@ -157,7 +178,7 @@ module.exports = async function () {
     const text = lines.join('\n');
     assert.match(text, /src\/a\.js/);
     assert.match(text, /✗/, 'a failed call is not quietly reported as a tick');
-    assert.match(text, /RUNNING\s+npm test/, 'and the live row is last, closest to the caret');
+    assert.match(text, /Running\s+npm test/, 'and the live row is last, closest to the caret');
     // With no history there is nothing to trail — and nothing is made up.
     const bare = status.statusStrip({ recent: [] }, 80, 3, 1000);
     assert.strictEqual(bare.length, 3);
@@ -179,28 +200,25 @@ module.exports = async function () {
 
   // ------------------------------------------------------------- banner ----
 
-  await test('LIVE: STEP, PROGRESS and STATUS are three separate things', () => {
-    const session = {
-      task: { objective: 'fix the login bug' },
-      plan: { steps: [
-        { n: 1, text: 'a', status: 'done' },
-        { n: 2, text: 'b', status: 'active' },
-        { n: 3, text: 'c', status: 'todo' },
-      ] },
-    };
-    const lines = views.taskBanner({ session, width: 60 }).join('\n');
-    // Still three separate answers, but no longer all in one place: the banner
-    // pins WHERE the work is and HOW MUCH is finished at the top, and what is
-    // happening THIS SECOND belongs to the status strip at the bottom, beside
-    // the caret. The banner must not carry a live row at all now — two owners
-    // for one sentence read as two things happening at once.
-    assert.match(lines, /STEP 2\/3/, 'where the work is');
-    assert.match(lines, /33%/, 'how much is FINISHED — not the step number');
-    assert.ok(!/Thinking|◐/.test(lines), `the banner must not carry the live row: ${lines}`);
-    assert.match(
-      status.statusStrip({ phase: { phase: PHASE.WAITING_MODEL } }, 60, 1, 1000).join(''),
-      /THINKING/, 'what is happening this second, in the one place that owns it',
-    );
+  await test('LIVE: PROGRESS and STATUS are two different questions, in two places', () => {
+    const plan = { steps: [
+      { n: 1, text: 'a', status: 'done' },
+      { n: 2, text: 'b', status: 'active' },
+      { n: 3, text: 'c', status: 'todo' },
+    ] };
+    // WHERE THE WORK IS and HOW MUCH IS FINISHED is the PLAN's measurement,
+    // drawn by `/plan`. It used to be pinned above the feed by the task banner;
+    // the banner is gone with the panes and the measurement is not.
+    const p = views.progressOf(plan);
+    assert.strictEqual(p.current, 2, 'where the work is');
+    assert.strictEqual(p.percent, 33, 'how much is FINISHED — not the step number');
+    // WHAT IS HAPPENING THIS SECOND belongs to the live row above the caret,
+    // and to nothing else. Two owners for one sentence read as two things
+    // happening at once, which is why the banner never carried it either.
+    const row = status.statusStrip({ phase: { phase: PHASE.WAITING_MODEL } }, 60, 1, 1000).join('');
+    assert.match(row, /Thinking/, 'in the one place that owns it');
+    const planned = require('../../src/ui/text').strip(views.planView({ plan, width: 60 }).join(NL));
+    assert.ok(!/THINKING|◐/.test(planned), `the plan view must not carry the live row: ${planned}`);
   });
 
   await test('LIVE: on a small terminal the STATUS row is the last thing sacrificed', () => {
@@ -214,35 +232,57 @@ module.exports = async function () {
   });
 
   await test('LIVE: progress is COMPLETED work — starting step 1 of 5 is still 0%', () => {
-    const session = { task: { objective: 'x' }, plan: { steps: [
+    const plan = { steps: [
       { n: 1, text: 'a', status: 'active' }, { n: 2, text: 'b', status: 'todo' },
       { n: 3, text: 'c', status: 'todo' }, { n: 4, text: 'd', status: 'todo' },
       { n: 5, text: 'e', status: 'todo' },
-    ] } };
-    const lines = views.taskBanner({ session, width: 60 }).join('\n');
-    assert.match(lines, /STEP 1\/5/);
-    assert.match(lines, /0%/, 'a started step is not a finished one');
+    ] };
+    const p = views.progressOf(plan);
+    assert.strictEqual(p.current, 1);
+    assert.strictEqual(p.percent, 0, 'a started step is not a finished one');
   });
 
   // -------------------------------------------------------------- feed ----
 
   await test('FEED: a tool call is phrased the way a person would say it', () => {
-    assert.strictEqual(views.phrase('grep', '/SessionStrategist/'), 'Searched for "SessionStrategist"');
-    assert.strictEqual(views.phrase('read_file', 'a.js'), 'Read a.js');
-    assert.strictEqual(views.phrase('read_file', 'a.js', true), 'Reading a.js…');
+    // `verb · subject`, which is what a tool row IS - a fact with two parts -
+    // rather than a little sentence. See ui/phrasing.js.
+    assert.strictEqual(views.phrase('grep', '/SessionStrategist/'), 'search · SessionStrategist');
+    assert.strictEqual(views.phrase('read_file', 'a.js'), 'read · a.js');
+    // ---- THE RUNNING FORM IS THE SAME SHAPE ------------------------------
+    //
+    // It used to be a different sentence in a different tense — `Reading a.js…`
+    // while it ran, `Read a.js` once it had — so the row visibly rewrote itself at
+    // the moment the call finished. Only the MARK changes now, which is the one
+    // thing that actually changed.
+    assert.strictEqual(views.phrase('read_file', 'a.js', true), 'read · a.js');
+    // AND A SHELL COMMAND'S VERB IS ITS PROGRAM, because `Ran` said only that
+    // something ran — which every row on the screen shares.
+    assert.strictEqual(views.phrase('run_bash', 'python -m py_compile a.py'),
+      'python · -m py_compile a.py');
   });
 
   await test('FEED: the turn IN FLIGHT is visible, not only after it ends', () => {
     // session.turns gains its entry when a turn ENDS. Without the live list the
     // feed was empty for the whole time the work was actually happening.
+    //
+    // AND A ROUTINE READ IS NOT PART OF THAT, which is the other half of the
+    // contract: a successful read is LIVE STATE and belongs in the one row above
+    // the caret, not as a permanent row in the conversation. A change to the
+    // project is the record and is kept. See ui/feed.js `durable`, and the
+    // transcript rule it implements.
     const lines = views.activity({
       session: { turns: [] },
-      liveActions: [{ name: 'read_file', target: 'a.js', ok: true }],
+      liveActions: [
+        { name: 'read_file', target: 'a.js', ok: true },
+        { name: 'edit_file', target: 'a.js', ok: true },
+      ],
       liveNarration: [{ text: 'Looking at the router.', after: 0 }],
       width: 70,
     }).join('\n');
     assert.match(lines, /Looking at the router/);
-    assert.match(lines, /Read a\.js/);
+    assert.match(lines, /edited · a\.js/, 'a change to the project is the account of the work');
+    assert.ok(!/read · a\.js/.test(lines), 'a routine read must not accumulate in the conversation');
   });
 
   await test('FEED: a failed call is reported ONCE, not again as a trailing error', () => {

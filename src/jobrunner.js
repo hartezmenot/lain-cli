@@ -10,7 +10,7 @@
  *                `app.submit` UNCHANGED, and everything that has always
  *                happened around a turn still happens: the live UI, the
  *                completion policy, the session save, the steer drain, the
- *                Probe mirror. The ONLY difference is that src/repl.js no
+ *                events bus. The ONLY difference is that src/repl.js no
  *                longer awaits it before taking the next line off the queue.
  *
  *   BACKGROUND   `/bg`. A second piece of work, running at the same time. It
@@ -62,7 +62,7 @@ function turnOptions(app, { session, signal, from = null, ask = null, onStatus =
     // rides at the tail of the wire. See promptparts.js for why, and for the
     // measurement. `app.systemPrompt` still exists and still returns the whole
     // thing for anything that wants it in one piece.
-    ...(() => { const p = require('./promptparts').of(app, from); return { systemPrompt: p.stable, live: p.live }; })(),
+    ...(() => { const p = require('./promptparts').of(app); return { systemPrompt: p.stable, live: p.live }; })(),
     // CARRIED, not merely consumed. `from` shaped the system prompt and stopped
     // there, so the turn record had no idea who asked for it — and the feed,
     // which has to tell a person's request from LAIN continuing its own work,
@@ -98,6 +98,21 @@ function turnOptions(app, { session, signal, from = null, ask = null, onStatus =
  *
  * @returns {AgentJob|null} the job, or null if one already owns the session
  */
+/**
+ * Record a worker against the active task, if there is one.
+ *
+ * BEST EFFORT AND SILENT. A background job must not fail because the flight
+ * recorder was busy, and a session with no harness task open (a chat, a
+ * one-shot) simply records nothing.
+ */
+function noteAgent(app, entry) {
+  try {
+    const h = require('./harnesslink').existing(app);
+    if (!h || !h.runtime.activeId) return;
+    h.runtime.noteAgent(h.runtime.activeId, entry);
+  } catch { /* the work is not a convenience; the record is */ }
+}
+
 function startPrimary(app, text, opts = {}) {
   if (app.jobs.primary()) return null;
   const job = app.jobs.create({ request: text, primary: true, session: app.session });
@@ -176,15 +191,24 @@ function announce(app, job) {
     try {
       if (batch.length === 1) {
         const j = batch[0];
-        if (j.state === STATE.SUCCEEDED) app.render.notice('info', `job #${j.id} completed - ${String(j.request).slice(0, 60)}`);
-        else if (j.state === STATE.FAILED) app.render.notice('warn', `job #${j.id} failed - ${j.error}`);
+        // ---- `Background #17 COMPLETED - run the integration suite` -------
+        //
+        // `Background`, not `job`, because that is the word `/bg` and `/ps`
+        // use and a person should not have to learn that the two are the same
+        // thing. And `COMPLETED`, never `PASSED`: this line is reporting that
+        // the WORK ENDED, which is a fact this code has. Whether the work is
+        // PROVED is the harness's verdict on the task, it needs evidence, and
+        // announcing it here would be the shortcut harness/state.js exists to
+        // refuse. `/bg` shows the verdict beside the row once there is one.
+        if (j.state === STATE.SUCCEEDED) app.render.notice('info', `Background #${j.id} COMPLETED - ${String(j.request).slice(0, 60)}`);
+        else if (j.state === STATE.FAILED) app.render.notice('warn', `Background #${j.id} FAILED - ${j.error}`);
         return;
       }
       const ok = batch.filter((j) => j.state === STATE.SUCCEEDED).length;
       const bad = batch.length - ok;
       const ids = batch.map((j) => '#' + j.id).join(' ');
-      const what = bad ? `${ok} background job(s) completed, ${bad} failed` : `${batch.length} background jobs completed`;
-      app.render.notice(bad ? 'warn' : 'info', `${what} - ${ids} · /jobs`);
+      const what = bad ? `${ok} background task(s) completed, ${bad} failed` : `${batch.length} background tasks completed`;
+      app.render.notice(bad ? 'warn' : 'info', `${what} - ${ids} · /bg`);
     } catch { /* no renderer is not a reason to leave a job unsettled */ }
   }, 0);
   if (sayTimer && typeof sayTimer.unref === 'function') sayTimer.unref();
@@ -234,6 +258,33 @@ function startBackground(app, text) {
   job.state = STATE.RUNNING;
   job.startedAt = Date.now();
   app.jobs.changed();
+  // ---- THE TASK RECORD IS TOLD A SECOND WORKER STARTED --------------------
+  //
+  // `/bg` forks a session and runs a whole turn beside the conversation, and
+  // until now the only trace of that on the task's own record was whatever
+  // tools it happened to call. The flight recorder is supposed to answer "who
+  // did what" — an agent that appears only as an anonymous run of tool calls
+  // makes that unanswerable the moment there are two of them.
+  //
+  // SCOPE, NOT INSTRUCTIONS. What is recorded is the request and the fact that
+  // it has its own session; nothing here hands the worker anything, and the
+  // harness has no opinion about what it does. See harness/record.js noteAgent.
+  noteAgent(app, { name: `bg#${job.id}`, scope: String(text).slice(0, 200) });
+  // ---- WHICH HARNESS TASK THIS WORK BELONGS TO --------------------------
+  //
+  // READ, NOT OPENED. `runtime.create` would set `activeId` and hijack the
+  // conversation's own task, which is a change to how the harness attributes
+  // everything — exactly the kind of thing the CLI layer must not do. So this
+  // records the task that is ALREADY open, if one is, and nothing more.
+  //
+  // It is what lets `/bg` say `task PASSED` beside a finished row without
+  // inventing a verdict: the state comes from `runtime.get(taskId).state`,
+  // which only `settle()` can move to PASSED and only from evidence. With no
+  // task open the field is null and `/bg` simply says the job COMPLETED.
+  try {
+    const h = require('./harnesslink').existing(app);
+    job.taskId = (h && h.runtime.activeId) || null;
+  } catch { job.taskId = null; }
 
   // A PER-JOB STEER QUEUE. `/steer <n>` puts words here and the turn takes them
   // at its next step boundary — the same mechanism the primary conversation
@@ -256,7 +307,9 @@ function startBackground(app, text) {
       // Parking is the third option. The job holds, says so in its row, and the
       // foreground prompt is untouched — see agentjob.js `askUser` and the
       // `/answer` command. Nothing is drawn over anything the user is typing.
-      ask: (q) => job.askUser(q && q.question, (q && q.options) || []),
+      ask: (q) => app.interaction
+        ? require('./interaction').ask(app, q, job.abort.signal)
+        : job.askUser(q && q.question, (q && q.options) || []),
       onStatus: (p) => {
         if (!p) return;
         job.phase = p.phase || p.word || null;
@@ -283,7 +336,10 @@ function startBackground(app, text) {
     return record;
   };
 
-  run().then(
+  const launch = app.interaction
+    ? () => require('./interaction').run(app, { ...require('./interaction').port(app), signal: job.abort.signal }, run)
+    : run;
+  launch().then(
     (record) => {
       if (job.state === STATE.CANCELLED) return;
       job._finish(STATE.SUCCEEDED, { result: record || null });
@@ -293,6 +349,11 @@ function startBackground(app, text) {
       job._finish(STATE.FAILED, { error: (e && e.message) || String(e) });
     },
   ).then(() => {
+    noteAgent(app, {
+      name: `bg#${job.id}`,
+      scope: String(text).slice(0, 200),
+      outcome: String(job.state),
+    });
     // IT SAYS SO, WITHOUT TAKING THE SCREEN. A notice lands in the feed where
     // the account of the session lives; it opens no panel and cannot interrupt
     // a half-typed line. Batched — see `announce`.

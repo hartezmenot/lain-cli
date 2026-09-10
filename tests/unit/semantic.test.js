@@ -377,6 +377,50 @@ module.exports = async function () {
       'the file LAIN did write is not a surprise');
   });
 
+  await test('GIT: a session inside a SUBDIRECTORY sees its own frame, not the repo root\'s', async () => {
+    // The defect this pins: porcelain v1 ALWAYS reports repo-root-relative
+    // names — it ignores status.relativePaths on purpose — while the expected
+    // list arrives as absolute paths, which review() normalizes against CWD.
+    // From a subdirectory the two frames diverge on every file, and before the
+    // frame join existed EVERY modified file was flagged `unexpected` (the
+    // cwd-relative expected name could never equal git's root-relative one)
+    // and countLines probed paths that did not exist, so `lines` came back
+    // null and every size judgement built on it silently stopped working.
+    const dir = tmpdir('lain-git4-');
+    const run = (args) => execute('git', args, { cwd: dir, timeoutMs: 20_000 });
+    if (!(await run(['init', '-q'])).ok) return;
+    await run(['config', 'user.email', 't@example.com']);
+    await run(['config', 'user.name', 'test']);
+    fs.mkdirSync(path.join(dir, 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'pkg', 'mine.js'), 'const a = 1;\nconst b = 2;\n', 'utf8');
+    fs.writeFileSync(path.join(dir, 'pkg', 'theirs.js'), 'const c = 1;\n', 'utf8');
+    fs.writeFileSync(path.join(dir, 'root.js'), 'const r = 1;\n', 'utf8');
+    await run(['add', '-A']);
+    if (!(await run(['commit', '-qm', 'base'])).ok) return;
+    fs.writeFileSync(path.join(dir, 'pkg', 'mine.js'), 'const a = 2;\nconst b = 2;\n', 'utf8');
+    fs.writeFileSync(path.join(dir, 'pkg', 'theirs.js'), 'const c = 2;\n', 'utf8');
+    fs.writeFileSync(path.join(dir, 'root.js'), 'const r = 2;\n', 'utf8');
+
+    const sub = path.join(dir, 'pkg');
+    const r = await gitsense.review(sub, { expected: [path.join(sub, 'mine.js')] });
+    assert.ok(r.ok, r.error);
+    // The subtree scoping: root.js differs from the last commit, but a session
+    // rooted in pkg/ is not briefed on the rest of the repository.
+    assert.ok(!r.files.some((f) => f.file === 'root.js'),
+      'changes outside the session\'s subtree are not its state');
+    // THE DEFECT: mine.js must match the expected list now that git's
+    // root-relative name is converted into the session's cwd frame.
+    const mine = r.files.find((f) => f.file === 'mine.js');
+    assert.ok(mine, 'the file is named in the session\'s own frame, not the repo root\'s');
+    assert.ok(!mine.unexpected, 'a file LAIN wrote is not a surprise — the frames join');
+    assert.strictEqual(mine.added, 1, 'and the numstat half of the join lands on it');
+    assert.strictEqual(mine.removed, 1);
+    assert.strictEqual(mine.lines, 3, 'countLines reads the file where it actually is');
+    const theirs = r.files.find((f) => f.file === 'theirs.js');
+    assert.ok(theirs && theirs.unexpected, 'a file LAIN did not write still is a surprise');
+    assert.deepStrictEqual(r.missing, [], 'and what was written is not reported missing');
+  });
+
   await test('GIT: a clean tree says so plainly, with no observations to scroll past', async () => {
     const dir = tmpdir('lain-git3-');
     const run = (args) => execute('git', args, { cwd: dir, timeoutMs: 20_000 });

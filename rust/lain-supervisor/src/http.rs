@@ -47,6 +47,19 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+pub(crate) fn curl_command() -> Command {
+    #[allow(unused_mut)] // mutated only by the Windows extension below
+    let mut command = Command::new(curl());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // A detached supervisor has no console to inherit. Each HTTP request
+        // must remain a background operation, without allocating a new window.
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    command
+}
+
 /// What came back. `status` is 0 when nothing was reached at all, which is a
 /// different thing from a server that answered 500 and is kept different.
 pub struct Reply {
@@ -143,7 +156,7 @@ pub fn available() -> bool {
     use std::sync::OnceLock;
     static FOUND: OnceLock<bool> = OnceLock::new();
     *FOUND.get_or_init(|| {
-        Command::new(curl())
+        curl_command()
             .arg("--version")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -222,7 +235,7 @@ pub fn call(token: &str, method: &str, params: &[(&str, String)], timeout_secs: 
         MARK = MARK,
     );
 
-    let mut child = match Command::new(curl())
+    let mut child = match curl_command()
         .arg("--config")
         .arg("-")
         .stdin(Stdio::piped())
@@ -345,7 +358,7 @@ pub fn post_json(url: &str, bearer: &str, body: &str, timeout_secs: u32) -> Repl
 /// One curl invocation with a config on stdin. Shared so there is exactly one
 /// place where the credential-bearing config is handed over.
 fn run_curl(config: &str) -> Result<(String, String), String> {
-    let mut child = Command::new(curl())
+    let mut child = curl_command()
         .arg("--config")
         .arg("-")
         .stdin(Stdio::piped())

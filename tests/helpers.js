@@ -94,22 +94,10 @@ function writeScript(dir, steps) {
  * recorded in THIS temporary directory.
  */
 function shutdownSupervisorIn(home) {
-  return new Promise((resolve) => {
-    let ep;
-    try { ep = JSON.parse(fs.readFileSync(path.join(home, 'supervisor', 'endpoint.json'), 'utf8')); } catch { return resolve(); }
-    if (!ep || !ep.port) return resolve();
-    const net = require('net');
-    const sock = net.connect(ep.port, '127.0.0.1');
-    const done = () => { try { sock.destroy(); } catch { /* gone */ } resolve(); };
-    sock.setTimeout(1500, done);
-    sock.on('error', done);
-    sock.on('connect', () => { sock.write(JSON.stringify({ op: 'shutdown' }) + '\n'); });
-    sock.on('data', done);
-    sock.on('close', () => resolve());
-  });
+  return require('../src/supervisor').shutdownIn(home);
 }
 
-function runCli(args = [], o = {}) {
+async function runCli(args = [], o = {}) {
   const cwd = o.cwd || tmpdir('lain-cwd-');
   const configDir = o.configDir || path.join(cwd, '.config');
   // ---- THE PROJECT IS ALREADY TRUSTED, unless the test says otherwise ------
@@ -183,6 +171,8 @@ function runCli(args = [], o = {}) {
     // the top of tests/run.js makes that argument at length; this is the same
     // argument about the second directory LAIN writes to.
     LAIN_HOME: path.join(configDir, 'supervisor-home'),
+    ...(process.env.LAIN_SUPERVISOR_BIN ? { LAIN_SUPERVISOR_BIN: process.env.LAIN_SUPERVISOR_BIN } : {}),
+    ...(process.env.LAIN_SUPERVISOR_LEASE_PORT ? { LAIN_SUPERVISOR_LEASE_PORT: process.env.LAIN_SUPERVISOR_LEASE_PORT } : {}),
     LAIN_NO_COLOR: '1',
     NO_COLOR: '1',
     ...(o.env || {}),
@@ -191,8 +181,12 @@ function runCli(args = [], o = {}) {
     env.LAIN_PROVIDER = 'mock';
     env.LAIN_MOCK_SCRIPT = Array.isArray(o.script) ? writeScript(configDirEnsure(configDir), o.script) : o.script;
   }
-  return new Promise((resolve) => {
+  const scope = await require('./supervisor-scope').open();
+  env.LAIN_SUPERVISOR_LEASE_PORT = String(scope.port);
+  try {
+  return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BIN, ...args], { cwd, env, windowsHide: true });
+    child.once('error', reject);
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => { stdout += d.toString('utf8'); });
@@ -218,11 +212,10 @@ function runCli(args = [], o = {}) {
       // the supervisor's own `shutdown`, which stops that process and touches no
       // worker it started. Nothing outside this temporary directory can be
       // affected, and a supervisor that was never started is a no-op.
-      shutdownSupervisorIn(path.join(configDir, 'supervisor-home'))
+      shutdownSupervisorIn(env.LAIN_HOME)
         .then(() => resolve({ code, stdout, stderr, out: stdout + stderr, cwd, configDir }))
-        // A cleanup that fails must never fail the test it was cleaning up
-        // after — the run happened, and its result is what was asked for.
-        .catch(() => resolve({ code, stdout, stderr, out: stdout + stderr, cwd, configDir }));
+        // Cleanup is part of the result: a leaked process must fail visibly.
+        .catch(reject);
     });
     // STAGED STDIN. Writing everything at once delivers keystrokes before the
     // async work they are meant to answer has even started — a panel opened by
@@ -240,6 +233,7 @@ function runCli(args = [], o = {}) {
     } else if (o.stdin !== undefined) child.stdin.end(o.stdin);
     else child.stdin.end();
   });
+  } finally { await scope.close(); }
 }
 
 function configDirEnsure(d) { fs.mkdirSync(d, { recursive: true }); return d; }
@@ -248,7 +242,7 @@ function configDirEnsure(d) { fs.mkdirSync(d, { recursive: true }); return d; }
  * THE DRAWN FRAMES OF A TUI RUN, and the ROWS of one.
  *
  * A drawn frame contains no newlines. The Screen positions every row with
- * `ESC[<row>;1H` and writes the whole frame as one string, so stripping the
+ * `ESC[<row>;<col>H` and writes the whole frame as one string, so stripping the
  * escapes and splitting on '\n' yields ONE enormous line — and any test that
  * counts rows that way counts zero, passes, and proves nothing. That is exactly
  * what happened to a bound on how many tool-call rows may share a screen.
@@ -272,8 +266,15 @@ function frames(out) {
 }
 
 function rowsOf(rawFrame) {
+  // ---- ANY COLUMN, NOT COLUMN 1 --------------------------------------
+  //
+  // Every region is drawn inside the content frame, so the address carries the
+  // frame's left edge rather than 1 (ui/frame.js `contentBounds`). Splitting on
+  // `;1H` found ONE row — the whole frame as a single string — which is the
+  // same silent zero this helper's header was written about, arrived at from the
+  // other direction.
   return String(rawFrame)
-    .split(/\x1b\[\d+;1H/)
+    .split(/\x1b\[\d+;\d+H/)
     .map((r) => r
       .replace(/\x1b\][0-9]+;[^\x07]*\x07/g, '')
       .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ''))
@@ -299,29 +300,35 @@ function assertNotIncludes(haystack, needle, msg) {
 }
 
 /**
- * THE TAB STRIP AS A LANDMARK, asked of ui/tabs.js rather than written down.
+ * WHERE THE CONVERSATION BEGINS, ON A DRAWN FRAME.
  *
- * A dozen tests locate the workspace on screen by looking for the literal
- * `1 context` — not because they are about CONTEXT, but because the strip is
- * the one row that reliably marks where the workspace begins. Every one of them
- * broke the day the pane order changed, and each failed with a message about a
- * pane it was never testing.
+ * ------------------------------------------------------------------------
+ * THIS USED TO BE THE TAB STRIP. A dozen tests located the workspace by
+ * looking for the literal `1 context` — not because they were about CONTEXT,
+ * but because the strip was the one row that reliably marked where the
+ * workspace began. `firstTab()`, `firstTabLabel()` and `firstTabMark()` asked
+ * ui/tabs.js for that label rather than writing it down, so the pane order
+ * could change without a dozen unrelated failures.
  *
- * `firstTab()` is the name of the leading pane; `firstTabLabel()` is how the
- * strip draws it while it is active; `firstTabMark()` includes the frame corner
- * for the tests that anchor on the whole opening of the row.
+ * There is no strip. The landmark is the RULE under the header — one row of
+ * `─` starting in column 1, drawn by ui/layout.js `separator`, and the only
+ * row on the screen that begins that way. The input box's bottom border is
+ * `└───┘` and starts with a corner, which is what keeps these unambiguous.
+ *
+ * `headerMark()` is the wordmark on the header row itself, for tests that want
+ * the top of the frame rather than the boundary.
  */
-function firstTab() { return require('../src/ui/tabs').VIEWS[0]; }
-function firstTabLabel() {
-  const tabs = require('../src/ui/tabs');
-  const name = tabs.VIEWS[0];
-  return `[${tabs.numberOf(name)} ${name}]`;
-}
-function firstTabMark() { return `┌─${firstTabLabel()}`; }
+function headerMark() { return 'LAIN'; }
+
+/** True for the header rule — a row that STARTS with a run of box-drawing dash. */
+function isRuleRow(line) { return /^─{4}/.test(String(line || '')); }
+
+/** The index of the header rule in a list of drawn rows, or -1. */
+function ruleRowIndex(rows) { return rows.findIndex((l) => isRuleRow(l)); }
 
 module.exports = {
   ROOT, BIN, test, results, setFile, tmpdir, runCli, writeScript,
   frames, rowsOf, lastFrameRows,
-  firstTab, firstTabLabel, firstTabMark,
+  headerMark, isRuleRow, ruleRowIndex,
   assertIncludes, assertNotIncludes,
 };

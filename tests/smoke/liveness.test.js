@@ -14,7 +14,7 @@
  */
 
 const assert = require('assert');
-const { test, runCli, tmpdir, assertIncludes, firstTabMark } = require('../helpers');
+const { test, runCli, tmpdir, assertIncludes, headerMark, isRuleRow } = require('../helpers');
 
 const ETX = String.fromCharCode(3);          // Ctrl+C
 const tui = (cols = 96, rows = 28) => ({ LAIN_FORCE_TUI: '1', COLUMNS: String(cols), LINES: String(rows) });
@@ -30,7 +30,17 @@ const plain = (s) => String(s).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 
 /** A script whose tool takes real time, so a wait is genuinely observable. */
 const slowScript = (secs = 3) => [
-  { text: 'Starting the audit.', tool_calls: [{ name: 'grep', input: { pattern: 'SessionStrategist' } }] },
+  {
+    text: 'Starting the audit.',
+    tool_calls: [
+      { name: 'grep', input: { pattern: 'SessionStrategist' } },
+      // AND ONE CALL THAT LEAVES A ROW. A successful search is live state and
+      // leaves nothing in the conversation (ui/durable.js), so a script made only
+      // of searches has no COMPLETED WORK for the third test below to find on
+      // screen while the next step runs.
+      { name: 'write_file', input: { path: 'gen/audit.md', content: '# audit' } },
+    ],
+  },
   { text: 'Now the slow part.', tool_calls: [{ name: 'run_bash', input: { command: `sleep ${secs}` } }] },
   { text: 'Done.' },
 ];
@@ -39,60 +49,105 @@ module.exports = async function () {
   await test('SEE: the screen says THINKING while it waits for the model', async () => {
     const r = await runCli([], { cwd: tmpdir('live-'), env: tui(), stdin: 'audit it\n', script: slowScript(1) });
     const out = plain(r.out);
-    assertIncludes(out, 'THINKING', 'waiting on the provider must be visible in the header');
+    assert.match(out, /THINKING/i, 'waiting on the provider must be visible in the header');
     assertIncludes(out, 'waiting for the model', 'and said in words on the status strip above the input');
   });
 
   await test('SEE: the screen names the TOOL while the tool is running', async () => {
     const r = await runCli([], { cwd: tmpdir('live-'), env: tui(), stdin: 'audit it\n', script: slowScript(1) });
     const out = plain(r.out);
-    assertIncludes(out, 'RUNNING', 'a tool executing is a different state from waiting on a server');
-    assertIncludes(out, 'Searched for "SessionStrategist"', 'and the subject is said the way a person would');
+    assert.match(out, /RUNNING/i, 'a tool executing is a different state from waiting on a server');
+    // ---- THE LIVE ROW'S OWN WORDS, NOT THE FEED'S ---------------------
+    //
+    // This looked for the phrasing ui/phrasing.js gives a FINISHED call in the
+    // conversation. A successful search no longer leaves a row there at all
+    // (ui/durable.js): it is live state, which is exactly what this test is
+    // about. So it is asserted where it actually lives - on the one row above the
+    // caret, in that row's own vocabulary (ui/status.js VERB).
+    assert.match(out, /SEARCHING/i, 'the live row names what kind of work is in flight');
+    assertIncludes(out, 'SessionStrategist', 'and names its subject');
   });
 
   await test('SEE: the screen KEEPS UPDATING through a long wait — it cannot look frozen', async () => {
     const r = await runCli([], { cwd: tmpdir('live-'), env: tui(), stdin: 'audit it\n', script: slowScript(3), timeoutMs: 45000 });
     // The whole point: a redraw happens while nothing else does. Count frames
     // drawn during the 3-second tool, and the distinct spinner phases in them.
-    const running = frames(r.out).map(plain).filter((f) => /RUNNING\s+sleep 3/.test(f));
+    const running = frames(r.out).map(plain).filter((f) => /RUNNING\s+sleep 3/i.test(f));
     assert.ok(running.length >= 6, `only ${running.length} frames drawn during a 3s wait — the screen would look dead`);
-    // The strip now carries the ACTOR between the spinner and the state word —
-    // `◐ TOOL     RUNNING  sleep 3` — because with an external model in the loop
-    // "who is doing this" is the first thing you need to know.
-    const spinners = new Set(running.map((f) => (f.match(/([◐◓◑◒])\s+\S+\s+RUNNING\s+sleep 3/) || [])[1]).filter(Boolean));
+    // ---- NO ACTOR COLUMN FOR LAIN'S OWN WORK --------------------------
+    //
+    // It was `◐ TOOL     RUNNING  sleep 3` and the pattern required the actor
+    // between the spinner and the word. A tool call IS LAIN running a tool, so the
+    // column said nothing the verb did not and is drawn only for an actor that is
+    // NOT this program — the network, the bridge, a second model, the user. The
+    // row is `◐ Running  sleep 3` now. See ui/status.js.
+    const spinners = new Set(running.map((f) => (f.match(/([◐◓◑◒])\s+Running\s+sleep 3/) || [])[1]).filter(Boolean));
     assert.ok(spinners.size >= 3, `the indicator did not move: saw ${[...spinners].join('') || 'nothing'}`);
   });
 
   await test('SEE: the elapsed time of a real wait is shown', async () => {
     const r = await runCli([], { cwd: tmpdir('live-'), env: tui(), stdin: 'audit it\n', script: slowScript(3), timeoutMs: 45000 });
-    assert.match(plain(r.out), /RUNNING\s+sleep 3\s+\ds/, 'a long wait must say how long, or it reads as a hang');
+    // ---- THE FIGURE IS THE TASK'S CLOCK, NOT THE PHASE'S AGE ----------
+    //
+    // This matched `RUNNING sleep 3   3s` - the age of the CURRENT PHASE, drawn
+    // immediately after the detail. That figure restarted at every read, write
+    // and retry, so it never answered how long the person had been waiting; it is
+    // one `HH:MM:SS` for the whole submission now, in the row's right-hand column
+    // (ui/workclock.js). The property is unchanged: a long wait must carry a
+    // number, or a working LAIN reads as a dead one.
+    assert.match(plain(r.out), /RUNNING\s+sleep 3[^\n]*\d\d:\d\d:\d\d/i,
+      'a long wait must say how long, or it reads as a hang');
   });
 
   await test('SEE: work already done stays on screen WHILE the next step runs', async () => {
     const r = await runCli([], { cwd: tmpdir('live-'), env: tui(), stdin: 'audit it\n', script: slowScript(3), timeoutMs: 45000 });
     // session.turns only gains its entry at turn END; without the in-flight feed
     // this frame showed a status line above an empty region.
-    const mid = frames(r.out).map(plain).find((f) => /RUNNING\s+sleep 3/.test(f) && /Searched for/.test(f));
+    const mid = frames(r.out).map(plain).find((f) => /RUNNING\s+sleep 3/i.test(f) && /audit\.md/.test(f));
     assert.ok(mid, 'the completed call must remain visible while the next one runs');
   });
 
   // ------------------------------------------------------------- regions ---
 
-  await test('SEE: the screen is FRAMED — header, workspace and interaction', async () => {
+  await test('SEE: the screen is READABLE — header, conversation, activity, input', async () => {
+    // ------------------------------------------------------------------
+    // IT USED TO ASSERT `┌─ L A I N`, and the argument for it was sound at the
+    // time: the regions were bare text separated by blank rows, so the screen
+    // read as a stack of paragraphs rather than an interface, and a border made
+    // the boundaries unmistakable.
+    //
+    // The boundaries are made by CONTRAST and WHITESPACE now, which costs four
+    // fewer rows: one dim header row over a rule, the conversation, one live
+    // row, and an input on a grey ground. What has to stay true is that a
+    // person can tell the regions apart — and the two that are always drawn are
+    // the two asserted below.
+    // ------------------------------------------------------------------
     const r = await runCli([], { cwd: tmpdir('live-'), env: tui(), stdin: 'audit it\n', script: slowScript(1) });
     const out = plain(r.out);
-    assertIncludes(out, '┌─ L A I N', 'the top region is a box, not floating text');
-    assertIncludes(out, firstTabMark(), 'the workspace is enclosed and labelled by its own selector');
-    assertIncludes(out, '┌─ INPUT', 'the interaction region is always identifiable');
+    assert.ok(!out.includes('┌─ L A I N'), 'the header is no longer a box');
+    // THE TWO LANDMARKS THAT ARE ALWAYS DRAWN. It used to be the tab strip and
+    // the input's labelled border; both are gone. The header carries the
+    // wordmark and the input carries what it is for, which is the same
+    // guarantee with two fewer rows of chrome.
+    assertIncludes(out, headerMark(), 'the header names the program and the project');
+    assertIncludes(out, 'Ask LAIN', 'and the interaction region is always identifiable');
   });
 
-  await test('SEE: the interaction frame RENAMES itself to what it currently is', async () => {
+  await test('SEE: an open picker NAMES itself, in its own panel below the input', async () => {
+    // The input's border used to RENAME itself — `┌─ COMMANDS`, `┌─ FILES` —
+    // because the picker had no title of its own to carry. It has one, and the
+    // input has no border: the panel opens directly under the line you are
+    // filtering with, titled for what it is doing. Same guarantee, one label
+    // instead of two on two regions.
     const r = await runCli([], {
       cwd: tmpdir('live-'), env: tui(),
       stdinSteps: ['audit it\n', '/'], stepDelayMs: 700,
       script: slowScript(3), timeoutMs: 45000,
     });
-    assertIncludes(plain(r.out), '┌─ COMMANDS', 'the palette renames the interaction region');
+    const out = plain(r.out);
+    assert.match(out, /commands/i, 'the picker says what it is');
+    assert.ok(!out.includes('┌─ COMMANDS'),
+      'and it is its own panel rather than a label on the input region');
   });
 
   // ------------------------------------------------- commands during work ---
@@ -104,10 +159,10 @@ module.exports = async function () {
       script: slowScript(4), timeoutMs: 45000,
     });
     const out = plain(r.out);
-    assertIncludes(out, 'COMMANDS', 'the palette must open during an active turn');
+    assert.match(out, /commands/i, 'the palette must open during an active turn');
     assertIncludes(out, '/status', 'and filter as it is typed');
     // The turn must be untouched by the user looking something up.
-    assert.match(out, /RUNNING\s+sleep 4/, 'and the work carries on underneath');
+    assert.match(out, /RUNNING\s+sleep 4/i, 'and the work carries on underneath');
   });
 
   await test('SEE: a command chosen during a turn runs NOW, not after it', async () => {
@@ -118,7 +173,7 @@ module.exports = async function () {
     });
     // /status printed while `sleep 5` was still running: its output and the
     // live row appear in the SAME frame.
-    const both = frames(r.out).map(plain).find((f) => /RUNNING\s+sleep 5/.test(f) && /config\s+\S/.test(f));
+    const both = frames(r.out).map(plain).find((f) => /RUNNING\s+sleep 5/i.test(f) && /config\s+\S/.test(f));
     assert.ok(both, 'the command output must appear while the turn is still in flight');
   });
 
@@ -142,12 +197,16 @@ module.exports = async function () {
       script: slowScript(6), timeoutMs: 45000,
     });
     const seen = frames(r.out).map(plain);
-    const iAt = seen.findIndex((f) => /INTERRUPTING/.test(f));
-    const dAt = seen.findIndex((f) => /INTERRUPTED/.test(f));
+    const iAt = seen.findIndex((f) => /INTERRUPTING/i.test(f));
+    const dAt = seen.findIndex((f) => /INTERRUPTED/i.test(f));
     assert.ok(iAt >= 0, 'the cancel must be acknowledged immediately, not after the unwind');
     assert.ok(dAt > iAt, 'and it must settle into INTERRUPTED');
     // No frame between them may claim everything is fine.
-    const between = seen.slice(iAt, dAt).filter((f) => /○ READY/.test(f));
+    // `○ READY` WAS THE HEADER'S STATUS WORD AND DOT, and both are gone: what
+    // LAIN is doing has one owner, the live row above the caret. The property
+    // is unchanged — READY must never flash between INTERRUPTING and
+    // INTERRUPTED — only the place it is read from.
+    const between = seen.slice(iAt, dAt).filter((f) => /LAIN\s+READY/.test(f));
     assert.deepStrictEqual(between, [], 'READY must never flash between INTERRUPTING and INTERRUPTED');
   });
 
@@ -157,7 +216,7 @@ module.exports = async function () {
       stdinSteps: ['audit it\n', '/', ETX], stepDelayMs: 800,
       script: slowScript(6), timeoutMs: 45000,
     });
-    assertIncludes(plain(r.out), 'INTERRUPTED', 'Ctrl+C must stay a global interrupt with a menu open');
+    assert.match(plain(r.out), /INTERRUPTED/i, 'Ctrl+C must stay a global interrupt with a menu open');
   });
 
   await test('SEE: idle Ctrl+C asks, and a second one leaves cleanly', async () => {
@@ -208,8 +267,8 @@ module.exports = async function () {
         stdin: 'audit it\n', script: slowScript(2), timeoutMs: 40000,
       });
       const out = plain(r.out);
-      assert.ok(/RUNNING\s+sleep 2|THINKING/.test(out), `${cols}x${rows}: no live status survived`);
-      assertIncludes(out, '┌─ INPUT', `${cols}x${rows}: the input region must always be identifiable`);
+      assert.ok(/RUNNING\s+sleep 2|THINKING/i.test(out), `${cols}x${rows}: no live status survived`);
+      assertIncludes(out, 'Ask LAIN', `${cols}x${rows}: the input region must always be identifiable`);
     }
   });
 };

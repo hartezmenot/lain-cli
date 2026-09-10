@@ -182,10 +182,6 @@ module.exports = async function () {
   // ------------------------------------------------------ the visible surface --
 
   await test('UI: a dispatched call is described by its OPERATION, not by the tool name', () => {
-    // Every Probe action read as a bare `probe` with no subject, so thirty of
-    // them were indistinguishable from one another.
-    assert.strictEqual(describeTarget('probe', { op: 'input.mouse.click' }), 'input.mouse.click');
-    assert.strictEqual(describeTarget('probe', { op: 'memory.read', target: 'Game.exe' }), 'memory.read → Game.exe');
     // `computer`, WHICH IS THE ONE THAT MATTERS NOW. This line read `desktop`
     // until the consolidation retired that name, and the rename was the whole
     // defect: the list in turn.js kept naming a tool that no longer exists, so
@@ -195,21 +191,23 @@ module.exports = async function () {
     // test was written for, reintroduced through the back door of a rename.
     assert.strictEqual(describeTarget('computer', { op: 'click' }), 'click');
     assert.strictEqual(describeTarget('computer', { op: 'focus', target: 'Notepad' }), 'focus → Notepad');
-    assert.strictEqual(describeTarget('desktop', { op: 'mouse.click' }), '',
+    assert.strictEqual(describeTarget('probe', { op: 'input.mouse.click' }), '',
       'the retired name must NOT be special-cased back into existence');
+    assert.strictEqual(describeTarget('desktop', { op: 'mouse.click' }), '',
+      'and neither must the one retired before it');
     // And an ordinary tool is untouched.
     assert.strictEqual(describeTarget('read_file', { path: 'a.js' }), 'a.js');
   });
 
   await test('UI: the feed names the bridge as the actor', () => {
-    assert.strictEqual(phrasing.phrase('probe', 'input.mouse.click'), 'Probe: input.mouse.click');
-    assert.strictEqual(phrasing.verbOf('probe'), 'Probe');
+    assert.strictEqual(phrasing.phrase('computer', 'click'), 'computer · click');
+    assert.strictEqual(phrasing.verbOf('computer'), 'Computer');
   });
 
   await test('UI: the strip says RUNNING MCP, in the MCP column', () => {
-    // `RUNNING npm test` and `RUNNING MCP input.mouse.click` are not the same
+    // `RUNNING npm test` and `RUNNING MCP click` are not the same
     // kind of event, and the second is the one somebody may want to stop.
-    const mcp = status.liveState({ phase: { phase: 'RUNNING_TOOL', tool: 'probe', target: 'input.mouse.click' } });
+    const mcp = status.liveState({ phase: { phase: 'RUNNING_TOOL', tool: 'computer', target: 'click' } });
     assert.strictEqual(mcp.word, 'RUNNING MCP');
     assert.strictEqual(mcp.actor, 'MCP');
     const local = status.liveState({ phase: { phase: 'RUNNING_TOOL', tool: 'run_bash', target: 'npm test' } });
@@ -221,8 +219,8 @@ module.exports = async function () {
     const views = require('../../src/ui/views');
     const S = views.STATE;
     // A bridge action in flight is WORKING, whoever is carrying it out.
-    assert.notStrictEqual(views.statusOf({ phase: { phase: 'RUNNING_TOOL', tool: 'probe' } }), S.NEEDS_USER);
+    assert.notStrictEqual(views.statusOf({ phase: { phase: 'RUNNING_TOOL', tool: 'computer' } }), S.NEEDS_USER);
     // A question being asked is the one state that does.
-    assert.strictEqual(views.statusOf({ awaitingUser: true, phase: { phase: 'RUNNING_TOOL', tool: 'probe' } }), S.NEEDS_USER);
+    assert.strictEqual(views.statusOf({ awaitingUser: true, phase: { phase: 'RUNNING_TOOL', tool: 'computer' } }), S.NEEDS_USER);
   });
 };

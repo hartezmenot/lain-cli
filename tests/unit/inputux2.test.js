@@ -182,21 +182,13 @@ module.exports = async function () {
 
   // ------------------------------------------------------------ hit-testing --
 
-  await test('MOUSE: a click on the tab strip picks the tab under the pointer', () => {
-    const { tabAt } = require('../../src/ui/mouse');
-    const tabs = require('../../src/ui/tabs');
-    // `┌─[1 activity] 2 context  3 plan …` — labels start at column 3, and the
-    // ACTIVE label wears brackets, which makes it two columns wider.
-    //
-    // WHICH panes those are comes from ui/tabs.js. Naming them here made this a
-    // private copy of the order, and it went stale the moment the order moved.
-    const [first, second] = tabs.VIEWS;
-    const active = first;
-    const firstLabel = `[${tabs.numberOf(first)} ${first}]`;
-    assert.strictEqual(tabAt(active, 4), first, 'a click inside the first label picks it');
-    assert.strictEqual(tabAt(active, 3 + firstLabel.length + 1), second,
-      'and a click just past it picks the next pane');
-    assert.strictEqual(tabAt(active, 1), null, 'the frame itself is not a tab');
+  await test('MOUSE: there is no tab strip to click, and no hit-test for one', () => {
+    // `tabAt(view, x)` inverted the strip's labels back into a pane name, so a
+    // click on `3 diff` landed where Alt+3 did. Both are gone; a click on the
+    // header row is now what a click on the header always should have been.
+    const mouse = require('../../src/ui/mouse');
+    assert.strictEqual(typeof mouse.tabAt, 'undefined', 'the hit-test must not survive the strip');
+    assert.strictEqual(typeof mouse.VIEWS, 'undefined', 'nor the order it read');
   });
 
   /**
@@ -236,9 +228,24 @@ module.exports = async function () {
     const text = 'fix the dashboard signal button';
     const screen = drawn(text);
     const [only] = screen.rowMap.inputLines;
-    // Column 5 is the first character of the text — see rowMap.inputTextCol.
-    assert.strictEqual(caretAt(screen, 5, only.row), 0);
-    assert.strictEqual(caretAt(screen, 5 + 17, only.row), 17, 'clicking a character selects that character');
+    // COLUMN 3 IS THE FIRST CHARACTER, read from the map rather than written
+    // down: the input lost its `│ ` border and its `> ` prompt, so the text
+    // starts at the content frame's left inset instead of four columns in.
+    // `rowMap.inputTextCol` is what the drawing recorded, which is the only
+    // number that can be right.
+    //
+    // TWO COLUMNS, NOT ONE, and the number is shared: it is the same inset the
+    // conversation uses (ui/views.js `content`), so the prompt you type and the
+    // prose above it begin on the same column. See ui/inputbox.js PAD.
+    const col0 = screen.rowMap.inputTextCol;
+    // FRAME + PAD. The layout puts the region at the frame's left edge and the
+    // composer pads one column inside its own fill - read from both sources rather
+    // than written down, so neither can drift without this failing.
+    const expected = require('../../src/ui/frame').contentBounds(screen.cols).left
+      + 1 + require('../../src/ui/inputbox').PAD;
+    assert.strictEqual(col0, expected, 'the composer starts at the frame inset plus its padding');
+    assert.strictEqual(caretAt(screen, col0, only.row), 0);
+    assert.strictEqual(caretAt(screen, col0 + 17, only.row), 17, 'clicking a character selects that character');
     assert.strictEqual(caretAt(screen, 999, only.row), text.length,
       'past the end of the text the caret stops at the end');
     assert.strictEqual(caretAt(screen, 1, only.row), 0, 'and left of the text it stops at the start');
@@ -255,9 +262,10 @@ module.exports = async function () {
     const rows = screen.rowMap.inputLines;
     assert.ok(rows.length > 1, `a 200-character line must wrap, not scroll: ${rows.length} row(s)`);
     for (const r of rows) {
-      assert.strictEqual(caretAt(screen, 5, r.row), r.begins,
+      assert.strictEqual(caretAt(screen, screen.rowMap.inputTextCol, r.row), r.begins,
         `the first column of row ${r.row} is where that row begins`);
-      assert.strictEqual(caretAt(screen, 15, r.row), r.begins + 10);
+      // TEN COLUMNS IN, wherever the text now starts.
+      assert.strictEqual(caretAt(screen, screen.rowMap.inputTextCol + 10, r.row), r.begins + 10);
     }
   });
 
@@ -268,9 +276,9 @@ module.exports = async function () {
     const screen = drawn(buf, buf.length);
     const rows = screen.rowMap.inputLines;
     assert.strictEqual(rows.length, 3, 'three lines, three rows');
-    assert.strictEqual(caretAt(screen, 5, rows[1].row), 11, 'the start of the second line');
-    assert.strictEqual(caretAt(screen, 5 + 6, rows[1].row), 17);
-    assert.strictEqual(caretAt(screen, 5, rows[2].row), 23, 'and the third');
+    assert.strictEqual(caretAt(screen, screen.rowMap.inputTextCol, rows[1].row), 11, 'the start of the second line');
+    assert.strictEqual(caretAt(screen, screen.rowMap.inputTextCol + 6, rows[1].row), 17);
+    assert.strictEqual(caretAt(screen, screen.rowMap.inputTextCol, rows[2].row), 23, 'and the third');
   });
 
   await test('MOUSE: the caret is placed ON the row the click landed on', () => {
@@ -281,36 +289,21 @@ module.exports = async function () {
     const NL2 = String.fromCharCode(10);
     const screen = drawn(`alpha${NL2}bravo${NL2}charlie`, 0);
     const rows = screen.rowMap.inputLines;
-    const got = rows.map((r) => caretAt(screen, 5, r.row));
+    const got = rows.map((r) => caretAt(screen, screen.rowMap.inputTextCol, r.row));
     assert.deepStrictEqual(got, [0, 6, 12],
       'each row must resolve to its own start, whatever the caret is doing');
   });
 
   // --------------------------------------------------------------- reports --
-
-  await test('REPORTS: audit and health are tracked SEPARATELY', () => {
-    // One shared `_reportPending` flag meant that opening AUDIT and then HEALTH
-    // before the first finished refused health's pass — and nothing ever asked
-    // again, so the pane read "reading the project…" for the rest of the
-    // session. Tabbing through the views is exactly how anyone reaches health.
-    const { ensureReport } = require('../../src/ui/reports');
-    const ui = {
-      screen: { report: {}, draw() {} },
-      app: { session: { cwd: process.cwd() } },
-    };
-    const a = ensureReport(ui, 'audit');
-    const h = ensureReport(ui, 'health');
-    assert.ok(a && typeof a.then === 'function', 'the audit pass started');
-    assert.ok(h && typeof h.then === 'function',
-      'and health started too — it must not be blocked by the audit still running');
-    return Promise.all([a, h]);
-  });
-
-  await test('REPORTS: a second request for the SAME view is still refused', () => {
-    const { ensureReport } = require('../../src/ui/reports');
-    const ui = { screen: { report: {}, draw() {} }, app: { session: { cwd: process.cwd() } } };
-    const first = ensureReport(ui, 'audit');
-    assert.strictEqual(ensureReport(ui, 'audit'), null, 'one pass per pane, not one per redraw');
-    return first;
-  });
+  //
+  // TWO TESTS STOOD HERE, and both were about `ui/reports.js ensureReport`: one
+  // shared `_reportPending` flag meant opening AUDIT and then HEALTH before the
+  // first finished refused health's pass, and nothing ever asked again — so the
+  // pane read "reading the project…" for the rest of the session.
+  //
+  // That whole mechanism existed to fill a PANE when a pane was OPENED. There
+  // is one surface and no navigation, so nothing triggers a pass but a person
+  // typing `/brief`, `/health` or `/doctor` — which is once, because they asked.
+  // The module is gone; see tests/unit/onesurface.test.js for the invariant that
+  // keeps it gone.
 };

@@ -110,7 +110,13 @@ async function start(app) {
       if (bad) app.render.write(C.yellow(`  architecture: ${bad} recorded component(s) missing/damaged/drifted — /doctor\n`));
     }
     const orphans = require('./scratch').orphans(root, { exclude: app.session ? app.session.id : '' });
-    if (orphans.length) app.render.write(C.yellow(`  ${orphans.length} unfinished turn(s) left findings behind — /lain\n`));
+    // MARKED AS AN OPERATION, not as prose. This is startup scrollback — it is
+    // written before `app.ui.enable()` and the alternate screen covers it a
+    // moment later — but it is still LAIN talking about its own housekeeping,
+    // and §5 named it as one of the three lines that read as something the
+    // model had said. The `›` is the same mark every transient operational line
+    // in LAIN wears. See ui/operation.js.
+    if (orphans.length) app.render.write(C.dim(`  › ${orphans.length} unfinished turn(s) left findings behind · /lain\n`));
   } catch { /* startup chrome never blocks the session */ }
 
   if (!tui) app.banner();
@@ -121,7 +127,7 @@ async function start(app) {
   input.echo = !tui;
   const promptStr = tui ? '' : C.green('› ');
   // Keys, in priority order. An open completion menu gets first refusal, then
-  // the UI (modal panels, view tabs, scrolling); ↑/↓ mean HISTORY only when
+  // the UI (modal panels, scrolling); ↑/↓ mean HISTORY only when
   // nothing is open, which is why the two can never be confused.
   input.on('key', (k) => {
     app.disarmExit();              // any deliberate key clears the exit confirmation
@@ -149,10 +155,14 @@ async function start(app) {
       if (n) app.transient('info', `steering now — ${n} message(s) at the next step`);
     }
     else if (k === 'enter' && !input.line.trim()) app.ui.workspaceSelect();
-    // Views move whether or not text is typed — requiring an empty line
-    // disabled these exactly when you most want a look at the diff. Completion
-    // had first refusal above; the editor never inserts a literal tab.
-    else if (k === 'tab' || k === 'shift-tab') app.ui.nextView(k === 'tab' ? 1 : -1);
+    // ---- TAB NO LONGER MOVES ANYTHING ------------------------------------
+    //
+    // It cycled the nine workspace panes. There is one surface now, so Tab
+    // here would be a key that visibly does nothing — and a key that does
+    // nothing is indistinguishable from a key that is broken.
+    //
+    // The COMPLETION MENU still owns Tab (it means "accept", and it had first
+    // refusal above), which is now the only thing Tab does in LAIN.
   });
   // THE MOUSE. Only ever asked for on a real terminal, and only in TUI mode:
   // a linear `lain -p` run has nothing to click, and enabling tracking there
@@ -334,7 +344,13 @@ async function start(app) {
         app.ui.setInterrupting(true);
       }
       app.abort.abort();
-      app.render.notice('warn', 'interrupted');
+      // ---- THE LIVE ROW ALREADY SAYS THIS, AND KEEPS SAYING IT -----------
+      //
+      // `Ⅱ Interrupted · you stopped the turn; nothing was lost` is a RESTING state
+      // above the caret (ui/status.js), held until the next thing the user does. A
+      // durable `WARN interrupted` row underneath it was the same fact a second
+      // time, in the conversation, where it outlives the moment by a session.
+      require('./ui/operation').say(app, 'Interrupted', 'warn');
       app.disarmExit();
       return;
     }
@@ -396,21 +412,6 @@ async function start(app) {
     } catch { /* the renderer is gone; the session ending is worse than a lost line */ }
   };
   process.on('unhandledRejection', onRejection);
-
-  // ---- SOMETHING MAY HAVE BEEN QUEUED WHILE NOBODY WAS AT THIS PROMPT ------
-  //
-  // A `/continue` sent from a phone, a stop asked for from a phone, a model
-  // switch. The runtime WROTE THOSE DOWN and cannot act on them: running a turn
-  // needs the transcript, the tools and the abort controller, and all three are
-  // in this process. So this watches for them, and only while a bot is actually
-  // configured - a machine with no remote control starts no timer at all.
-  //
-  // NOT AWAITED. Asking the runtime whether a bot exists must not delay the
-  // first prompt by a socket round trip.
-  Promise.resolve()
-    .then(() => require('./remotecontrol').status())
-    .then((s) => { if (s && s.available && s.configured) require('./remotewatch').start(app); })
-    .catch(() => { /* no runtime, nothing queued, nothing to watch */ });
 
   input.prompt(promptStr);
 
@@ -493,16 +494,36 @@ async function start(app) {
   }
 
   input.stop();
+  if (app._botService) await app._botService.stop();
   // ---- NOTHING KEEPS WORKING AFTER THE SESSION ENDS ----------------------
   //
   // A background job holds a provider request, a tool and a forked session.
   // It must not outlive the terminal that started it - the same rule the
   // shell jobs and the desktop bridge already follow below.
   try { app.jobs.cancelAll('the session ended'); } catch { /* none started */ }
+  // ---- AND THE SHELL JOBS, WHICH ARE ACTUAL CHILD PROCESSES ---------------
+  //
+  // FOUND BY WRITING THE `/ps` TESTS, and it is the same leak this repository
+  // has already paid for once. `src/jobs.js` has always had `stopAll`, with the
+  // comment "Called when the session ends; never leaves an orphan" — and
+  // NOTHING CALLED IT. `run_background` spawns a real child (a test suite, a
+  // build, a watcher); the AgentJobs sweep above does not touch it, and the
+  // harness's `shutdown` below owns SERVICES rather than jobs. So a suite
+  // started with `run_background` and still running when the user typed `/exit`
+  // simply carried on, detached, with nobody left who knew about it.
+  //
+  // `/ps` is what made it visible: it lists exactly these, and a command that
+  // shows you what LAIN owns has to be able to say that LAIN let go of it.
+  try { if (app._jobs) app._jobs.stopAll('the session ended'); } catch { /* none started */ }
   // A listening socket and a desktop bridge must not outlive the session that
   // opened them — a dashboard still answering after LAIN exits, or a bridge
   // still holding a grant, is exactly the thing nobody remembers turning off.
   try { require('./dash').stop(); } catch { /* was not running */ }
+  // AND EVERY SERVICE AND BROWSER THE HARNESS STARTED. Same rule, same reason:
+  // a dev server or a headless browser still running after LAIN exits is the
+  // thing nobody remembers turning off. See harness/processes.js on the ninety
+  // orphaned processes this repository already paid for once.
+  await require('./harnesslink').shutdown(app);
   if (app._desktop) app._desktop.bridge.close('the session ended');
   try { require('./controlwindow').close(app); } catch { /* no window */ }
   process.removeListener('unhandledRejection', onRejection);

@@ -50,7 +50,7 @@ module.exports = async function () {
       timeoutMs: 60000,
     });
     const out = plain(r.out);
-    assert.match(out, /PENDING USER INPUT/, 'it must be shown waiting, not silently queued');
+    assert.match(out, /Waiting to send/, 'it must be shown waiting, not silently queued');
     assert.match(out, /also check the backend/, 'and the text must be visible while it waits');
     // DELIVERED AFTER THE WORK, not dropped when the turn ended.
     assert.match(out, /delivering what you typed while it worked/,
@@ -69,7 +69,7 @@ module.exports = async function () {
       timeoutMs: 60000,
     });
     const out = plain(r.out);
-    assert.match(out, /STEERING NOW/, 'the region must change its heading when promoted');
+    assert.match(out, /Steering now/, 'the region must change its heading when promoted');
     assert.match(out, /USER STEER delivered to the model/,
       'and a promoted steer must actually reach the running turn');
   });
@@ -88,7 +88,7 @@ module.exports = async function () {
     // `\x1b[?25l` (hide-cursor) is the per-frame boundary now — a redraw no
     // longer opens with a full-screen clear (see ui/layout.js's `L` helper).
     const frames = String(r.out).split(/\x1b\[\?25l/).map(plain);
-    const after = frames.filter((f) => !f.includes('PENDING USER INPUT') && f.includes('wrong wording here'));
+    const after = frames.filter((f) => !f.includes('Waiting to send') && f.includes('wrong wording here'));
     assert.ok(after.length,
       'after Escape the text must be back on the input line, not in the pending region');
   });

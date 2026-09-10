@@ -257,7 +257,7 @@ function preflight({ op, connected = false, granted = null, target = null } = {}
   if (at === 'TARGET' && target && target.authorized === false) {
     return { stage: STAGE.NO_TARGET, capability, aim: at, blocking: true,
       why: target.reason === 'NO_AUTHORIZED_TARGET'
-        ? 'no process is authorised — the person at the machine chooses one in the Probe window'
+        ? 'no process is authorised — the person at the machine chooses one'
         : String(target.reason || 'no authorised target') };
   }
   if (capability && granted && granted[capability] === false) {

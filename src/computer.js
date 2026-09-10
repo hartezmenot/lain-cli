@@ -19,10 +19,11 @@
  *     the EVIDENCE       what is known, and what merely returned
  *     the REFUSAL        it declines rather than acting unaimed
  *
- * WHAT A TRANSPORT OWNS. One thing: performing the syscall. The Probe and the
- * desktop bridge are interchangeable here, and neither decides anything about
- * how or whether the operation happens. That is what makes this "LAIN →
- * capability, with a bridge underneath" rather than "LAIN → Probe → capability".
+ * WHAT A TRANSPORT OWNS. One thing: performing the syscall. The desktop bridge
+ * is the carrier now (the Probe transport was removed from LAIN CLI in
+ * 2026-09), and it decides nothing about how or whether the operation happens.
+ * That is what makes this "LAIN → capability, with a bridge underneath" rather
+ * than "LAIN → Probe → capability".
  *
  * THE ASYMMETRY THAT DRIVES ALL OF IT, measured rather than assumed:
  *
@@ -98,7 +99,7 @@ const NAMES = Object.freeze(Object.keys(OPS));
  * get its bounds, look at those bounds. LAIN decides where to look; the
  * transport is handed a rectangle and performs the capture.
  *
- * NOTHING MOVES INTO THE TRANSPORT. The Probe is not taught what a game window
+ * NOTHING MOVES INTO THE TRANSPORT. The bridge is not taught what a game window
  * is or which text matters — it is asked for a region, which is a syscall
  * argument. The decision about WHERE to look stays with LAIN, which is the
  * whole ownership rule.
@@ -200,19 +201,19 @@ function capabilityFor(op, kind) {
 /**
  * WHICH TRANSPORTS ARE AVAILABLE, best first.
  *
- * The Probe is preferred when both are connected: it can do strictly more
- * (OCR, and the press/release pair a hold is built from), and a session that
- * has one open is a session where the user is already looking at its window.
+ * The desktop bridge is the carrier. (The Probe transport that used to be
+ * preferred here — it could do strictly more, OCR and the press/release pair a
+ * hold is built from — was removed from LAIN CLI with the Probe integration in
+ * 2026-09. The dialect it spoke is still in DIALECT below: the keyboard
+ * sequence and the capability fallback in the envelope speak it, and the day a
+ * transport that can verify the foreground reappears, the FOCUS branch below
+ * becomes live again without being rewritten.)
  *
  * Returns [] when nothing is connected — which the caller reports as
  * BRIDGE_LOST rather than as a failure of the operation.
  */
 function transports(app) {
   const out = [];
-  const probe = app && app._probe;
-  if (probe && probe.state === 'CONNECTED') {
-    out.push({ kind: 'probe', call: (op, params, ms) => probe.call(op, params, ms), raw: probe });
-  }
   if (app && typeof app.desktop === 'function') {
     let bridge = null;
     try { bridge = app.desktop(); } catch { bridge = null; }
@@ -231,7 +232,7 @@ function transports(app) {
 function pick(app, op) {
   const available = transports(app);
   if (!available.length) {
-    return { ok: false, why: 'nothing is connected — start one with /mcp probe' };
+    return { ok: false, why: 'nothing is connected — start the desktop bridge with /mcp connect' };
   }
   for (const t of available) {
     if (DIALECT[t.kind][op]) return { ok: true, transport: t, name: DIALECT[t.kind][op] };
@@ -325,8 +326,7 @@ async function perform(app, op, params = {}, opts = {}) {
         why: `${chosen.transport.kind} cannot aim ${op} at a window — it captures the whole screen `
           + 'and has no region parameter. Nothing was captured, because a whole-desktop capture '
           + `labelled "${opts.window}" would answer a different question. `
-          + 'Connect the Probe for region capture, or ask for the whole screen deliberately by '
-          + 'omitting `window`.',
+          + 'Ask for the whole screen deliberately by omitting `window`.',
       };
     }
     const aimed = await regionOf(app, opts.window);
@@ -422,8 +422,9 @@ async function attempt(app, op, params = {}, { window = '', why = '' } = {}) {
         stage: cap.STAGE.FAILED,
         trail: [kbd.step(cap.STAGE.REQUESTED, op)],
         result: null,
-        why: 'keyboard input needs the Probe: the desktop bridge cannot verify the foreground '
-          + 'before each keystroke, and an unverified keystroke goes wherever the user is looking.',
+        why: 'keyboard input needs a transport that can verify the foreground before each '
+          + 'keystroke: the desktop bridge cannot, and an unverified keystroke goes wherever '
+          + 'the user is looking.',
       };
     }
     if (op === 'hold') {

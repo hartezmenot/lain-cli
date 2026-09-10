@@ -1,9 +1,12 @@
 'use strict';
 
 /**
- * THE AUDIT AND HEALTH PANES.
+ * THE AUDIT AND HEALTH RENDERINGS.
  *
- * These are a SURFACE over the existing engines, not second copies of them:
+ * These were two of the nine workspace panes before the panes went, and they
+ * had already stopped being panes before that — see the last test in this file.
+ * What they are is a LAYOUT over the existing engines, not second copies of
+ * them:
  * `audit()` and `projecthealth.assess()` produce the evidence and these only lay
  * it out. The properties that matter are that a pane never invents a verdict,
  * never blocks on work it has not done yet, and always fits the frame it was
@@ -11,7 +14,7 @@
  * measures what the terminal shows rather than what is in memory, so an escape
  * sequence no longer counts as width it does not occupy.
  *
- * The HEALTH pane is the PROJECT's health. LAIN's own readiness is `/rc`, a
+ * The HEALTH pane is the PROJECT's health. LAIN's own readiness is `/ready`, a
  * different question with a different owner (health.js).
  */
 
@@ -44,7 +47,7 @@ module.exports = async function () {
     assert.ok(/CONFIRMED|LIKELY|NEEDS REVIEW/.test(text), 'findings must carry a confidence');
     // And it must NOT be LAIN's own readiness wearing the project's name.
     assert.ok(!/Context window|Connections|Isolation \(V2/.test(text),
-      'LAIN own runtime state belongs to /rc, not to the project health view');
+      'LAIN own runtime state belongs to /ready, not to the project health view');
   });
 
   await test('PANE: audit lays the project reading out in a frame, with sections', async () => {
@@ -91,33 +94,28 @@ module.exports = async function () {
     }
   });
 
-  await test('PANE: the workspace cycle includes activity and memory', () => {
-    // The list moved to ui/tabs.js and is now the ONE source the Tab cycle, the
-    // strip's numbers, the Alt+N bindings and the click hit-test all read. It
-    // used to be spelled out in each of those four places — four chances for
-    // the number printed on screen and the pane it opens to disagree.
-    const { VIEWS } = require('../../src/ui/tabs');
-    // AUDIT and HEALTH deliberately left the navigation: they are evidence
-    // GENERATORS, not destinations, and reaching project state through them
-    // meant navigating to a report about the project instead of seeing it.
-    // Their engines are untouched and still reachable as /audit and /health.
-    for (const v of ['activity', 'memory']) assert.ok(VIEWS.includes(v), `${v} is not in the Tab cycle`);
-    for (const v of ['audit', 'health']) {
-      assert.ok(!VIEWS.includes(v), `${v} is a report generator, not a workspace`);
-    }
+  await test('PANE: the evidence generators are COMMANDS, and never were destinations', () => {
+    // ------------------------------------------------------------------
+    // THIS TEST USED TO ASSERT THE TAB CYCLE, and the point it was making
+    // outlived the cycle by one design.
+    //
+    // AUDIT and HEALTH left the pane order first, and for the reason that
+    // eventually took every other pane with it: they are evidence GENERATORS
+    // wearing a destination, so reaching project state through them meant
+    // navigating to a report ABOUT the project instead of seeing the project.
+    // Their engines were untouched and stayed reachable as commands.
+    //
+    // That is now the whole architecture: one surface, everything else a
+    // command. So what is left to hold is the half that always mattered — the
+    // ENGINES are still reachable, and nothing that reads them has grown a
+    // second home.
+    // ------------------------------------------------------------------
     const { REGISTRY } = require('../../src/commands');
-    for (const c of ['/audit', '/health']) {
-      assert.ok(REGISTRY.has(c), `${c} must still work — only the pane went`);
-    }
-    // And nothing may keep a private copy of it.
-    const fs = require('fs');
-    const path = require('path');
-    const dir = path.join(__dirname, '..', '..', 'src', 'ui');
-    for (const f of fs.readdirSync(dir)) {
-      if (!f.endsWith('.js') || f === 'tabs.js') continue;
-      const src = fs.readFileSync(path.join(dir, f), 'utf8');
-      assert.ok(!/\[\s*'context',\s*'plan',\s*'diff'/.test(src),
-        `${f} spells the view order itself — it must ask ui/tabs.js`);
-    }
+    assert.ok(REGISTRY.has('/health'), '/health must still work — only its pane went');
+    assert.ok(!REGISTRY.has('/audit'), '/audit was removed from the command surface deliberately');
+    // The audit ENGINE is still here and still rendered — `/brief` and
+    // `/doctor` read it. A generator with no caller would be the dead half.
+    assert.strictEqual(typeof require('../../src/audit').audit, 'function');
+    assert.strictEqual(typeof auditLines, 'function');
   });
 };

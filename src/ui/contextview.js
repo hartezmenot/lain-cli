@@ -204,7 +204,7 @@ function contextDoc(survey, { width, session, cwd, reading = false }) {
   // ---- IS ANYTHING BROKEN -----------------------------------------------
   d.section('state');
   for (const [label, key] of [['Build', 'build'], ['Tests', 'test'], ['Runtime', 'runtime'],
-    ['Frontend', 'frontend'], ['Engineering', 'engineering']]) {
+    ['Engineering', 'engineering']]) {
     d.field(label, H[key], { tone: toneFor(H[key]) });
   }
   const counts = severities(survey);

@@ -45,7 +45,10 @@ module.exports = async function () {
     });
     const out = plain(r.out);
     assertIncludes(out, 'Bad Gateway', 'the reason is shown, not swallowed');
-    assert.match(out, /retry 1\/5/, 'and which attempt, out of the real budget');
+    // `retry in 1s · 1/5` — the compact transient form. It said `retry 1/5 at
+    // 16:17:24 (1s)` as a durable WARN carrying the provider's raw body; the row is
+    // one sentence now and goes to the operation channel (turn.js `retryWord`).
+    assert.match(out, /\b1\/5\b/, 'and which attempt, out of the real budget');
     assertIncludes(out, 'Four. FINISHED.', 'the task completed on the retry');
     assert.strictEqual(r.code, 0);
   });
@@ -71,7 +74,7 @@ module.exports = async function () {
       timeoutMs: 90000,
     });
     const out = plain(r.out);
-    assert.match(out, /retry 3\/5/, `three attempts must be within the budget:\n${out.slice(-700)}`);
+    assert.match(out, /\b3\/5\b/, `three attempts must be within the budget:\n${out.slice(-700)}`);
     assertIncludes(out, 'Through at last.');
   });
 
@@ -83,7 +86,7 @@ module.exports = async function () {
       timeoutMs: 120000,
     });
     const out = plain(r.out);
-    const attempts = (out.match(/retry \d+\/5/g) || []).length;
+    const attempts = (out.match(/retry in \d+s · \d+\/5/g) || []).length;
     assert.ok(attempts >= 1 && attempts <= 5, `${attempts} attempts is not a bounded budget`);
     assert.ok(!/FINISHED|TASK COMPLETE/.test(out), 'a provider that never answered completes nothing');
     assert.strictEqual(r.code, 0, 'and the binary still exits cleanly');
@@ -101,7 +104,7 @@ module.exports = async function () {
       timeoutMs: 120000,
     });
     const out = plain(r.out);
-    assertIncludes(out, 'NETWORK', 'a gateway failure must not be attributed to LAIN or the model');
+    assert.match(out, /NETWORK/i, 'a gateway failure must not be attributed to LAIN or the model');
     assertIncludes(out, '502', 'and the status code is the most useful fact about it');
     assertNotIncludes(out, 'MODEL REFUSED', 'a 502 is not a refusal');
   });
@@ -118,7 +121,7 @@ module.exports = async function () {
       timeoutMs: 60000,
     });
     const out = plain(r.out);
-    assert.ok(!/retry \d+\/5/.test(out), 'a bad credential was retried');
+    assert.ok(!/retry in \d+s/.test(out), 'a bad credential was retried');
     assertNotIncludes(out, 'never reached', 'and the request was not sent again');
   });
 
@@ -148,7 +151,7 @@ module.exports = async function () {
       timeoutMs: 90000,
     });
     const out = plain(r.out);
-    assert.match(out, /retry \d+\/5/, `the failures must have been retried:\n${out.slice(-700)}`);
+    assert.match(out, /retry in \d+s/, `the failures must have been retried:\n${out.slice(-700)}`);
     const written = fs.readFileSync(marker, 'utf8');
     const times = (written.match(/X/g) || []).length;
     assert.strictEqual(times, 1,

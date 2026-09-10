@@ -14,23 +14,18 @@
  * agent produces, because it is indistinguishable on the page from a right one.
  *
  * ------------------------------------------------------------------------
- * THE TWO WAYS OUT, AND WHY THEY ARE DIFFERENT MECHANISMS.
+ * THE WAY OUT. Fetch is a plain HTTP GET. No browser, no JavaScript, no
+ * profile, no cookies. It works headless, in CI, over SSH, and it is what
+ * documentation actually needs — a docs page is HTML that says the same thing
+ * to a socket as it says to Chrome.
  *
- *   FETCH   is a plain HTTP GET. No browser, no JavaScript, no profile, no
- *           cookies. It works headless, in CI, over SSH, and it is what
- *           documentation actually needs — a docs page is HTML that says the
- *           same thing to a socket as it says to Chrome.
- *
- *   SEARCH  drives LAIN'S OWN CHROMIUM, the same one `/external browser`
- *           starts and the `browser` tool uses. Search engines are the one
- *           corner of the web that is actively hostile to a bare socket: a
- *           plain GET gets a consent wall, a bot check, or markup that changes
- *           weekly. A real browser is not a workaround for that, it is the
- *           honest way to do it — and LAIN already owns one.
- *
- * So SEARCH follows the runtime, exactly like `browser` and `probe`: it is
- * offered to the model only while the Chromium is actually running, because a
- * model told it can search will search.
+ * (There used to be a second half: a search that drove the Chromium LAIN
+ * owned, because search engines are the one corner of the web actively
+ * hostile to a bare socket — a plain GET gets a consent wall, a bot check, or
+ * markup that changes weekly. The browser and the search built on it were
+ * removed from LAIN CLI in 2026-09 per the browser-ownership ruling; the
+ * measurement of why a bare socket could not search is preserved in git
+ * history with the rest of that half.)
  *
  * ------------------------------------------------------------------------
  * WHAT LEAVES THE MACHINE, AND WHO SEES IT GO.
@@ -62,7 +57,6 @@ const redact = require('./redact');
 const MAX_CHARS = 40_000;
 const MAX_BYTES = 5_000_000;
 const FETCH_TIMEOUT_MS = 30_000;
-const MAX_RESULTS = 10;
 
 /**
  * WHAT LAIN SAYS IT IS. A real product name and a contact URL, because a server
@@ -284,149 +278,6 @@ async function fetchUrl(raw, { maxChars = MAX_CHARS, signal = null, fetchImpl = 
   }
 }
 
-// ----------------------------------------------------------------- search --
-
-/**
- * WHERE A QUERY GOES — and this was decided by measurement, not by preference.
- *
- * DuckDuckGo was the first choice, for the obvious reason. It does not work
- * here, and the way it fails is worth writing down so nobody spends the
- * afternoon rediscovering it:
- *
- *   duckduckgo.com/?q=…        loads, titles itself with the query, and never
- *                              renders a result. 32 anchors, all of them
- *                              chrome, unchanged after five seconds. The
- *                              results are drawn by script that declines to run
- *                              for a headless browser.
- *   html.duckduckgo.com/html/  "Unfortunately, bots use DuckDuckGo too."
- *   lite.duckduckgo.com/lite/  the same challenge.
- *
- * Bing serves a real results page to the same browser: ten headed results in
- * the DOM within a second and a half. So Bing it is, and the extractor below
- * stays deliberately generic — this constant is the only thing that has to
- * change if that stops being true.
- */
-function searchUrl(query) {
-  return `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-}
-
-/** The mark that says results have actually rendered, not just the page. */
-const RESULT_SELECTOR = 'h2 a[href], [data-testid="result"] a[href]';
-
-/**
- * The expression that reads a results page lives in src/searchextract.js —
- * alone, because it is the one part of this that talks to somebody else's
- * markup and will therefore break without warning one day. Its header records
- * what was measured against real pages.
- */
-const { EXTRACT } = require('./searchextract');
-
-/**
- * Search, through the Chromium LAIN owns.
- *
- * @param {object} browser  a live BrowserRuntime (see src/browser.js `live`)
- * @returns {{ok, query, url, results:[{title,url,snippet}]}} or {ok:false, why}
- */
-async function search(browser, rawQuery, { limit = MAX_RESULTS } = {}) {
-  const query = redact.text(String(rawQuery || '').trim());
-  if (!query) return { ok: false, why: 'no query given' };
-  if (!browser) {
-    return {
-      ok: false,
-      why: 'no browser is running. Searching drives LAIN\'s own Chromium — start it with /external browser.',
-    };
-  }
-  const url = searchUrl(query);
-  const opened = await browser.open(url);
-  if (!opened || opened.ok === false) {
-    return { ok: false, why: `could not open the results page: ${(opened && opened.error) || 'unknown'}`, query };
-  }
-  // Give the results a moment to render. `wait` reports honestly when a
-  // selector never arrives, and a results page that renders nothing is a real
-  // answer rather than a reason to fail.
-  // WAIT FOR A RESULT, NOT FOR AN ANCHOR. Waiting on `a[href]` returned
-  // immediately — the page's own navigation is anchors — so the extractor ran
-  // before a single result existed and came back with the site's footer links.
-  // That is the difference between "the search found nothing" and "we looked
-  // too early", and they must not be reported as the same thing.
-  try { await browser.wait(RESULT_SELECTOR, 10000); } catch { /* the evaluate below decides */ }
-
-  // `evaluate` rather than a raw `session.send`: the CDP result is three
-  // `result`s deep and this reader got it wrong the first time, which reported
-  // a page it had MISREAD as a page that could not be read. See browser.js.
-  let got;
-  try { got = await browser.evaluate(EXTRACT); }
-  catch (e) { got = { ok: false, error: (e && e.message) || String(e) }; }
-  if (!got.ok) return { ok: false, why: `the results page could not be read: ${got.error}`, query, url };
-  const raw = got.value;
-  if (!Array.isArray(raw)) return { ok: false, why: 'the results page returned nothing readable', query, url };
-
-  // The engine's own domains are navigation, never a result.
-  const results = raw
-    .filter((x) => x && x.url && !/(?:bing|duckduckgo|microsoft|msn)\.com/i.test(x.url))
-    .slice(0, Math.max(1, Math.min(MAX_RESULTS, limit)))
-    .map((x) => ({
-      title: redact.text(String(x.title || '').slice(0, 300)),
-      url: redact.text(String(x.url || '').slice(0, 500)),
-      snippet: redact.text(String(x.snippet || '').slice(0, 400)),
-    }));
-  // ---- DID THE ENGINE ACTUALLY ANSWER THE QUESTION? ---------------------
-  //
-  // THE FAILURE THIS CATCHES, and it is the reason this function is not
-  // simply "scrape the page". Measured, on this machine, against Bing:
-  //
-  //   headless   "ERR_REQUIRE_ESM node"  ->  four Louisiana court cases
-  //   headed     the same query          ->  Stack Overflow, first result
-  //
-  // The engine recognises an automated browser and serves it a degraded page.
-  // Nothing about that page says so: it is a well-formed results list with real
-  // titles and real URLs, and it parses perfectly. Passed on unchecked, a model
-  // reads four unrelated articles as the answer to its question and writes
-  // something confident on top of them — which is worse than no search at all,
-  // because a search that fails is retried and a search that lies is believed.
-  //
-  // The check is deliberately weak, because a strong one would throw away good
-  // results: does ANY result mention ANY significant word of the query, in its
-  // title, its snippet or its URL? A real result set passes that trivially. A
-  // substituted one fails it completely.
-  if (results.length && !anyRelevant(query, results)) {
-    return {
-      ok: false,
-      query,
-      url,
-      why: 'the search engine returned results that have nothing to do with the query, which is what it '
-        + 'does when it decides it is talking to a robot. This usually means the browser is running '
-        + 'headless — start it with a visible window (/external browser) and try again. '
-        + 'The results were discarded rather than reported, because unrelated results that parse '
-        + 'correctly are worse than none.',
-    };
-  }
-  return { ok: true, query, url, results };
-}
-
-/** Words too common to mean anything when matching a query to a result. */
-const STOPWORDS = new Set(['the', 'and', 'for', 'with', 'how', 'why', 'what', 'does', 'not',
-  'from', 'this', 'that', 'when', 'where', 'error', 'you', 'your', 'can', 'are', 'was', 'has']);
-
-/** The words of a query worth looking for in an answer. */
-function keywords(query) {
-  return String(query || '').toLowerCase().split(/[^a-z0-9_.]+/)
-    .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
-}
-
-/**
- * Does any result mention any keyword? One is enough — see the caller for why
- * this is deliberately the weakest check that still catches a substituted page.
- */
-function anyRelevant(query, results) {
-  const words = keywords(query);
-  if (!words.length) return true;
-  return results.some((r) => {
-    const hay = `${r.title} ${r.snippet} ${r.url}`.toLowerCase();
-    return words.some((w) => hay.includes(w));
-  });
-}
-
 // ---------------------------------------------------------------- telling --
 
 /**
@@ -444,7 +295,6 @@ function note(app, text) {
 }
 
 module.exports = {
-  fetchUrl, search, note, htmlToText, mainRegion, dropNavRuns, titleOf, normalizeUrl, searchUrl,
-  keywords, anyRelevant,
-  MAX_CHARS, MAX_RESULTS, FETCH_TIMEOUT_MS, UA, EXTRACT, RESULT_SELECTOR,
+  fetchUrl, note, htmlToText, mainRegion, dropNavRuns, titleOf, normalizeUrl,
+  MAX_CHARS, FETCH_TIMEOUT_MS, UA,
 };

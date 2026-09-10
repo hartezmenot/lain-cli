@@ -154,26 +154,40 @@ module.exports = async function () {
 
   // ---- WHAT THE SCREEN SHOWS ONCE THE TEXT ACTUALLY GETS THROUGH ---------
 
-  await test('PASTE: the INPUT names it `[pasted text #n]`, with its size', () => {
-    pasted.reset();
+  await test('PASTE: the COMPOSER collapses it to one marker, with its size', () => {
+    // ------------------------------------------------------------------
+    // THIS PAIR OF TESTS USED TO ASSERT THE OPPOSITE ARRANGEMENT: the input
+    // box drew the whole paste with a summary row under it, and the FEED drew
+    // `[pasted text #1]` in place of the payload.
+    //
+    // That put the collapse in the wrong place. The wall of text destroys the
+    // COMPOSER — you cannot see the sentence you typed in front of it — and the
+    // TRANSCRIPT is the record, which has to be readable back. So they swapped,
+    // and these two tests swapped with them.
+    // ------------------------------------------------------------------
+    const composer = require('../../src/ui/composer');
     const big = Array.from({ length: 40 }, (_, i) => `pasted line ${i + 1} with enough content to wrap`).join(NL);
-    const row = strip(String(views.pasteSummary(big, 90, 3)));
-    assert.match(row, /\[pasted text #\d+\]/, 'the input must name the paste the way the feed will');
-    assert.match(row, /40 lines/);
-    assert.ok(!row.includes(NL), 'and it is ONE row — the fix for "I cannot see what I pasted" must not eat the screen');
+    const buf = `check this ${big}`;
+    const p = composer.project(buf, [big]);
+    assert.strictEqual(p.text, `check this ${composer.PLACEHOLDER}`);
+    assert.ok(!p.text.includes(NL), 'ONE row — the fix must not eat the screen');
+    assert.match(composer.hidden(p.spans, buf), /\d/, 'and it says how much is behind the marker');
+    // AND THE BUFFER IS UNTOUCHED. See tests/unit/composer.test.js for the
+    // mutation test that guards this properly; this is the reminder in the file
+    // that owns the paste PROTOCOL.
+    assert.strictEqual(buf, `check this ${big}`);
   });
 
-  await test('PASTE: ACTIVITY shows the MARKER, never the wall of pasted text', () => {
-    pasted.reset();
+  await test('PASTE: the CONVERSATION shows the wall, because it is the record', () => {
     feedcache.reset();
     const big = Array.from({ length: 40 }, (_, i) => `pasted line ${i + 1} with enough content to wrap`).join(NL);
     const rows = views.activity({
       session: { turns: [{ userInput: big, text: 'Read it.', narration: [{ step: 0, text: 'Read it.' }], actions: [] }] },
       width: 90,
     }).map(strip);
-    assert.ok(rows.some((r) => /\[pasted text #\d+\]/.test(r)), 'the marker must be drawn');
-    assert.ok(rows.some((r) => /USER REQUEST/.test(r)), 'and named as a request rather than a message');
-    assert.strictEqual(rows.filter((r) => /pasted line \d+ with enough content/.test(r)).length, 0,
-      'not one row of the raw paste may reach the feed');
+    assert.ok(rows.some((r) => /USER REQUEST/.test(r)), 'named as a request rather than a message');
+    assert.ok(!rows.some((r) => /pasted text/.test(r)), 'the record is not collapsed');
+    assert.ok(rows.filter((r) => /pasted line \d+ with enough content/.test(r)).length > 1,
+      'the payload the user actually sent is what the transcript shows');
   });
 };

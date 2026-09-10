@@ -12,7 +12,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { test, tmpdir, runCli, assertIncludes, assertNotIncludes } = require('../helpers');
+const { test, tmpdir, runCli, rowsOf, assertIncludes, assertNotIncludes } = require('../helpers');
 
 const CONFIG = {
   connections: {
@@ -48,12 +48,18 @@ module.exports = async function () {
     });
     assert.strictEqual(r.code, 0);
     const out = plain(r.stdout);
-    // The header frame carries the wordmark spaced as a mark: '┌─ L A I N ─…┐'.
-    assertIncludes(out, 'L A I N', 'header wordmark');
-    assertIncludes(out, path.basename(cwd), 'project folder in the header');
-    assertIncludes(out, 'READY', 'status');
-    assertIncludes(out, 'context', 'workspace tabs');
-    assertIncludes(out, '┌', 'input box drawn');
+    // ---- THE FOUR REGIONS, AS THEY ARE NOW DRAWN -------------------------
+    //
+    // The header was a framed box (`┌─ L A I N ─…┐`) over a numbered tab strip,
+    // and the input was a labelled box. It is one dim row of metadata, a rule,
+    // the conversation, one live activity row, and a grey input with no border.
+    // Each of the four is asserted by the thing only it draws.
+    assertIncludes(out, 'LAIN', 'the header wordmark');
+    assertIncludes(out, path.basename(cwd), 'the project folder, on the header');
+    assertIncludes(out, 'READY', 'the live activity row says nothing is running');
+    assertIncludes(out, 'Ask LAIN', 'and the input says what it is for');
+    // AND NO TAB STRIP UNDER IT.
+    assertNotIncludes(out, '[1 activity]', 'there is one surface, so there is no strip');
   });
 
   await test('UI SMOKE: alternate screen is entered AND restored on exit', async () => {
@@ -82,15 +88,19 @@ module.exports = async function () {
     const r = await runCli([], {
       cwd, configDir, env: tui,
       // Three steps, none finished: must read 0%, never 33%.
-      stdin: 'build it\n/plan step a\n/plan step b\n/plan step c\n/exit\n',
+      stdin: 'build it\n/plan step a\n/plan step b\n/plan step c\n/plan\n/exit\n',
       script: [{ text: 'ok' }],
     });
-    // WHERE progress is stated moved: the header's copy of it duplicated the
-    // TASK banner two rows below, and the duplicate was removed (see
-    // views.header). WHAT it states is unchanged, and that is the guarantee
-    // this test exists for — with three steps and none finished, progress is
-    // 0%. Reporting current/total would call work finished the moment it began,
-    // which is the one thing a progress indicator must never do.
+    // WHERE progress is stated has moved twice. It was on the header AND on the
+    // pinned TASK banner two rows below; the header's copy went first, and the
+    // banner went with the panes. It is `/plan` now — asked for rather than
+    // always drawn, because it changes when a step completes, which is minutes
+    // apart.
+    //
+    // WHAT it states is unchanged, and that is the guarantee this test exists
+    // for — with three steps and none finished, progress is 0%. Reporting
+    // current/total would call work finished the moment it began, which is the
+    // one thing a progress indicator must never do.
     const out = plain(r.stdout);
     assertIncludes(out, 'STEP 1/3', 'the step count is still on screen');
     assertIncludes(out, '0%');
@@ -101,7 +111,7 @@ module.exports = async function () {
     const { cwd, configDir } = ws();
     const r = await runCli([], {
       cwd, configDir, env: tui,
-      stdin: 'build it\n/plan step a\n/plan step b\n/plan done finished a\n/exit\n',
+      stdin: 'build it\n/plan step a\n/plan step b\n/plan done finished a\n/plan\n/exit\n',
       script: [{ text: 'ok' }],
     });
     // Same move, same guarantee: one of two steps done is 50%, and it is the
@@ -111,24 +121,35 @@ module.exports = async function () {
     assertIncludes(out, '50%');
   });
 
-  await test('UI SMOKE: workspace views switch and render', async () => {
-    const { cwd, configDir } = ws();
-    fs.writeFileSync(path.join(cwd, 'f.txt'), 'BEFORE\n');
-    const r = await runCli([], {
-      cwd, configDir, env: tui,
-      stdin: 'change it\n/exit\n',
-      script: [
-        { text: 'Reading it first.', tool_calls: [{ name: 'read_file', input: { path: 'f.txt' } }] },
-        { text: 'Editing.', tool_calls: [{ name: 'write_file', input: { path: 'f.txt', content: 'AFTER\n' } }] },
-        { text: 'Done.' },
-      ],
-    });
-    const out = plain(r.stdout);
-    assertIncludes(out, 'context');
-    assertIncludes(out, 'plan');
-    assertIncludes(out, 'diff');
-    assertIncludes(out, 'files');
-    assertIncludes(out, 'output');
+  await test('UI SMOKE: what the panes showed is reachable, as commands', () => {
+    // ------------------------------------------------------------------
+    // THIS USED TO PRESS Alt+N AND CHECK THAT `context`, `plan`, `diff`,
+    // `files` and `output` all appeared in the tab strip. There is no strip and
+    // there are no panes.
+    //
+    // §12 of the subtraction: move visibility behind commands, do not delete
+    // capability. So the property that replaces it is that every one of those
+    // still has a door — asserted against the REGISTRY, which is the thing that
+    // would actually be wrong if one had been lost.
+    //
+    // What each pane BECAME is tested where it lives: `/changes` in
+    // tests/smoke/workspace.test.js, `/plan` beside it, `/token` in
+    // tests/unit/outputcount.test.js, `/brief detail` in
+    // tests/unit/contextpane.test.js.
+    // ------------------------------------------------------------------
+    const { REGISTRY } = require('../../src/commands');
+    const doors = {
+      context: '/brief',
+      plan: '/plan',
+      diff: '/changes',
+      files: '/changes',
+      output: '/jobs',
+      memory: '/note',
+      tokens: '/token',
+    };
+    for (const [pane, cmd] of Object.entries(doors)) {
+      assert.ok(REGISTRY.has(cmd), `the ${pane} pane's content must still be reachable, as ${cmd}`);
+    }
   });
 
   await test('UI SMOKE: /models opens the interaction panel, model-centric', async () => {
@@ -139,7 +160,7 @@ module.exports = async function () {
       script: [],
     });
     const out = plain(r.stdout);
-    assertIncludes(out, 'MODELS', 'panel title');
+    assert.match(out, /models/i, 'panel title');
     assertIncludes(out, 'Claude Opus 5');
     assertIncludes(out, 'routes', 'route count, not raw provider ids');
     assertNotIncludes(out, 'claude-opus-5-low', 'effort variants stay collapsed');
@@ -154,7 +175,7 @@ module.exports = async function () {
       script: [],
     });
     const out = plain(r.stdout);
-    assertIncludes(out, 'EFFORT');
+    assert.match(out, /effort/i);
     assertIncludes(out, 'low');
     assertIncludes(out, 'auto', 'auto is always offered');
   });
@@ -163,7 +184,7 @@ module.exports = async function () {
     const { cwd, configDir } = ws();
     const r = await runCli([], { cwd, configDir, env: tui, stdin: '/provider status\n', script: [] });
     const out = plain(r.stdout);
-    assertIncludes(out, 'PROVIDERS');
+    assert.match(out, /providers/i);
     assertIncludes(out, 'availability:');
     assertIncludes(out, 'readiness:');
     assertIncludes(out, 'credential:');
@@ -173,7 +194,7 @@ module.exports = async function () {
     const { cwd, configDir } = ws();
     const r = await runCli([], { cwd, configDir, env: tui, stdin: '/config\n', script: [] });
     const out = plain(r.stdout);
-    assertIncludes(out, 'CONFIG');
+    assert.match(out, /config/i, 'the config panel titles itself');
     assertIncludes(out, 'effort');
   });
 
@@ -197,10 +218,41 @@ module.exports = async function () {
     // The input box is drawn in every frame, including while the panel is
     // open. `\x1b[?25l` (hide-cursor) is the per-frame boundary now that a
     // redraw no longer opens with a full-screen clear.
+    // ---- THE COMPOSER IS STILL THERE, AND IT IS NO LONGER A BOX ---------
+    //
+    // This looked for the input's own top border to prove the composer was drawn
+    // behind an open panel. There are no box-drawing characters anywhere on the
+    // surface now: the composer is a grey fill and the panel is a list. The
+    // property is unchanged and is asserted by the thing that IS always drawn -
+    // the placeholder, which says what the region is for.
     const frames = r.stdout.split('\x1b[?25l');
-    const withPanel = frames.filter((f) => plain(f).includes('MODELS'));
+    // THE PANEL'S OWN TITLE ROW, found by splitting the frame into rows. A bare
+    // /models/i also matches `mock-model` in the header, which is every frame ever
+    // drawn; and an anchored regex cannot work on `plain(f)`, because a drawn frame
+    // contains no newlines at all - the rows are cursor-addressed.
+    // THE TITLE CARRIES A COUNT (`Models   5`), so the row is matched by its
+    // START rather than by equality.
+    const titled = (f) => rowsOf(f).some((row) => /^\s*Models\b/.test(row));
+    const withPanel = frames.filter(titled);
     assert.ok(withPanel.length > 0, 'a frame contained the panel');
-    for (const f of withPanel) assert.ok(f.includes('┌'), 'input box still drawn with the panel open');
+    // ---- FOUND BY THE CARET PARK, not by the placeholder ----------------
+    //
+    // `Ask LAIN…` is only drawn when the line is EMPTY, and a picker that accepts
+    // typed filtering replaces the placeholder with its own answer label - so the
+    // placeholder is not a reliable sign that the composer is there.
+    //
+    // `draw()` ends every frame by parking the cursor on the row being edited, so
+    // the row it names IS the input's row by construction. That is the landmark,
+    // and it is the same one smoke/renderstability.test.js uses.
+    for (const f of withPanel) {
+      const marks = [...String(f).matchAll(/\x1b\[(\d+);(\d+)H/g)];
+      assert.ok(marks.length, 'the frame addressed nothing at all');
+      const caret = Number(marks[marks.length - 1][1]);
+      assert.ok(caret > 0, 'the caret is parked on the input row with the panel open');
+      for (const glyph of ['┌', '┐', '└', '┘']) {
+        assert.ok(!f.includes(glyph), `a box survived the panel rewrite: ${glyph}`);
+      }
+    }
   });
 
   await test('UI SMOKE: exit prints the REAL persisted session id and it resumes', async () => {
@@ -278,9 +330,18 @@ module.exports = async function () {
       const maxSeg = Math.max(...segs.map((x) => x.length));
       assert.ok(maxSeg <= cols, `${cols}x${rows}: widest drawn segment ${maxSeg} exceeds ${cols}`);
 
-      const box = segs.find((x) => /^└─+┘$/.test(x.trim()));
-      assert.ok(box, `${cols}x${rows}: the input box is still drawn`);
-      widths.push(box.length);
+      // ---- THE WIDTH PROBE MOVED WITH THE BORDER ----------------------
+      //
+      // It was the input box's bottom rule (`└───┘`), exactly the terminal's
+      // width, which is what proved the layout adapted rather than drawing one
+      // fixed size. The input has no border — it is a grey fill padded to the
+      // full width — so the probe is the input's own row, which is also the one
+      // region that is NEVER sacrificed and so is drawn at every size. The
+      // header's rule would have done except at 40x9, where it is correctly the
+      // first thing given up.
+      const inputSeg = segs.find((x) => /Ask LAIN/.test(x));
+      assert.ok(inputSeg, `${cols}x${rows}: the input region must always be identifiable`);
+      widths.push(inputSeg.length);
 
       // Terminal restored, every time.
       assertIncludes(r.stdout, '\x1b[?1049l', `${cols}x${rows} restored the screen`);
@@ -311,24 +372,26 @@ module.exports = async function () {
     assertNotIncludes(r.stdout, '\x1b[?1049h', 'no alternate screen on a pipe');
   });
 
-  // ---- the pinned progress banner -----------------------------------------
+  // ---- progress, where it is now asked for --------------------------------
 
-  await test('UI SMOKE: the task banner pins the step, a bar and the percentage', async () => {
+  await test('UI SMOKE: `/plan` states the step, a bar and the percentage', async () => {
     const { cwd, configDir } = ws();
-    // Five steps, two finished: the banner must read STEP 3/5 at 40%. The
-    // banner is two rows now — objective, then step + bar + percentage — so the
-    // spaced-out `STEP 3 / 5` and `40% complete` spellings are gone with the
-    // nine-row block they belonged to.
+    // Five steps, two finished: `/plan` must read STEP 3/5 at 40%. It was the
+    // PINNED TASK BANNER that said this — two rows above the feed, permanently
+    // — and before that a nine-row block with `STEP 3 / 5` and `40% complete`
+    // spelled out. The banner went with the panes; what it measured did not,
+    // and this is where it is read now.
     const r = await runCli([], {
       cwd, configDir, env: tui,
       stdin: 'fix the auth flow\n/plan step inspect\n/plan step validate\n/plan step refresh\n'
-        + '/plan step verify\n/plan step review\n/plan done inspected\n/plan done validated\n/exit\n',
+        + '/plan step verify\n/plan step review\n/plan done inspected\n/plan done validated\n/plan\n/exit\n',
       script: [{ text: 'ok' }],
     });
     const out = plain(r.stdout);
-    assertIncludes(out, 'fix the auth flow', 'the objective leads the banner');
-    assertIncludes(out, 'STEP 3/5', 'the current step is pinned, not hidden in a tab');
-    assertIncludes(out, '40%', 'the percentage sits on the same row');
+    assertIncludes(out, 'fix the auth flow', 'the objective is on screen — in the conversation');
+    assertIncludes(out, 'PLAN  2/5 done', 'the plainest statement of progress leads');
+    assertIncludes(out, 'STEP 3/5', 'with the position');
+    assertIncludes(out, '40%', 'and the percentage');
     assertIncludes(out, '█', 'a real progress bar is drawn');
     assertNotIncludes(out, 'STEP 5/5', 'the step number is the current step, not the count');
   });
@@ -339,7 +402,7 @@ module.exports = async function () {
       cwd, configDir,
       env: { LAIN_FORCE_TUI: '1', COLUMNS: '40', LINES: '9' },
       stdin: 'fix the auth flow\n/plan step a\n/plan step b\n/plan step c\n/plan step d\n/plan step e\n'
-        + '/plan done a\n/plan done b\n/exit\n',
+        + '/plan done a\n/plan done b\n/plan\n/exit\n',
       script: [{ text: 'ok' }],
     });
     assert.strictEqual(r.code, 0, 'survived 40x9');

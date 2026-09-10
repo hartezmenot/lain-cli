@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * `/rc` — IS LAIN READY? "Show me everything, so I understand what is going on."
+ * `/ready` — IS LAIN READY? "Show me everything, so I understand what is going on."
  *
  * LAIN'S OWN readiness, and deliberately not the project's: `/health` answers
  * "is this codebase healthy?" and lives in projecthealth.js. RC here means
@@ -83,10 +83,30 @@ async function assess(app) {
 
   // WORKFLOWS — a registered, runnable command is implemented, full stop.
   const has = (n) => commands.REGISTRY.has(n) && typeof commands.REGISTRY.get(n).run === 'function';
+  /** Is the capability's MODULE present? — for workflows with no command. */
+  const module_ = (id) => { try { return Boolean(require(id)); } catch { return false; } };
+  /** And does the classifier still know the mode that reaches it? */
+  const modeHas = (k) => { try { return Boolean(require('./mode').KIND[k]); } catch { return false; } };
   g('Workflows', [
     row('Task loop', STATE.IMPLEMENTED, 'model decides, tools execute, plan tracks steps'),
-    row('/audit', has('/audit') ? STATE.IMPLEMENTED : STATE.MISSING, 'evidence-based project reading'),
-    row('/troubleshoot', has('/troubleshoot') ? STATE.IMPLEMENTED : STATE.MISSING, 'trace before editing; forced mode'),
+    // ---- A WORKFLOW IS NOT A COMMAND -----------------------------------
+    //
+    // These two rows probed `commands.REGISTRY` for `/audit` and
+    // `/troubleshoot`, which were removed from the command surface in the
+    // 2026-09 UX subtraction pass. The probe then reported the WORKFLOWS as
+    // MISSING — and they are not missing: the audit reader, the evidence
+    // scan and the report renderer are all still here, and mode.js routes a
+    // plain-English problem report into TROUBLESHOOT without anyone naming
+    // a mode. Reporting them as gone because the door was removed is the
+    // precise confusion this view exists to prevent.
+    //
+    // So they are probed at the MODULE, which is where the capability
+    // actually lives, and named for what a person can do rather than for a
+    // command they can type.
+    row('Project reading', module_('./audit') ? STATE.IMPLEMENTED : STATE.MISSING,
+      'evidence-based project reading — reached by asking, no command'),
+    row('Troubleshooting', module_('./troubleshoot') && modeHas('TROUBLESHOOT') ? STATE.IMPLEMENTED : STATE.MISSING,
+      'trace before editing — classified from the problem description'),
     row('/compare', has('/compare') ? STATE.IMPLEMENTED : STATE.MISSING, 'capability comparison against another tree'),
     row('/resume', has('/resume') ? STATE.IMPLEMENTED : STATE.MISSING, 'restore a saved session'),
   ]);
@@ -150,8 +170,8 @@ async function assess(app) {
       extRoute.ok ? `${ext.model} · ${ext.maxRounds} rounds max` : `NOT CONFIGURED — ${extRoute.why || ext.why}`),
     row('Relay', extRoute.ok ? STATE.IMPLEMENTED : STATE.PARTIAL,
       extRoute.ok
-        ? '/troubleshoot runs LAIN → external → LAIN, bounded, with a named exit'
-        : '/troubleshoot runs locally only and says so'),
+        ? 'troubleshooting runs LAIN → external → LAIN, bounded, with a named exit'
+        : 'troubleshooting runs locally only and says so'),
   ]);
 
   // THE DESKTOP SEAM, read from the LIVE bridge — never from the presence of a

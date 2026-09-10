@@ -1,44 +1,33 @@
 'use strict';
 
 /**
- * A PASTE IS AN ATTACHMENT, NOT A SPEECH.
- *
- * Someone pastes a 400-line stack trace, a config file, or a whole error log
- * into the prompt. It is one act — "here, look at this" — and the feed rendered
- * every line of it as though the person had said it, so a single paste buried
- * the entire conversation above it and pushed the model's answer off the screen.
- * The activity stream stopped being readable at exactly the moment it carried
- * the most information.
- *
- * So the VISIBLE representation of a paste is a marker:
- *
- *     [pasted text #1]
- *
- * and the numbers run in the order the pastes arrived, so two of them can be
- * told apart and referred to.
+ * IS THIS BLOCK AN ATTACHMENT, OR SOMETHING SOMEBODY TYPED?
  *
  * ------------------------------------------------------------------------
- * THE PAYLOAD IS NOT LOST, AND THAT IS THE WHOLE DESIGN.
+ * THIS FILE USED TO COLLAPSE PASTES IN THE CONVERSATION, and it no longer does.
  *
- * This changes what is DRAWN and nothing else. The full text is still in
- * `session.messages`, still on the wire to the model, still carried on every
- * rendered row as `source` (see ui/feed.js) so a click can bring it back, and
- * still what `/copy` copies. A marker that also discarded the content would be
- * a data-loss bug wearing a tidiness argument.
+ * Someone pastes a 400-line stack trace into the prompt. It is one act — "here,
+ * look at this" — and the feed rendered every line of it as though the person
+ * had said it, so a single paste buried the conversation above it. The fix was
+ * to draw `[pasted text #1]` in the feed instead, with a content-keyed registry
+ * assigning stable numbers.
  *
- * ------------------------------------------------------------------------
- * NUMBERING IS STABLE, AND IT IS KEYED ON THE TEXT.
+ * That put the collapse in the wrong place. The TRANSCRIPT is the record: it is
+ * what a person reads back, reviews, scrolls, exports and hands over, and the
+ * one thing they need after sending ten thousand characters is to see that the
+ * right ten thousand characters went. A marker there answers a question nobody
+ * asked with a placeholder for the one they did.
  *
- * The feed is re-rendered from scratch on every frame — several times a second
- * while a turn runs. A counter that incremented per render would relabel the
- * same paste `#1`, `#2`, `#3`… as the screen repainted, which is worse than
- * printing the payload. So the registry maps CONTENT to a number: the same
- * paste is always the same number, for as long as the process lives.
+ * Where the wall of text genuinely destroys something is the COMPOSER, before
+ * Enter — so that is where the collapse lives now (ui/composer.js), and the
+ * conversation shows what was actually sent.
  *
- * WHAT COUNTS AS A PASTE is deliberately conservative — a long message with
- * several lines. A short multi-line answer someone typed with Ctrl+J is not an
- * attachment and reads perfectly well in full, and hiding it behind a marker
- * would be the opposite of the fix.
+ * WHAT SURVIVES IS THE THRESHOLD, and it is the reason this is still a file.
+ * "Is this bulk an attachment or a sentence" is a judgement with real evidence
+ * behind it — two thresholds and a documented wall-of-text incident — and it is
+ * asked in two unrelated places: the composer, deciding what to draw as
+ * `<pasted text>`, and ui/anchors.js, classifying a message so Alt+↑ can jump
+ * to it. One answer, one owner.
  */
 
 /** Lines a message must exceed before it can be an attachment rather than a sentence. */
@@ -53,9 +42,6 @@ const MIN_LINES = 6;
  * this exists for. The bar has to sit under the fold to catch what survives it.
  */
 const MIN_CHARS = 200;
-
-/** text -> number, in arrival order. Process-lived, like the feed itself. */
-const seen = new Map();
 
 /**
  * PAST THIS MUCH TEXT, BULK ALONE IS ENOUGH — WHATEVER THE LINE COUNT.
@@ -101,38 +87,23 @@ function isPaste(text) {
 }
 
 /**
- * THE KEY IS THE HEAD OF THE PAYLOAD, not the whole of it.
+ * ------------------------------------------------------------------------
+ * `label`, `compact`, `count`, `reset` AND THE CONTENT-KEYED REGISTRY STOOD
+ * HERE, and all of them existed to serve the numbering in `[pasted text #N]`.
  *
- * One paste is seen in two forms: whole while it sits in the input line, and
- * cut to 400 characters once the session folds it (src/session.js). Keyed on
- * the full text those are two different strings, so the same paste was drawn as
- * `#1` while being typed and `#2` a moment later — a number that changes under
- * the reader is worse than no number.
+ * The registry was necessary because the feed is re-rendered from scratch
+ * several times a second, so a counter that incremented per render would
+ * relabel the same paste `#1`, `#2`, `#3`… as the screen repainted. It was
+ * keyed on the HEAD of the payload rather than the whole of it, because one
+ * paste is seen in two forms — whole in the input line, and cut to 400
+ * characters once src/session.js folds it — and keyed on the full text those
+ * are two different strings.
  *
- * Folding keeps the START, so the head identifies the paste across both forms.
+ * All of that is machinery in service of a number, and the number is gone with
+ * the marker. The composer draws `<pasted text>`, unnumbered: you can see every
+ * block at once, in the positions you put them, so there is nothing to tell
+ * apart.
+ * ------------------------------------------------------------------------
  */
-const KEY_CHARS = 160;
-const keyOf = (s) => String(s).slice(0, KEY_CHARS);
 
-/** The marker for this payload, assigning it the next number if it is new. */
-function label(text) {
-  const k = keyOf(String(text == null ? '' : text));
-  if (!seen.has(k)) seen.set(k, seen.size + 1);
-  return `[pasted text #${seen.get(k)}]`;
-}
-
-/**
- * What the feed should DRAW for this message: the marker if it is an
- * attachment, the text itself otherwise.
- */
-function compact(text) {
-  return isPaste(text) ? label(text) : String(text == null ? '' : text);
-}
-
-/** How many distinct pastes have been seen. For the tests, and for /copy. */
-function count() { return seen.size; }
-
-/** Forget everything. A new session starts its numbering at one. */
-function reset() { seen.clear(); }
-
-module.exports = { isPaste, label, compact, count, reset, MIN_LINES, MIN_CHARS, MAX_TYPED };
+module.exports = { isPaste, MIN_LINES, MIN_CHARS, MAX_TYPED };

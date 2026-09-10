@@ -42,18 +42,31 @@ module.exports = async function () {
       ],
       timeoutMs: 60000,
     });
-    const shown = frames(r.out).filter((f) => /RATE LIMITED/.test(f));
-    assert.ok(shown.length >= 8,
+    const shown = frames(r.out).filter((f) => /RATE\s+LIMITED/i.test(f));
+    // ---- FEWER FRAMES, AND THAT IS THE IMPROVEMENT --------------------
+    //
+    // The threshold was 8. Identical frames are not written (ui/layout.js keeps
+    // `_lastFrame`), so the only thing that used to change often enough to force a
+    // redraw during a six-second wait was the stream of durable retry NOTICES
+    // being appended to the feed. Those are gone; what moves now is the countdown
+    // and the clock, once a second.
+    //
+    // So the frame count is a weak proxy and the assertion below is the real test:
+    // DISTINCT COUNTDOWN VALUES prove the redraw is driven by the clock and not by
+    // input, which is what this is for.
+    assert.ok(shown.length >= 5,
       `only ${shown.length} frames showed the wait — the screen is not redrawing on its own`);
     // The countdown must actually move. Distinct values prove the redraw is
     // driven by the clock rather than by input.
     const seen = new Set(shown.map((f) => (f.match(/(\d\d:\d\d) remaining/) || [])[1]).filter(Boolean));
     assert.ok(seen.size >= 4, `the countdown did not move: saw ${[...seen].join(' ') || 'nothing'}`);
     const out = plain(r.out);
-    assertIncludes(out, 'RATE LIMITED');
+    assert.match(out, /RATE\s+LIMITED/i);
     assert.match(out, /retrying at \d\d:\d\d/, 'an absolute reset time');
     assertIncludes(out, 'Esc', 'and a way out of the wait');
-    assertIncludes(out, 'the wait is over — resuming the task');
+    // `Resuming`, on the operation channel — the durable announcement that a
+    // transient condition had passed is gone. See turn.js.
+    assert.match(out, /Resuming/, 'the end of the wait is visible');
     assertIncludes(out, 'done at last', 'the ORIGINAL task continued; no new one was needed');
     assert.strictEqual(r.code, 0);
   });
@@ -68,9 +81,12 @@ module.exports = async function () {
       ],
       timeoutMs: 45000,
     });
-    const busy = frames(r.out).filter((f) => /RUNNING\s+sleep 3/.test(f));
+    const busy = frames(r.out).filter((f) => /RUNNING\s+sleep 3/i.test(f));
     assert.ok(busy.length >= 6, `only ${busy.length} frames during a 3s wait`);
-    const spinners = new Set(busy.map((f) => (f.match(/([◐◓◑◒])\s+\S+\s+RUNNING/) || [])[1]).filter(Boolean));
+    // NO ACTOR COLUMN FOR LAIN'S OWN WORK: the row is `◐ Running  sleep 3`, not
+    // `◐ TOOL     RUNNING  sleep 3` — a tool call IS LAIN running a tool, so the
+    // column said nothing the verb did not. See ui/status.js.
+    const spinners = new Set(busy.map((f) => (f.match(/([◐◓◑◒])\s+Running/) || [])[1]).filter(Boolean));
     assert.ok(spinners.size >= 3, `the indicator never moved: ${[...spinners].join('') || 'nothing'}`);
   });
 
@@ -81,7 +97,17 @@ module.exports = async function () {
     cwd: tmpdir('ovl-'),
     env: tui(),
     stdinSteps: ['build it\n', ...steps],
-    stepDelayMs: 900,
+    // ---- LONG ENOUGH THAT THE KEY LANDS AFTER THE OVERLAY ----------------
+    //
+    // It was 900ms against a FIVE-STEP turn - a write, a shell call, a plan, a
+    // tick and an answer - so the keystroke was racing the very work whose report
+    // it is meant to dismiss. Measured: about one isolated run in three failed,
+    // while full tiers passed, which is the signature of a timing-dependent test
+    // rather than a wrong one.
+    //
+    // The assertions are unchanged; the test simply waits for the thing it is
+    // about before pressing a key at it.
+    stepDelayMs: 3000,
     script: [
       { text: 'Writing.', tool_calls: [{ name: 'write_file', input: { path: 'out.txt', content: 'x' } }] },
       { text: 'Checking.', tool_calls: [{ name: 'run_bash', input: { command: 'node -e "1"' } }] },
@@ -92,80 +118,83 @@ module.exports = async function () {
     timeoutMs: 45000,
   });
 
-  await test('LIVE-UI: the completion overlay appears, and TAB leaves it', async () => {
-    const r = await runCli([], completed(['\t']));
-    const all = frames(r.out);
-    assert.ok(all.some((f) => /TASK COMPLETE/.test(f)), 'the overlay must fire on genuine completion');
-    // After Tab the overlay is gone AND a different pane is showing. It used to
-    // cover every pane, so Tab changed the tab strip and nothing else.
-    const after = all[all.length - 1];
-    assert.ok(!/TASK COMPLETE/.test(after), `Tab did not leave the overlay:\n${after.slice(0, 400)}`);
-    assert.ok(/\[\d [a-z]+\]/.test(after), 'and a real pane is showing');
-    assert.strictEqual(r.code, 0);
-  });
+  // ---- THE TASK-COMPLETE OVERLAY IS A REPORT, NOT A PLACE -----------------
+  //
+  // It used to offer a CHOICE — `❯ diff` or `❯ keep working` — navigated with
+  // Up/Down and taken with Enter, and the first branch switched to the DIFF
+  // pane. Before that the two were `[D]` and `[R]`: printable letters a screen
+  // showing plain text could never make live, which is the failure this whole
+  // section was written to hold closed.
+  //
+  // With one surface there is nowhere to switch to, so both branches meant the
+  // same thing — put the report away. The choice is gone and the report names
+  // `/changes` instead, which is a command that exists rather than a row that
+  // has to be disposed of before you can carry on.
+  //
+  // WHAT MUST STILL HOLD, and is what these three now assert:
+  //
+  //   1. the overlay fires on GENUINE completion, and only then
+  //   2. every key dismisses it — none is swallowed, none is advertised and
+  //      dead, and typing lands in the input box like typing
+  //   3. it names only things that work
 
-  await test('LIVE-UI: Enter on the default highlight opens the diff — no letter needed', async () => {
-    // "diff" is the FIRST choice, so a bare Enter needs no Down at all — this
-    // is the direct replacement for the old dead `[D]` letter.
-    const r = await runCli([], completed(['\r']));
-    const out = plain(r.out);
-    assertIncludes(out, 'diff — see what changed', 'the overlay must only advertise keys that work');
-    const after = frames(r.out).pop() || '';
-    assert.ok(!/TASK COMPLETE/.test(after), 'Enter must close the overlay');
-    // WHICH NUMBER DIFF WEARS comes from ui/tabs.js. Spelled out here it was a
-    // private copy of the tab order, and it went stale the moment that order
-    // moved — failing about a pane the overlay had opened correctly.
-    const tabs = require('../../src/ui/tabs');
-    const diffTab = `[${tabs.numberOf('diff')} diff]`;
-    assertIncludes(after, diffTab, `Enter on "diff" must open the DIFF pane:\n${after.slice(0, 300)}`);
-    assert.strictEqual(r.code, 0);
-  });
-
-  await test('LIVE-UI: Down, Enter picks "keep working" — the direct replacement for [R]', async () => {
-    const DOWN = '\x1b[B';
-    const r = await runCli([], completed([DOWN, '\r']));
-    const out = plain(r.out);
-    assertIncludes(out, 'keep working', 'the overlay must only advertise keys that work');
-    // THE MARKER ITSELF MOVED, not just the outcome — a render that always
-    // highlighted "diff" but happened to still resolve "keep working" from
-    // internal state would pass an outcome-only check and still be showing
-    // the wrong thing on screen the whole time.
-    const withOverlay = frames(r.out).filter((f) => f.includes('TASK COMPLETE'));
-    assert.ok(withOverlay.some((f) => /❯ keep working/.test(f)),
-      'Down must move the highlight marker onto "keep working", not just the outcome');
-    // It dismisses and says so, rather than being a key that silently does
-    // nothing — which is what the old `[R]` letter was.
-    assertIncludes(out, 'Back to the task');
-    const after = frames(r.out).pop() || '';
-    assert.ok(!/TASK COMPLETE/.test(after), 'Enter must close the overlay');
-    assert.strictEqual(r.code, 0);
-  });
-
-  await test('LIVE-UI: neither D nor R does anything special any more — both are just typed', async () => {
-    // The shortcut path must not swallow ordinary typing. Each dismisses the
-    // report (you have started composing) and lands in the input box exactly
-    // like any other letter — proof the old single-letter claims are gone,
-    // not just replaced with a different pair of letters.
-    for (const ch of ['d', 'r', 'x']) {
-      const r = await runCli([], completed([ch]));
+  await test('LIVE-UI: the overlay fires on completion, and any key leaves it', async () => {
+    for (const key of ['\t', '\r', '\x1b']) {
+      const r = await runCli([], completed([key]));
       const all = frames(r.out);
-      // Looked for across every frame, not just the last: stdin closing ends
-      // the session, and the teardown frame has already cleared the input row.
-      const typed = all.find((f) => f.includes(`│ > ${ch}`));
-      assert.ok(typed, `"${ch}" must reach the input line:\n${(all.pop() || '').slice(-300)}`);
-      assert.ok(!/TASK COMPLETE/.test(typed), `and typing "${ch}" dismisses the report`);
+      assert.ok(all.some((f) => /TASK COMPLETE/.test(f)),
+        `the overlay must fire on genuine completion (key ${JSON.stringify(key)})`);
+      const after = all[all.length - 1];
+      assert.ok(!/TASK COMPLETE/.test(after),
+        `${JSON.stringify(key)} did not leave the overlay:\n${after.slice(0, 400)}`);
+      // AND THE SURFACE IS UNDERNEATH IT, unchanged — there is no pane to have
+      // been left on, so what must be there is the one there always is.
+      assertIncludes(after, 'Ask LAIN', 'the surface is back, with its input');
+      assert.strictEqual(r.code, 0);
     }
   });
 
-  await test('LIVE-UI: Esc closes it too, and every pane is reachable afterwards', async () => {
-    const r = await runCli([], completed(['\x1b', '\t', '\t', '\t']));
-    const all = frames(r.out);
-    assert.ok(all.some((f) => /TASK COMPLETE/.test(f)));
-    const after = all[all.length - 1];
-    assert.ok(!/TASK COMPLETE/.test(after));
-    // Three tabs from wherever Esc left it: the panes are navigable again.
-    assert.match(after, /\[\d [a-z]+\]/, `no pane selected after the overlay closed:\n${after.slice(0, 300)}`);
+  await test('LIVE-UI: it advertises only what works, and offers no choice to dispose of', async () => {
+    const r = await runCli([], completed(['\x1b']));
+    const out = plain(r.out);
+    assertIncludes(out, 'TASK COMPLETE');
+    // THE COMMANDS IT NAMES ARE REAL. `/changes` is where the diff went.
+    assertIncludes(out, '/changes', 'it names the command that shows what changed');
+    // AND THERE IS NO MENU. A highlighted row is something you have to deal
+    // with before you can carry on; a named command is something you type when
+    // you want it.
+    assert.ok(!/❯ keep working|❯ diff/.test(out), 'the two-row choice is gone');
+    assert.ok(!/\[D\]|\[R\]/.test(out), 'and so are the letters that never worked');
     assert.strictEqual(r.code, 0);
+  });
+
+  await test('LIVE-UI: typing dismisses it and reaches the input line, like typing', async () => {
+    // The shortcut path must not swallow ordinary typing. Each letter dismisses
+    // the report (you have started composing) and lands in the input exactly
+    // like any other — proof the old single-letter claims are gone, not just
+    // replaced with a different pair of letters.
+    for (const ch of ['d', 'r', 'x']) {
+      const r = await runCli([], completed([ch]));
+      const raw = String(r.out).split('\x1b[?25l');
+      // FOUND BY THE CARET: the input has no `> ` prompt any more, and a single
+      // letter is too small to search for in a whole frame. A frame that parks
+      // the cursor one column past the start of the input is a frame with
+      // exactly one character on that line.
+      //
+      // THE COLUMN IS COMPUTED, NOT WRITTEN DOWN. It was the literal 3, which was
+      // right while the composer started at column 2. It starts at the content
+      // frame's inset plus the composer's own padding now (ui/frame.js, PAD), and a
+      // test that knows the number breaks every time the frame changes.
+      const at = require('../../src/ui/frame').contentBounds(100).left + 1
+        + require('../../src/ui/inputbox').PAD + 1;
+      const typed = raw.find((f) => {
+        const marks = [...f.matchAll(/\x1b\[(\d+);(\d+)H/g)];
+        const park = marks[marks.length - 1];
+        return Boolean(park) && Number(park[2]) === at && plain(f).includes(ch);
+      });
+      assert.ok(typed, `"${ch}" must reach the input line:\n${plain(raw.pop() || '').slice(-300)}`);
+      assert.ok(!/TASK COMPLETE/.test(plain(typed)), `and typing "${ch}" dismisses the report`);
+    }
   });
 
   // ------------------------------------------------------------ progress ---
@@ -182,13 +211,25 @@ module.exports = async function () {
       ],
       timeoutMs: 45000,
     });
-    const f = frames(r.out).find((x) => /RUNNING\s+sleep 2/.test(x));
+    // ------------------------------------------------------------------
+    // THE PROGRESS BAR WAS DRAWN TWICE, AND NOW IT IS DRAWN ON REQUEST.
+    //
+    // `STEP 1/4 ███░░░ 25%` appeared in the live row's right-hand column AND in
+    // the pinned task banner at the top of the same screen: one measurement,
+    // two indicators, competing for the corner where the thing that moves every
+    // second needed to be. The banner went with the panes; the live row's copy
+    // went earlier, to make room for what a person watching a long turn
+    // actually cannot get anywhere else — what it is costing.
+    //
+    // So the live row's job is WHAT IS HAPPENING NOW, and this asserts exactly
+    // that. The measurement is `/plan`, and tests/unit/interrupt.test.js holds
+    // it there.
+    // ------------------------------------------------------------------
+    const f = frames(r.out).find((x) => /RUNNING\s+sleep 2/i.test(x));
     assert.ok(f, 'a frame must show the tool running');
-    // The live row carries a BAR between the step count and the percentage now
-    // (`STEP 1/4 ███░░░░ 25%`), so the separator is no longer a dot. The
-    // guarantee is the same one: both facts are on the row that sits above the
-    // caret, and neither is dropped.
-    assert.match(f, /STEP \d\/4[^\n]*\d+%/, `the live row must carry progress:\n${f.slice(-300)}`);
+    assert.match(f, /RUNNING\s+sleep 2/i, 'the live row names the operation and its subject');
+    assert.ok(!/STEP \d\/4/.test(f.split('\n').filter((l) => /RUNNING\s+sleep 2/i.test(l)).join('')),
+      'and does not carry a second copy of the plan\'s progress');
   });
 
   await test('LIVE-UI: a finished PLAN never prints the word DONE in the progress block', async () => {
@@ -203,10 +244,17 @@ module.exports = async function () {
       ],
       timeoutMs: 45000,
     });
-    const f = frames(r.out).pop() || '';
-    assert.match(f, /100%/, 'the plan really is at 100%');
-    assert.match(f, /STEP 1\/1/, 'and says so as a step count');
-    assertIncludes(plain(r.out), 'VERIFYING', 'the task is not done: nothing was run to check the change');
-    assert.ok(!/TASK COMPLETE/.test(plain(r.out)), 'and it must not be reported as finished');
+    // ---- THE MEASUREMENT MOVED; THE CLAIM IT MUST NOT MAKE DID NOT --------
+    //
+    // The progress block was pinned above the feed and is now `/plan`, so the
+    // percentage is asked for rather than always drawn. What this test exists
+    // for is the other half, and it is unchanged: A FINISHED PLAN IS NOT A
+    // FINISHED TASK. The screen must say VERIFYING, because nothing was run to
+    // check the change, and must never report the task as complete.
+    const out = plain(r.out);
+    assert.match(out, /VERIFYING/i, 'the task is not done: nothing was run to check the change');
+    assert.ok(!/TASK COMPLETE/.test(out), 'and it must not be reported as finished');
+    assert.ok(!/\bDONE\b/.test(out.split('VERIFYING').pop() || ''),
+      'nor described as done after it');
   });
 };

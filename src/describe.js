@@ -26,17 +26,14 @@ const NL = String.fromCharCode(10);
  */
 function describeTarget(name, input) {
   const i = input || {};
-  // A DISPATCHED CALL IS ABOUT ITS OPERATION. `probe` and `computer` carry the
-  // real subject in `op`, and none of the branches below look at it — so every
-  // Probe action in the feed and in the status strip read as a bare "probe"
-  // with no subject, and thirty of them were indistinguishable from each other.
-  //
-  // `computer` REPLACED `desktop` IN THIS LIST, and that replacement is the
-  // whole of the fix: the consolidation retired the `desktop` name, this line
-  // was left naming it, and so a tool that no longer exists was being matched
-  // while the one that took its place — same `op`-shaped input, same need —
-  // fell through and drew as a bare "computer" with no subject.
-  if (i.op && (name === 'probe' || name === 'computer')) {
+  // A DISPATCHED CALL IS ABOUT ITS OPERATION. `computer` carries the real
+  // subject in `op`, and none of the branches below look at it — so without
+  // this, every computer action in the feed and in the status strip reads as a
+  // bare "computer" with no subject, and thirty of them are indistinguishable
+  // from each other. (This line once missed the consolidation that replaced
+  // `desktop` with `computer`; the removed Probe tool's `op`-shaped calls were
+  // fixed out of the same bare-name problem.)
+  if (i.op && name === 'computer') {
     const op = String(i.op).slice(0, 40);
     return i.target ? `${op} → ${String(i.target).slice(0, 30)}` : op;
   }
@@ -59,8 +56,8 @@ function describeTarget(name, input) {
   if (i.command) return String(i.command).replace(/\s+/g, ' ').slice(0, 60);
   // A PROGRAM RUN DIRECTLY IS ABOUT THE PROGRAM. `process_run` names it in
   // `program` rather than `command`, so it fell through every branch here and
-  // drew as a bare `process_run` — the same subject-less row that `probe` and
-  // `computer` were fixed out of.
+  // drew as a bare `process_run` — the same subject-less row `computer` was
+  // fixed out of.
   if (i.program) {
     const args = Array.isArray(i.args) ? i.args.join(' ') : '';
     return `${String(i.program)}${args ? ` ${args}` : ''}`.replace(/\s+/g, ' ').slice(0, 60);
@@ -68,9 +65,9 @@ function describeTarget(name, input) {
   // ---- LOOKING SOMETHING UP IS ABOUT WHAT WAS LOOKED UP ------------------
   //
   // Without these, a research call drew as a bare `web_fetch` with no subject —
-  // the same subject-less row `probe`, `computer` and `process_run` each had to
-  // be fixed out of. A host is what a person recognises in a URL, so the host
-  // leads and the path follows it.
+  // the same subject-less row `computer` and `process_run` each had to be fixed
+  // out of. A host is what a person recognises in a URL, so the host leads and
+  // the path follows it.
   if (i.url && name === 'web_fetch') {
     try {
       const u = new URL(String(i.url));
@@ -78,16 +75,60 @@ function describeTarget(name, input) {
       return `${u.hostname.replace(/^www\./, '')}${tail}`.slice(0, 60);
     } catch { return String(i.url).slice(0, 60); }
   }
-  if (i.query && name === 'web_search') return `"${String(i.query).replace(/\s+/g, ' ').slice(0, 50)}"`;
   if (i.pattern) return `/${String(i.pattern).slice(0, 40)}/`;
   if (i.question) return String(i.question).replace(/\s+/g, ' ').slice(0, 60);
+  // ---- THE HARNESS TOOLS NAME THEIR SUBJECT TOO --------------------------
+  //
+  // `verify_task`, `service_check` and `observe` carry no `path`, `command`,
+  // `pattern` or `question`, so every one of them fell through every branch
+  // above and drew as a bare, subject-less row — the same fault `computer`,
+  // `process_run` and `web_fetch` each had to be fixed out of, and the worst
+  // place to have it: the verification step is the one a person most wants
+  // named. `service_start` already reads through `i.command`.
+  //
+  // WHAT EACH IS ABOUT is the thing being proved, watched or looked at:
+  //   verify_task    what is being proved — the first requirement, and a count
+  //   service_check  which service, or all of them when none is named
+  //   observe        the question being asked of the world
+  if (name === 'verify_task') {
+    const reqs = Array.isArray(i.requirements) ? i.requirements : [];
+    const first = reqs.find((r) => r && (r.what || r.name));
+    const what = first ? String(first.what || first.name).replace(/\s+/g, ' ').slice(0, 44) : '';
+    const more = reqs.length > 1 ? ` +${reqs.length - 1}` : '';
+    return what ? what + more : (i.name ? String(i.name).slice(0, 60) : '');
+  }
+  if (name === 'service_check') return i.name ? String(i.name).slice(0, 60) : 'all services';
+  if (i.goal) {
+    const goal = String(i.goal).replace(/\s+/g, ' ').slice(0, 40);
+    // The URL is what makes two observations of the same KIND distinguishable.
+    if (i.url) {
+      try {
+        const u = new URL(String(i.url));
+        return `${goal} → ${u.host}${u.pathname === '/' ? '' : u.pathname}`.slice(0, 60);
+      } catch { /* an unparseable url is not worth losing the goal over */ }
+    }
+    return i.selector ? `${goal} → ${String(i.selector).slice(0, 20)}`.slice(0, 60) : goal;
+  }
   return '';
 }
 
 /** The first meaningful line of a tool result, bounded for display. */
 function firstLine(output) {
   const s = String(output == null ? '' : output);
-  const line = s.split('\n').map((x) => x.trim()).find(Boolean) || '';
+  // ---- THE `[via ...]` STAMP IS ADDRESSED TO THE MODEL, NOT TO A PERSON ----
+  //
+  // Every shell result opens with it - `[via shell: bash - cwd=<absolute temp
+  // path>]` - because the model genuinely cannot route around a failure it
+  // cannot tell apart, and which interpreter and which directory are the two
+  // facts it needs (src/execution.js). It is the FIRST line, so it became the
+  // note drawn under the row, and what the person saw under a command they had
+  // just watched succeed was an absolute temp path.
+  //
+  // SKIPPED, NOT STRIPPED FROM THE OUTPUT. The model still gets the stamp; this
+  // only declines to quote it at the user, and takes the command's own first
+  // line of output instead - which is what a note under a command is for.
+  const lines = s.split('\n').map((x) => x.trim()).filter(Boolean);
+  const line = lines.find((x) => !/^\[via /.test(x)) || '';
   return line.slice(0, 100);
 }
 

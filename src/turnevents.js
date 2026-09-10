@@ -15,6 +15,8 @@
  */
 
 const { describeTarget } = require('./turn');
+// THE ONE FIRST-LINE RULE — see `note:` below for what two copies of it cost.
+const describe = require('./describe');
 const { EVENT, busOf } = require('./events');
 
 /**
@@ -81,6 +83,14 @@ function apply(app, ev, ctx) {
   switch (ev.type) {
     case 'text':
       app.render.text(ev.chunk);
+      // ---- THE HEADER'S OUTPUT COUNTER -----------------------------------
+      //
+      // Counted from what actually arrived, on the one event that carries the
+      // model's answer. No redraw here: the ticker is already running for the
+      // duration of a turn, so the number climbs on the next frame either way,
+      // and repainting per chunk is the redraw storm the buffering below
+      // exists to avoid. See ui/index.js `noteOutputChars`.
+      if (app.ui.enabled) app.ui.noteOutputChars((ev.chunk || '').length);
       // Buffered, not rendered per chunk: the feed shows sentences, and
       // repainting the screen on every token would be a redraw storm.
       ctx.liveText += ev.chunk || '';
@@ -105,10 +115,38 @@ function apply(app, ev, ctx) {
     // not what it thought on the way there.
     case 'reasoning':
       ctx.reasoning = (ctx.reasoning || '') + (ev.chunk || '');
+      // REASONING IS BILLED AS OUTPUT, so it is counted as output. A model that
+      // thinks for four thousand tokens and answers in twenty has produced four
+      // thousand and twenty, and a counter that showed twenty would be hiding
+      // the part of the bill a person most needs to see.
+      if (app.ui.enabled) app.ui.noteOutputChars((ev.chunk || '').length);
       if (!app.ui.enabled) { app.render.text(ev.chunk); break; }
-      // Flushed on paragraph boundaries like ordinary text, so a long think
-      // appears as it happens rather than in one lump at the end.
-      ctx.reasoning = flushParagraphs(app, ctx.reasoning);
+      // ---- THINKING IS NOT SPEECH, AND IT IS NOT IN THE CONVERSATION ------
+      //
+      // It used to be flushed through `flushParagraphs`, which calls
+      // `noteNarration` — THE SAME CHANNEL AS THE MODEL'S PUBLIC PROSE. So a
+      // provider that streams its reasoning had that reasoning rendered in the
+      // conversation, indistinguishable from an answer, and every "Actually…",
+      // "Let me…", "One more consideration…" and "Call 1 / Call 2" in it appeared
+      // as though the model had said it to the user. That is the single largest
+      // source of execution narration on the screen, and none of it was addressed
+      // to anybody.
+      //
+      // WHAT REPLACES IT. The live row above the caret already says `◐ Thinking`
+      // for exactly as long as this is arriving, with the work clock beside it, so
+      // liveness is answered without quoting the model's working-out. The text is
+      // still accumulated on the turn record (`record.reasoning`, see turn.js), so
+      //   · a turn that said and did NOTHING still shows what it thought, which is
+      //     the one case where the reasoning IS the only answer there is
+      //     (ui/conversation.js), and
+      //   · `LAIN_SHOW_THINKING=1` puts it back on screen as it streams, for
+      //     anybody debugging a model rather than using one.
+      //
+      // IT IS STILL COUNTED ABOVE. Reasoning is billed as output and the header's
+      // figure says so; hiding it from the screen must not hide it from the bill.
+      if (process.env.LAIN_SHOW_THINKING === '1') {
+        ctx.reasoning = flushParagraphs(app, ctx.reasoning);
+      }
       break;
 
     // ---- WHAT THE OPEN REQUEST HAS COST SO FAR ---------------------------
@@ -167,18 +205,26 @@ function apply(app, ev, ctx) {
         name: ev.name,
         target: describeTarget(ev.name, ev.input),
         ok: !ev.isError,
-        note: (out.split('\n').map((x) => x.trim()).find(Boolean) || '').slice(0, 100),
+        // ---- THE ONE FIRST-LINE RULE, NOT A SECOND COPY OF IT -----------
+        //
+        // This was an inline `split/map/find` — the same idea as describe.js's
+        // `firstLine` and therefore the same idea in two places. When that one
+        // learned to skip the `[via shell: … cwd=…]` stamp (which is addressed to
+        // the model, and put an absolute temp path under every command the user
+        // ran), this one did not: the live row kept quoting it, and only the
+        // SETTLED row was clean. Two spellings of one rule, disagreeing for
+        // exactly as long as the turn lasted.
+        note: describe.firstLine(out),
         brief: out.length <= BRIEF,
         file: Boolean(ev.input && ev.input.path),
         // Whether this call's result went to the OUTPUT surface, so Context can
         // point at it instead of repeating it.
         output: SHELL_TOOLS.has(ev.name),
-        // WHO DID THIS. A desktop action is the bridge acting on the machine,
+        // WHO DID THIS. A `computer` call is the bridge acting on the machine,
         // not LAIN reading a file, and the status strip colours them apart.
-        // WHO DID THIS. `probe` was missing from this test, so every Probe
-        // action was coloured and labelled as LAIN running a local tool — the
-        // one distinction the actor column exists to make.
-        actor: (ev.name === 'desktop' || ev.name === 'probe') ? 'MCP' : 'TOOL',
+        // (This used to test the retired `desktop` name and the removed `probe`
+        // one; `computer` replaced both, and this is the line that missed it.)
+        actor: ev.name === 'computer' ? 'MCP' : 'TOOL',
       });
       // ---- AN EDIT SHOWS ITS CHANGE, ONCE -----------------------------------
       //
@@ -225,9 +271,9 @@ function apply(app, ev, ctx) {
         try { app.ui.showRead(describeTarget(ev.name, ev.input), ev.output); } catch { /* presentation only */ }
       }
       app.ui.setRunning(null);
-      // A desktop action is the BRIDGE acting on the machine, not LAIN reading
+      // A computer call is the BRIDGE acting on the machine, not LAIN reading
       // a file, and Context labels it so.
-      if ((ev.name === 'desktop' || ev.name === 'probe') && !ev.isError) {
+      if (ev.name === 'computer' && !ev.isError) {
         const first = String(ev.output || '').split('\n')[0];
         app.ui.noteActor('mcp', first.slice(0, 120));
       }
@@ -293,6 +339,21 @@ function apply(app, ev, ctx) {
       //
       // `working` holds the surface in its busy state so the fold is visible
       // WHILE it runs rather than only once it has finished.
+      // ---- A TRANSIENT NOTICE GOES WHERE TRANSIENTS GO -------------------
+      //
+      // A provider retry, the end of a wait, a recovery step: real events that are
+      // over the moment they have been read. On a TUI they take the one operation
+      // row above the caret and are superseded by the next thing (ui/operation.js);
+      // on a PIPE there is no such row, so they are written as one dim line —
+      // because a silent sixty-second pause is the hang this exists to prevent.
+      //
+      // EITHER WAY THEY ARE NOT IN THE CONVERSATION. That is the whole point: a
+      // condition LAIN recovered from, which the user never had to act on, leaves
+      // no durable trace.
+      if (ev.transient) {
+        require('./ui/operation').say(app, ev.message, ev.level || 'info');
+        break;
+      }
       if (ev.surface && app.ui.enabled) {
         app.render.openSurface(ev.surface, { busy: Boolean(ev.working) });
         app.render.write(`${ev.message}\n`);

@@ -41,7 +41,9 @@ const plain = (s) => String(s).replace(new RegExp(ESC + '\\[[0-9;?]*[A-Za-z]', '
 
 /** The rows of a frame, blank ones kept — a jump is judged by what moved. */
 function rowsOf(frame) {
-  return frame.split(new RegExp(ESC + '\\[\\d+;1H')).slice(1)
+  // ANY COLUMN: the content frame moved every region off column 1
+  // (ui/frame.js `contentBounds`).
+  return frame.split(new RegExp(ESC + '\\[\\d+;\\d+H')).slice(1)
     .map(plain).map((r) => r.replace(/\s+$/, ''));
 }
 const framesOf = (out) => String(out).split(ESC + '[?25l').slice(1);
@@ -99,14 +101,20 @@ module.exports = async function () {
     assertIncludes(all, 'USER', 'the anchor label is what makes a message findable when scrolling back');
   });
 
-  await test('ANCHOR NAV: a click puts the whole message back, which a jump cannot do', async () => {
-    // THE REASON THE CLICK IS NOT REBOUND. What is DRAWN for a long paste is a
-    // marker; what a click restores is the payload. Rebinding this gesture to a
-    // scroll would trade the only thing that recovers the text for something
-    // Alt+Up already does.
+  await test('ANCHOR NAV: a big paste is COLLAPSED while composing and WHOLE once sent', async () => {
+    // ------------------------------------------------------------------
+    // THE COLLAPSE SWAPPED ENDS, and this is the end-to-end proof of it.
     //
-    // Asserted at the level that can be asserted without a mouse: the feed
-    // draws the marker, and the full text is what the session holds.
+    // The feed used to draw `[pasted text #1]` in place of the payload, and the
+    // input box drew the whole wall. Both were the wrong way round: the
+    // COMPOSER is where a wall of text destroys something (you cannot see the
+    // sentence you typed in front of it), and the TRANSCRIPT is the record,
+    // which has to be readable back.
+    //
+    // So: `<pasted text>` on the input line BEFORE Enter, the full payload in
+    // the conversation AFTER it, and the full payload in `session.messages`
+    // either way — which is what the model receives.
+    // ------------------------------------------------------------------
     const cwd = tmpdir('anchor-');
     const long = Array.from({ length: 30 }, (_, i) => `line ${i} of a pasted log`).join(NL);
     const r = await runCli([], {
@@ -119,7 +127,10 @@ module.exports = async function () {
     });
     assert.strictEqual(r.code, 0);
     const out = plain(r.out);
-    assertIncludes(out, '[pasted text', 'a long paste is drawn as a marker, not as thirty lines');
+    assertIncludes(out, '<pasted text>',
+      'the COMPOSER collapses it — otherwise thirty lines bury the prompt being written');
+    assertIncludes(out, 'line 29 of a pasted log',
+      'and the CONVERSATION shows what was actually sent, once it has been');
 
     const fs = require('fs');
     const path = require('path');
@@ -128,6 +139,8 @@ module.exports = async function () {
     const session = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
     const user = session.messages.find((m) => m.role === 'user' && /pasted log/.test(String(m.content || '')));
     assert.ok(user, 'and the payload itself is what the session and the model actually hold');
+    assert.ok(!/<pasted text>/.test(String(user.content)),
+      'the placeholder is purely visual and must never reach the model');
     assert.ok(String(user.content).split(NL).length > 20, 'all of it, not the marker');
   });
 };

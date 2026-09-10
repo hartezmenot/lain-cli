@@ -12,16 +12,376 @@ Tiers: `unit` → UNIT-VERIFIED · `integration` → INTEGRATION-VERIFIED ·
 `smoke` (spawns the real binary) → LIVE-VERIFIED · `live` (contacts a real
 provider, self-skipping) → LIVE PROVIDER VERIFIED.
 
-**Latest pass (benchmark & evidence baseline): unit 2,150 / 0 failed (directly
-counted) · integration and smoke zero failures — the full three-tier run exited
-0, including the previously flaky remote/brain timing cluster and the 3 new
-benchmark smoke tests.** The benchmark's own mock baseline: 8/8 task runs
-verified, 8/8 instrumentation checks matched. Details in the section below and
-docs/BENCHMARK.md.
+## The CLI finishing pass — activity vocabulary, and a red suite made green (2026-09-08)
+
+The primary surface already had the hierarchy the brief asks for (project ·
+model · tokens · one live activity row · one input box); this pass did not
+rebuild it. What it found and fixed is narrower and real.
+
+| Capability | Tier | Label |
+|---|---|---|
+| The four harness tools NAME THEIR SUBJECT (`verify_task`, `service_check`, `observe`) | unit | **UNIT-VERIFIED** |
+| The four harness tools get their own VERB — VERIFYING / OBSERVING / STARTING / CHECKING | unit | **UNIT-VERIFIED** |
+| The strip word is a pure function of the phase — same state, same word, at any clock | unit | **UNIT-VERIFIED** |
+| No timer and no `Math.random` in `ui/status.js` — the UI cannot invent activity | unit | **UNIT-VERIFIED** |
+| Project, model, token cost and the input box are on screen together, drawn through the real `Screen` | unit | **UNIT-VERIFIED** |
+| Exactly ONE input region, below the conversation | unit | **UNIT-VERIFIED** |
+| ONE elapsed-work clock per task, `HH:MM:SS`, which does not restart between a read, a write, a test or a retry | unit | **UNIT-VERIFIED** |
+| The clock PAUSES on a rate limit, an interruption or a question, and resumes from the banked figure | unit | **UNIT-VERIFIED** |
+| The clock cannot be advanced by drawing, and exactly ONE module advances it | unit | **UNIT-VERIFIED** |
+| One elapsed vocabulary — the live row, `/bg` and the background region all spell it `HH:MM:SS` | unit | **UNIT-VERIFIED** |
+| A successful routine call (read, search, shell) leaves NO row in the conversation; a failure, a change to the project, a verification, a decision and a service all do | unit | **UNIT-VERIFIED** |
+| The turn's STANDING VERDICT — its last clean command — is kept, read off lifecycle.js's own rule rather than guessed from the command text | unit | **UNIT-VERIFIED** |
+| The live pass and the recorded pass use ONE rule, so the conversation never rewrites itself at settlement | unit | **UNIT-VERIFIED** |
+| Recovery, and a clipboard copy, are TRANSIENT OPERATIONS on the live row — never prose in the conversation | unit | **UNIT-VERIFIED** |
+| An operation note can never displace a turn's phase, and can never make the window title claim work | unit | **UNIT-VERIFIED** |
+| One invisible content frame — equal gutters, no fixed column cap, conversation and composer starting on the same column | unit + smoke | **LIVE-VERIFIED** |
+| Preformatted content (fenced code, diagrams, trees) is never reflowed; a line too wide FOLDS at a cell boundary and loses nothing | unit + smoke | **LIVE-VERIFIED** |
+| The composer is a borderless two-row grey region, resize-safe at 40–160 columns | unit + smoke | **LIVE-VERIFIED** |
+| A submitted turn gets a scroll anchor on the header's rule when it scrolls out of view; clicking it returns to the exact message | unit | **UNIT-VERIFIED** |
+| A second fold MERGES the first rather than quoting it — one summary marker, a true message count, instructions verbatim in order | unit | **UNIT-VERIFIED** |
+| `/clean` (screen), `/clear` (model conversation), `/new` (task and plan) and `/compact` (transform) are four distinct operations | unit | **UNIT-VERIFIED** |
+| Nothing in the compaction path can delete `.lain` evidence, artifacts or transcripts | unit | **UNIT-VERIFIED** |
+| `/compact` answers in two lines; the accounting is `/token` | unit | **UNIT-VERIFIED** |
+| ONE token estimator in the tree, and ONE owner of context transitions | unit | **UNIT-VERIFIED** |
+| `toolRegistry.execute` has exactly ONE caller, so no convenience surface can bypass the gate; `/bg` delegates to the same executor | unit | **UNIT-VERIFIED** |
+| A tool row's outcome and subject are PAINTED — green tick, red cross, cyan path — where the whole row used to be unpainted | unit | **UNIT-VERIFIED** |
+| ONE content frame — `ui/frame.js contentBounds` — with EQUAL gutters at every width, odd or even, consumed by the header, conversation, live row, composer and command menu | unit | **UNIT-VERIFIED** |
+| No renderer computes its own horizontal margin; no drawn row crosses the frame's right edge | unit | **UNIT-VERIFIED** |
+| The gutter scales with the terminal (1 / 2 / 3 / 4), monotonically and boundedly, and is given up on a terminal too narrow to afford it | unit | **UNIT-VERIFIED** |
+| PROSE narrows to a readable measure on a very wide terminal; code, diagrams and tables keep the whole frame | unit | **UNIT-VERIFIED** |
+| The composer is three rows of grey with the text CENTRED in them, one pad inside the fill, no border at any width | unit + smoke | **LIVE-VERIFIED** |
+| The command menu is a LIST — no frame, no rules, no shouted title — as wide as its contents and never the terminal | unit | **UNIT-VERIFIED** |
+| The selected command row is CONTAINED within the menu, with the command token accented and its description dim | unit | **UNIT-VERIFIED** |
+| Exactly ONE horizontal rule on the surface; the background and pending regions are labels | unit | **UNIT-VERIFIED** |
+| A tool row reads `verb · subject` — the verb of a shell command is its program, and `Ran` is gone | unit | **UNIT-VERIFIED** |
+| The live row names no actor for LAIN's own work, speaks transient states in sentence case, and shouts only verdicts | unit | **UNIT-VERIFIED** |
+| One glyph vocabulary with the window title: spinner / ✓ / ✕ / Ⅱ / › / · , read off the same PAUSED_WORDS list | unit | **UNIT-VERIFIED** |
+| The turn anchor is a dim `↑ user` on the header's rule — navigation, not a second header | unit | **UNIT-VERIFIED** |
+| The final answer has the highest foreground contrast on the screen; tool rows and activity are dimmer | unit | **UNIT-VERIFIED** |
+| A provider retry says NOTHING into the conversation — the live row carries it compactly and replaces it; the raw failure stays on the turn record | unit | **UNIT-VERIFIED** |
+| The end of a rate-limit wait is not announced; a recovery the user need not act on leaves no trace | unit | **UNIT-VERIFIED** |
+| A rate limit shows the PAUSE mark, never a spinner — the row and the window title read one classification | unit | **UNIT-VERIFIED** |
+| A continuation LAIN composes for itself is captioned, never rendered as a user message; an UNDECLARED source is drawn as the user's own words | unit | **UNIT-VERIFIED** |
+| Every runtime continuation (`rate-limit-resume`, `provider-failover`, `handover`, `steer`) has a caption; no internal key is printed at the user | unit | **UNIT-VERIFIED** |
+| A steer acknowledgement and an interruption are transient; the steer's own words stay durable | unit | **UNIT-VERIFIED** |
+| Streamed reasoning never enters the conversation — it is counted as output, kept on the record, and shown only behind `LAIN_SHOW_THINKING=1` or when it is the only thing the turn produced | unit | **UNIT-VERIFIED** |
+| The prompt contract explicitly forbids routine narration, tool-call numbering and thinking-out-loud openers | unit | **UNIT-VERIFIED** |
+| ONE divider per exchange boundary, inside the frame, dim, never inside code or between paragraphs | unit | **UNIT-VERIFIED** |
+| The turn anchor is a one-line preview of the REAL submitted prompt on its own ground, normalised, truncated, paste-marked, inside the frame | unit | **UNIT-VERIFIED** |
+| A markdown heading is bold, never upper-cased — one heading weight, not two | unit | **UNIT-VERIFIED** |
+| An ordinary turn prints no task id, event count or verification contract | unit | **UNIT-VERIFIED** |
+| One projection seam — `dash.js` consumes `harnesssurface`, never `runtime.snapshot()` | unit | **UNIT-VERIFIED** |
+| A missing harness projects ABSENT (`null`), never an empty task | unit | **UNIT-VERIFIED** |
+
+**Two real defects, both found by reading what the screen would say:**
+
+1. `describeTarget` had no branch for `verify_task`, `service_check` or
+   `observe` — none of them carries a `path`, `command`, `pattern` or
+   `question` — so all three drew as subject-less rows. Thirty verifications
+   were indistinguishable from each other, in the one place a person most
+   wants to know WHAT is being proved. The same fault `computer`,
+   `process_run` and `web_fetch` had each been fixed out of before.
+2. The status strip mapped all four harness tools to the generic `RUNNING`.
+   `RUNNING npm test` and `RUNNING unit tests pass` are not the same event:
+   one is a command, the other is LAIN trying to PROVE something, and the
+   harness already distinguishes them (`harness/state.js` VERIFYING is a state
+   only evidence can leave). The strip was the last surface flattening it.
+
+The vocabulary is NOT new: VERIFYING is what the strip already said for a
+pending completion, and OBSERVING is the observation router’s own word. Nothing
+here invented a state; two of them were simply unreachable from a tool call.
+
+### The red suite, and what it was hiding
+
+The tree carried **13 permanently failing tests** (6 unit, 7 smoke) — recorded
+in the previous pass as “pre-existing, not fixed”. All 13 had ONE cause: they
+asserted `/audit` and `/troubleshoot` were registered commands, after this
+tree’s own UX-subtraction pass deliberately removed them. A suite with known-red
+tests in it stops being read, so they were reconciled rather than left:
+
+- the tests now assert the DECISION (the command is gone) and the survival of
+  what it reached — `mode.js` still classifies a vague problem report as
+  TROUBLESHOOT, `troubleshoot.js` still renders, `/compare` still exists;
+- `src/health.js` was PROBING THE COMMAND REGISTRY for both, and therefore
+  reported the workflows as **MISSING**. They are not missing. It now probes the
+  module and the mode, and the rows are named for what a person can do
+  (`Project reading`, `Troubleshooting`) rather than for a command they can type.
+
+**Unit 2,233 / 0 failed. Smoke 534 / 0 failed. Distribution 40 / 0 failed.**
+Integration 169 / 1 — the one failure is `harness-lifecycle.test.js`
+(“foreground-owner crash removes foreground tool descendants”), an untracked
+Harness-owned file exercising the process manager and the Rust supervisor. It
+touches none of the modules changed here and reproduces in isolation.
+
+### A LIMITATION THIS PASS FOUND AND DID NOT REPAIR
+
+**The external-review relay is orphaned.** `investigation.relay` is called from
+exactly one place — `troubleshoot.js` `runCommand` — and no registered command
+reaches that any more. The machinery is intact and nothing can start it, so the
+structured troubleshoot REPORT and the bounded LAIN → EXTERNAL → LAIN review no
+longer appear in any turn. The TROUBLESHOOT *workflow* (prompt guidance, trace
+before editing) is unaffected and still reached by describing a problem.
+
+This is reported rather than fixed because the repair is a product decision —
+give the relay a door (a command, or a model-facing tool) or retire it with its
+module — and both are larger than this pass. `tests/smoke/relay-dash-mcp.test.js`
+now asserts the REACHABILITY fact, so the day it changes, a test says so.
+
+**Also observed, environmental:** the integration tier ran for four hours
+against a stale `rust/lain-supervisor` binary (`tests/run.js` refuses it by
+design) with 112 orphaned supervisors and 30 headless Chromes left by earlier
+runs holding the machine. Rebuilt and cleaned: the same tier now completes in
+**228 seconds**. Nothing in the CLI caused this and nothing in it was changed for it.
+
+---
+## Distribution and packaging (2026-09-08)
+
+How `lain` gets onto a machine. Architecture and limitations:
+[`DISTRIBUTION.md`](DISTRIBUTION.md).
+
+| Capability | Tier | Label |
+|---|---|---|
+| One product, one executable — `package.json` declares exactly one `bin`, asserted | distribution | **UNIT-VERIFIED** |
+| Package contents — a `files` allowlist; 585 files / 6.9MB → 276 files / 3.4MB, source only | distribution | **UNIT-VERIFIED** |
+| A real global install from a packed tarball into an ISOLATED npm prefix | manual, this pass | **LIVE-VERIFIED** |
+| `lain --version` on a PATH holding only the sandbox bin, node and system32 | manual, this pass | **LIVE-VERIFIED** |
+| `lain --doctor` from that isolated install, in an empty project, exit 0 | manual + distribution tier | **LIVE-VERIFIED** |
+| The Harness ships inside the same executable (`lain /harness capabilities`) | manual, this pass | **LIVE-VERIFIED** |
+| The no-npm path — extracted tarball, `node distribution/install.js`, launcher run | manual + distribution tier | **LIVE-VERIFIED** |
+| Install success contract — the launcher must RUN, not merely exist | distribution | **UNIT-VERIFIED** |
+| PATH: append-only, idempotent, case-correct, no duplicates, bin-dir only | distribution | **UNIT-VERIFIED** |
+| PATH denied — still installs, states the limitation, prints the manual command, claims nothing | distribution | **UNIT-VERIFIED** |
+| Windows: USER scope via PowerShell, never `setx` (silent 1024-char truncation), never machine PATH | distribution | **UNIT-VERIFIED** |
+| Windows: three shims (`.cmd`, `.ps1`, POSIX), LF endings on the POSIX one, quoted paths | distribution | **UNIT-VERIFIED** |
+| A launcher in a path containing SPACES actually runs | distribution | **UNIT-VERIFIED** |
+| Unix: marked block in the file `$SHELL` reads; idempotent; removal restores the file; fish syntax | distribution | **UNIT-VERIFIED** (file I/O exercised on this host; a Unix login shell re-reading it is NOT VERIFIED) |
+| Uninstall removes only what it wrote; config, sessions and the checkout are kept | distribution | **UNIT-VERIFIED** |
+| Shadowing — a second `lain` earlier on PATH is reported, not hidden | distribution | **UNIT-VERIFIED** |
+| Boundary — nothing in `src/` reaches `distribution/`, and no `src/` file mutates PATH | distribution | **UNIT-VERIFIED** |
+| Development mode unaffected — `node bin/lain.js` with no install | distribution | **UNIT-VERIFIED** |
+| Optional capabilities never block installation; `○` is a fact, `✗` is a fault | distribution | **UNIT-VERIFIED** |
+
+**Distribution suite: 39 tests, 0 failed.** Every PATH case runs against an
+INJECTED FAKE adapter — the developer's real PATH is never touched, which is the
+same rule `tests/run.js` applies to the config home.
+
+**One defect found and fixed:** `pathenv.remove` hands the adapter what is left
+after filtering, which on Unix is the empty string (that adapter holds one
+entry). `set('')` wrote `export PATH=":$PATH"` and left the marker block in the
+profile, so uninstall reported success over a file that still had LAIN in it. An
+empty value now means UNSET.
+
+**Answered explicitly:** a new user can install LAIN Harness and immediately use
+`lain` without separately installing a LAIN CLI — verified by the isolated
+install above, not inferred from package metadata.
+
+---
+
+## The Harness (2026-09-08)
+
+The task runtime, event vocabulary, process manager, artifact store,
+verification engine, observation router, browser harness, recovery engine and
+capability registry. Architecture and limitations: [`HARNESS.md`](HARNESS.md).
+
+| Capability | Tier | Label |
+|---|---|---|
+| Task state machine — `PASSED` unreachable except through `VERIFYING`; terminal states never rewritten | unit | **UNIT-VERIFIED** |
+| Task record persisted to `.lain/tasks/<id>/`, reloaded across processes | unit + smoke | **LIVE-VERIFIED** |
+| Persistence is ARMED by the first material event — a task that did nothing leaves no directory, and no history is lost when it arms | unit + smoke | **LIVE-VERIFIED** |
+| The task drawer is bounded at 200, and only settled tasks are ever pruned | unit | **UNIT-VERIFIED** |
+| `lain --doctor` — grouped Core/Optional report, side-effect free, exit 0 with no provider | distribution + smoke | **LIVE-VERIFIED** |
+| Event vocabulary — 42 names on ONE bus; a guard proves none is advertised and never emitted | unit | **UNIT-VERIFIED** |
+| Flight recorder — every bus event appended to the active task's `events.jsonl` | unit + smoke | **LIVE-VERIFIED** |
+| Artifact store — text and BYTES (a screenshot is a real PNG), torn-line tolerant, path-traversal safe, never throws | unit + integration | **INTEGRATION-VERIFIED** |
+| Process manager — an unrequested exit is a CRASH; health is UNKNOWN when nothing looked; ownership + `cleanup` | unit + integration | **INTEGRATION-VERIFIED** |
+| Verification engine — FAILED outranks INCONCLUSIVE; optional requirements cannot change a verdict; nothing short-circuits | unit + integration | **INTEGRATION-VERIFIED** |
+| Checks — a missing runner is INCONCLUSIVE, never a red suite (via `execution.js` + `testing.js`) | unit | **UNIT-VERIFIED** |
+| Project profile — `/verify full` derived from what the manifest declares, never guessed | unit | **UNIT-VERIFIED** |
+| Observation router — structure before pixels; `screen` deliberately inverted; every source maps onto `observe.js`'s five witness kinds | unit | **UNIT-VERIFIED** |
+| Browser harness — real Chrome launched headless, real flow, DOM/console/screenshot, PASS and FAIL both proven on a served page | integration | **INTEGRATION-VERIFIED** |
+| Browser unavailability — INCONCLUSIVE with a reason, never a silent pass or a false failure | unit | **UNIT-VERIFIED** |
+| Recovery — environmental never retried; a transient failure retried exactly once, then re-classified | unit | **UNIT-VERIFIED** |
+| Capability registry + approval policy — DESTRUCTIVE/EXTERNAL require approval; every live tool described | unit | **UNIT-VERIFIED** |
+| Approval events from the real permission flow; unattended asks nobody and announces nothing | unit | **UNIT-VERIFIED** |
+| CLI — `/harness` `/tasks` `/verify` `/artifacts` `/env`, and `/task` unchanged plus a section | smoke (real binary) | **LIVE-VERIFIED** |
+| Model tools — `verify_task` `service_start` `service_check` `observe` | smoke (real binary) | **LIVE-VERIFIED** |
+| Dashboard renders a PROJECTION; the payload carries names and counts, never artifact bodies | unit | **UNIT-VERIFIED** |
+| Remote surface | — | **PARTIAL** — `harnesssurface.project()`/`line()` exist and the dashboard consumes them; the Rust supervisor side is not wired |
+| Execution tiers 3-4 (container/VM, remote runners) | — | **MISSING** — interfaces only, deliberately |
+| Skill packages (manifest, loader, trust) | — | **MISSING** — `harness/profile.js` is the manifest-derived stand-in |
+
+**Full tiers after this pass: unit 2,218 / 6 · integration 146 / 1 ·
+smoke 528 / 7 · distribution 40 / 0.** Every one of the 14 failures is
+accounted for below: 13 are the `/audit` + `/troubleshoot` removal's, and 1 is
+the remote-control cluster (149 orphaned `lain-supervisor.exe` processes were
+live on the machine at the end of this pass, up from 101 at the start — each
+timed-out run leaks more, and they must be cleared before that tier can give a
+trustworthy answer).
+
+**Harness suites: 147 tests, 0 failed** (unit 123 across six files · integration 8
+scenarios A-E · plus 16 smoke cases against the real binary). Scenario B
+launches a real headless Chrome against a real served page and asserts both the
+PASS and the FAIL path; it degrades to an asserted INCONCLUSIVE where no browser
+exists.
+
+**Three real defects were found by these tests and fixed:**
+
+1. `lain -p` never tore the harness down — it does not go through `repl.start()`,
+   so a one-shot that started a managed service HUNG FOREVER (the service held
+   the event loop open) and left the process as an orphan. Found by a smoke test
+   that stopped finishing. `App.once` now shuts down in a `finally`.
+2. `harnesslink.beginTurn` read `runtime.active()`, which is null the instant a
+   task settles — so continuing after a verdict opened a fresh task with no
+   `causedBy`, silently losing the link between a failure and the work that
+   fixed it. It reads `latest()`.
+3. A turn that died at the transport, before any tool call, still created
+   `<project>/.lain/tasks/<id>/` and left it there — litter in somebody's
+   project for a request that never reached the model. Caught by
+   `smoke/connection.test.js`, which has guarded "a failure BEFORE any tool
+   leaves the working tree untouched" for months. Persistence is now ARMED by
+   the first MATERIAL event; earlier events are flushed in order when it fires,
+   so no history is lost.
+
+**Two latent defects in pre-existing code, exposed by this work and fixed:**
+
+1. `tests/integration/guardian.test.js` — "Node holds no second copy of the
+   decision" strips comments before checking that `inputgate.js` does not read
+   the transcript. Its stripper split on LF and used `//.*$`, and **`.` does not
+   match a carriage return in JavaScript** — so on a CRLF checkout nothing was
+   stripped and the guard failed on a comment that says, correctly, that the
+   gate does not read `record.stopReason`. This repository has
+   `core.autocrlf=true` and no `.gitattributes`, so *a fresh clone on Windows
+   produces exactly that*: the guard was failing for every new contributor on
+   this platform and passing only where some tool had rewritten the file as LF.
+   Line endings are now normalised before the rule is applied. (Surfaced here
+   because a `git stash`/`pop` cycle — used to establish a baseline — rewrote
+   working-tree files through git's autocrlf filter.)
+2. `tests/integration/continuation.test.js` — the sandbox teardown raced
+   `gitsnapshot.prefetch`, which `submit` fires **deliberately unawaited** and
+   which spawns `git` with the sandbox as its working directory. On Windows a
+   directory cannot be removed while a process has it as a cwd, so the teardown
+   got EPERM. Measured, not assumed: three consecutive runs failed immediately
+   and all three succeeded 600ms later. The teardown now retries within a bounded
+   budget and still throws on a genuine leak. Pre-existing (`src/gitsnapshot.js`
+   is untracked working-tree work); this pass shifted timing enough to make it
+   deterministic rather than intermittent.
+
+**Pre-existing failures NOT caused by this work, and not fixed by it:** six unit
+tests (`audit.test.js` ×4, `health.test.js`, `panes-report.test.js`) assert that
+`/audit` and `/troubleshoot` are registered commands. Both were removed from the
+command surface by this tree's own uncommitted UX-subtraction pass
+(`src/reportcommands.js`, `src/commands.js`) and their tests were not updated.
+Proven by restoring `src/reportcommands.js` to HEAD, at which point `/audit`
+registers again. Re-adding the commands would reverse a decision this tree
+records deliberately, so they are reported rather than "fixed".
+
+---
+
+**Latest pass (Phase-2 removal pass): unit 2,094 / 0 failed** — the Probe
+integration removed from the tree and the architecture guards green on the
+changed code (first run after the removals: 2,110/1, where the one failure was
+the reachability guard catching two unreachable modules — numfmt.js and
+tools/browser.js, both deleted; the second run is the recorded pass).
+Integration and smoke NOT yet re-run on the changed tree; the figures below
+are the prior pass. The benchmark's mock baseline: 8/8 task runs verified,
+8/8 instrumentation checks matched (details below and docs/BENCHMARK.md).
 
 **Prior pass (request admission): unit 2,134 / 0 failed · smoke 528 / 0 failed ·
 integration 133 / 4 failed** — every failure in the remote/brain and supervisor
 cancel timing tests, the same cluster proven environmental in the prior pass.
+
+**The remote-control failures were finally root-caused: not timing, not code —
+~90 orphaned supervisor processes.** A full enumeration of live
+`lain-supervisor.exe` (a `tasklist` tail shows three; `Get-CimInstance` shows
+the truth) found roughly ninety `serve` processes accumulated across days of
+test runs, every one from this repo's `target/` directories. Timed-out harness
+runs never reach `withRemote`'s `finally` teardown, so each leaked supervisor
+kept polling the `LAIN_TELEGRAM_API` port baked in at spawn, forever, at a
+backoff that caps at 60s. Windows reuses ephemeral ports, and the fake
+Telegram served ANY client that shared the file-wide `FAKE_TOKEN` — so the
+moment a new test's fake landed on a port an orphan remembered, the orphan
+raced the real supervisor for `getUpdates` and stole or duplicated updates.
+That single mechanism explains every observed symptom: "the bot answered"
+never arriving (an orphan consumed the update), pairing replies arriving
+twice (an orphan also paired), the dedupe test's `2 !== 1` (an orphan's
+in-memory `seen` list never held update 4242), and the run-to-run variance
+in WHICH tests failed — a different port collision each time. The Rust runtime
+was audited sound while diagnosing (cursor-before-answer, generation-guarded
+threads, token-never-in-argv transport); no runtime change was made, per §15.
+
+**The fix is in the test rig, not the runtime: per-test tokens, and a fake that
+authenticates like the real thing.** `fakeTelegram` now mints a fresh, well-
+formed bot credential per test (`mintToken`) and answers any OTHER token with
+the 404 the real Telegram gives a credential it does not know — on every
+method, before any queue is served. An orphaned supervisor that wanders onto
+the new fake's port can neither steal updates nor inject replies; its
+remembered token belongs to a fake that is already gone. The two tests whose
+assertions are specifically about a visible constant token (connect, badtoken)
+opt in via `{ token: FAKE_TOKEN }`, and the degrade test's leak assertion
+follows the minted token. Clearing the accumulated orphans is a one-time
+cleanup (`taskkill /IM lain-supervisor.exe /F`), after which the rig's own
+teardown plus the token refusal keeps the tree clean.
+
+*(Weighed and rejected: making the supervisor exit when its home directory
+vanishes. Outliving a client is the supervisor's stated job — "the part of LAIN
+that is still running when LAIN is not" — and a real home never vanishes. A
+runtime behavior change to solve what is now a contained test-hygiene problem
+fails §20's "do not rewrite working systems". The one-time kill plus the
+per-test token refusal are the whole remedy.)*
+
+**Second mechanism found after the token fix — the forensics held, the first
+explanation did not.** With per-test tokens in place the interference class of
+failures was gone (18/25 passing with the full orphan population still live),
+but seven tests kept failing at run-to-run-varying sites: the pairing gates
+themselves. Forensics on the leftover mkdtemp homes identified the shape. The
+`Authorized…` text every failing assertion mistook for its answer is sent
+ONLY on a successful `/pair` (telegram.rs:337), and notify's
+`events.jsonl` shows `REMOTE_CONNECTED` → `TURN_STARTED` exactly 15.0s
+apart — the full `until` budget consumed waiting for a pairing reply that
+had not arrived, after which the late reply poisoned every subsequent
+assertion in the test. The homes' `telegram.json` offsets (1–2) prove the
+updates were eventually consumed; the runtime moved its cursor and answered
+correctly, just late.
+
+**Why the reply was late — first theory, now corrected.** The real API holds
+`getUpdates` open; that hold paces the adapter's poll loop, and the rig's
+instant-empty answer was a genuine fidelity defect (a curl-spawn storm
+limited only by process creation). The fix is correct regardless: the fake
+now HOLDS an empty getUpdates (250ms window) and releases it the instant a
+message is spoken, which is Telegram's actual delivery semantics; loop rate
+drops from spawn-limited to ~4 polls/sec; the `fail` check stays before the
+hold (degrade's fast-500 path is unchanged); teardown drains held requests.
+But the hold alone did NOT green the file — 16/9 with the orphan population
+still live, 14/11 later the same day as the population crept to 96 — so the
+storm was one contributor, not the cause.
+
+**The wire trace closed it.** An env-gated tracer (`LAIN_RC_TRACE`) in the
+fake now stamps every wire event with epoch milliseconds: SAY (test queued a
+message), POLL-SERVED (a getUpdates arrived and was answered), SENT (a
+sendMessage landed). The traced run's timeline is unambiguous: SAY →
+POLL-SERVED gaps of 11.5s, 17.1s and 38.2s — the message waits in queue
+long before the supervisor's poll ever arrives — while POLL-SERVED → SENT
+is ~400ms. Once a poll lands, the runtime answers promptly; what is starved
+is the poll itself. Between visible polls the fake receives nothing for
+5–50s stretches that match the backoff ladder exactly (2+4+8+16s of
+in-transit getUpdates deaths, each failure doubling the sleep, telegram.rs
+:205-206) — requests dying before they reach the fake, which is why the
+fake's trace shows only the retries that finally got through. Under it all:
+96 orphaned supervisors at census time, grown from ~90 across the day as
+the score decayed 18/7 → 16/9 → 14/11 in lockstep. The leak path is in the
+rig's own teardown: `supervisor.shutdown()` is a graceful request with a 5s
+budget, and the child is spawned detached and unref'd with its PID
+discarded (src/supervisor.js:182) — a shutdown that misses its window under
+load leaves an orphan the rig can no longer reach. Each failed test can leak
+one more; the failures and the leaks feed each other in a loop.
+
+**Verdict: the runtime is sound; the machine was drowning.** The backoff
+behavior is correct (a request that dies in transit SHOULD back off); the
+sends are one-shot but fast when unpolluted. The defect is environmental —
+the accumulated orphan population — and the remedy is the one-time kill,
+with the traced clean-machine run as the confirming A/B. §15 untouched,
+§20 untouched: no runtime change was made or is proposed on this evidence.
 
 Confirmed directly per tier from the runs of this pass: **unit 2,133 ·
 integration 129–132 · smoke 528**.
@@ -55,6 +415,502 @@ the ledger's 250-line coverage gap, the measured cost of planted waste) and the
 two env-gated runtime seams it needed are recorded in **docs/BENCHMARK.md**;
 `tests/unit/bench-evidence.test.js` (16 cases) pins the evidence classifier in
 both directions, and `tests/smoke/bench.test.js` pins mock reproducibility.
+
+**Bench environment, weighed and decided: the fixture stays git-less.** The
+fixture is copied without any `.git` (bench/fixture holds README/package.json/
+src/test.js/tests only), nothing in bench/ references git — task trust is
+injected via `trustedPaths`, the reset guarantee is proven by a sha256
+byte-walk, and drift by protected hashes, so no benchmark mechanism depends on
+git. The CLI degrades by design without it: `gitsense.review` answers "not a
+git repository, so there is nothing to compare against" and the briefing
+renders "Not available." — one clean refusal, no failure path. Adding a
+`.git` now would also invalidate the before/after comparison: the recorded
+baseline was measured git-less, and a `.git` would add a per-request
+`git status` spawn and change briefing content on every run — a different
+measured environment, not a code improvement. (Weighed per the standing
+instruction that fixture-environment changes be recorded honestly.)
+
+## GAP-MATRIX pass — the two implemented fixes, and what is verified
+
+The competitive audit (docs/GAP-MATRIX.md, 28 rows) selected two changes as the
+highest-confidence code candidates. Both are implemented. **Both are NOT
+VERIFIED at any tier as of this writing** — the execution environment refused
+every command of this pass ("claude-opus-5 temporarily unavailable, so auto
+mode cannot determine the safety of Bash"), so no syntax check, no test tier,
+and no benchmark re-run has happened on the changed tree. This section records
+exactly what exists, and the two false starts caught by writing the tests
+first, so the moment a run is possible the results have a place to land.
+
+### Row 24 — git state reaches the model, per turn (src/gitsnapshot.js, new)
+
+`gitsense.js` has measured the working tree since it was written but only two
+consumers ever saw it (`survey.js` for the briefing, `review_changes`). The
+model received nothing unless it called a tool. GAP-MATRIX row 24 called this
+the smallest confirmed gap with daily frequency.
+
+The fix is one module wired at three seams, all in the established shapes:
+
+- `app.submit()` → `gitsnapshot.prefetch(this, this.gitTouched())` — fire-and-
+  forget, the same shape `refreshSupervisedJobs` uses; the measurement overlaps
+  request assembly and a turn that outruns it simply renders no section.
+- `app.adopt()` → `gitsnapshot.reset(this)` — a new session is a new tree.
+- `promptparts.of()` renders `say(app._gitSnapshot)` into the **volatile half
+  only**, after the split, beside the plan digest. Tree state is the
+  definition of volatile; putting it in the stable prefix would re-price every
+  conversation on every file write — the token incident recreated by the
+  feature meant to add information.
+
+`say()` renders numbers, not content (per-file +added/-removed, grouped
+untracked/deleted, ≤12 rows, ≤4 shape observations), and is a PURE renderer of
+`gitsense.review`'s judgements. It is silent for a clean tree, no `.git`, a
+failed measurement, or a measurement that has not landed — each of those is the
+correct answer.
+
+**Two defects were found and fixed while writing the unit tests, before any
+tier ran** — which is the §23 UNIT step doing its job:
+
+1. The first version re-derived "unexpected" inside `say()` from a second copy
+   of the expected list, comparing absolute ledger paths against repo-relative
+   git names. It never matched, so with a non-empty ledger EVERY modified file
+   would have been flagged "this session never wrote". The fix removes the
+   second idea: `f.unexpected` comes from `gitsense.review`, which owns the one
+   path-normalization rule; `prefetch` is the only place the ledger list is
+   passed, untransformed.
+2. The rewrite-note guard suppressed the whole-file-rewrite observation
+   whenever the huge-set note fired. They advise different responses (scope
+   vs edit method) and both must be able to appear.
+3. (Found 2026-09-07 while statically verifying the tests against the code
+   before the first run.) The unexpected-file case asserted
+   `!text.includes('mine.js')` — impossible: every modified file renders as an
+   ordinary row, so `mine.js` is in the listing by design. The assertion is now
+   scoped to the notes section (`Worth knowing:`), which is where findings
+   live, plus a positive assertion that the file IS present as an ordinary
+   row. A defect in the test, not the implementation.
+
+### Row 24's wiring exposed a pre-existing gitsense defect: the path BASE
+
+Found 2026-09-07 while tracing what the per-turn wiring would render. It is a
+**gitsense.js defect that predates this mission** — review_changes and survey
+were broken by it all along — but row 24 would have turned it into per-turn
+corruption, so it was fixed as part of the row-24 work.
+
+The facts (verified against the shipped git docs on this machine,
+git-status(1) and git-diff(1), not against remembered behavior):
+
+- `--porcelain=v1` ALWAYS reports repo-root-relative paths — "the user's
+  `status.relativePaths` configuration is not respected" is deliberate. So from
+  a subdirectory cwd, git's names are `pkg/mine.js`-shaped.
+- `git diff --numstat` from a subdirectory defaults to root-relative names over
+  the WHOLE tree; `--relative` opts into subtree scoping, and a user's
+  `diff.relative` config silently sets that flag.
+- Both expected-list sources (the checkpoint ledger, lifecycle evidence) hold
+  ABSOLUTE paths, which review() normalizes against cwd — the session's own
+  frame.
+
+So from any subdirectory cwd the two frames diverged on every file: every
+modified file was flagged `unexpected` (the cwd-relative expected name could
+never equal git's root-relative one), `countLines` probed paths that do not
+exist — so `lines` came back null and every size judgement built on it (the
+rewrite detector's `lines > 30` gate) silently stopped working — and every
+expected file was reported `missing`.
+
+The fix, all inside gitsense.js:
+
+- both calls scoped to the session's subtree (`-- .`) — a monorepo-subdir
+  session is not briefed on other directories' changes, and a whole-monorepo
+  numstat is no longer paid for;
+- numstat's frame pinned with `--no-relative` against a `diff.relative` config;
+- the join happens in git's root frame (both sides as git reported them), then
+  a single `rev-parse --show-prefix` — fused into the repo probe review()
+  already ran, so no extra spawn — converts names into the cwd frame for the
+  expected-list match, countLines, and every rendered name. At the repo root
+  the conversion is the identity, so root-level sessions' answers are
+  byte-for-byte what they always were;
+- `describe()`'s "WRITTEN BUT NOT DIFFERENT" note no longer asserts the false
+  inference ("the write produced the same bytes that were already there") for
+  ignored or out-of-subtree writes — it states both readings, because "git
+  reports no change" is two observations, not one. (`say()`, the per-turn
+  section, never rendered `missing`; briefing.js's phrasing was already
+  literally true.)
+
+Regression test: `tests/unit/semantic.test.js` gains a real-repo subdirectory
+case — repo with `pkg/` and a top-level file, changes in BOTH places,
+`review(pkg, {expected: [pkg/mine.js]})` asserts mine.js is not `unexpected`,
+numstat landed on it (1/1), `lines === 3` (countLines read the real file),
+theirs.js still is a surprise, `missing` is empty, and root.js — differing
+from the last commit — is absent entirely (subtree scoping). **NOT VERIFIED —
+written, not run.**
+
+Unit tests: `tests/unit/gitsnapshot.test.js` (14 cases — say() rendering and
+silence, prefetch storage and silence-on-failure, reset, the ledger read, and
+two seam tests asserting the section lands in `live` and NEVER in `stable`).
+**NOT VERIFIED — written, not run.** app.js sits at 699 lines against its
+`< 700` architecture guard (the delegate method `gitTouched()` is one line
+because the body lives in gitsnapshot.touched).
+
+**Update 2026-09-07: the unit tier RAN.** 2,175 passed, 1 failed — the one
+failure being the app.js god-object guard itself ("app.js is 700 lines —
+split it before it becomes repl.js"): the gitsnapshot reset in `adopt()` was
++3 lines and crossed the boundary, split-count being 700 against 699 physical
+lines. Every new case passed — including the gitsense subdirectory
+regression. Fixed by condensing the gitsnapshot reset comment to one line
+(app.js:150-151, now 699 split-count); the guard itself was NOT touched.
+**Re-run pending the classifier's next window** (the outage that has run
+through this session also blocked the confirmation).
+
+### Phase 1 baseline — the browser ownership surface + the /external audit
+
+**Label: read-and-traced, NOT a removal.** Task #34, §16 and §0-C of the new
+brief. Same rule as the Probe map: the complete file-level inventory lands
+first; Phase 2 removes per §19.
+
+**The browser surface, in full:**
+
+- **src/browser.js** — the BrowserRuntime: `live()`, `runtimeFor(app,
+  provider)` with the `app._browsers` Map (one runtime per provider profile;
+  `app._browser` is the `'profile'` default), `start()` spawns a separate
+  Chromium under `~/.lain-v2/browser/profile` (never the user's browser,
+  never their profile — the file's header rules). This is browser
+  infrastructure by any reading: it owns Chromium process lifecycle and the
+  CDP wire.
+- **src/browsercdp.js** — the CDP client the runtime speaks (loopback debug
+  port only). Browser infrastructure; dies with browser.js.
+- **src/tools/browser.js** — the `browser` tool (open/info/screenshot/
+  inspect/click/type/key/wait/measure/console). Gated by
+  `browserLive` at tools/index.js:133-134 — "IT ONLY EXISTS WHILE THE
+  BROWSER IS RUNNING, which the user starts with `/external browser`". Dies.
+- **src/research.js `search()`** — web_search drives LAIN's Chromium
+  (Bing results; headless gets a degraded page, which is why the runtime is
+  headed). Dies with the browser. **web_fetch is a plain HTTP GET**
+  (research.js:19 "no browser, no JavaScript, no profile") — GENERIC, and it
+  survives: §16's "generic HTTP/network mechanisms needed for legitimate
+  coding workflows" is exactly this tool.
+- **src/tools/web.js** — the schemas. `fetchTools` (web_fetch) survives;
+  `searchTools` (web_search, tools/index.js:147's `if (browserLive)` gate)
+  dies.
+- **src/actors.js BrowserActor** (:278-484) + `KIND.BROWSER` (:75) + the
+  registry entry (:572) — the chat-page external-review relay (drives a
+  ChatGPT-style page, watches the reply settle, attributes it to "the page"
+  never a model). This is browser automation in service of /external —
+  the §0-C audit's one genuine coupling point: it dies, and with it
+  `/external browser` / `/external chatgpt` (routecommands.js:160-164), the
+  KIND.BROWSER row in the `/external` status view, and modelroutes.js's
+  browser rows.
+- **src/imageview.js:123** — `browser.live()` used as the preferred viewer
+  for the human-inspection HTML page, with `start <file>` as the fallback.
+  The LIVE branch dies; the default-viewer fallback (cmd `start` / `open` /
+  `xdg-open`) survives untouched — the human visual-inspection workflow
+  keeps its viewer.
+- **src/survey.js:210-215** — the `browser` row in the machine survey
+  ("The user starts one with /external browser"). Dies with the runtime.
+- **src/tools/semantic.js:631** — `{ _browser: ctx.app && ctx.app._browser }`
+  in a tool context — dies with `app._browser`.
+- **src/routecommands.js:77-80, 154-164** — the `/external browser` /
+  chatgpt branches. `routecommands.js:80`'s comment notes the actor replaced
+  a curl+grep flow "that required the user's own browser". Dies.
+- **Tests:** tests/smoke/browser.test.js (the live browser test — requires
+  `src/browser` + `BrowserActor`; dies), tests/unit/imageview.test.js (the
+  lain-chromium branch case; the default-viewer cases survive),
+  tests/unit/research.test.js (search cases; fetch cases survive),
+  tests/unit/actors.test.js (BrowserActor cases), tests/unit/relay.test.js /
+  modelroutes.test.js / external.test.js / externalrequest.test.js /
+  observe.test.js / toolaudit.test.js / dashgate.test.js /
+  external-resume.test.js / relay-dash-mcp.test.js (browser rows and
+  `/external browser` paths inside otherwise-generic tests — restructure),
+  tests/unit/sessionindex.test.js (the `delivered: 'browser'` field at
+  actors.js:426 — a generic session-index field whose value is the label;
+  the field survives, that value stops being produced), tests/live/
+  mcp-input.test.js (browser mentions in the live tier),
+  tests/integration/supervisor.test.js (browser references in supervisor
+  jobs), tests/unit/backups-mcp.test.js (browser mentions in mcp config
+  examples).
+- **Docs:** README/STATUS probe-era browser sections annotated as historical
+  at Phase 2; docs/ui-prototype/workspace.js untouched prototype scenery.
+
+**The §0-C /external audit, answered:**
+
+- external.js is **not a second provider stack**: it resolves through
+  `provider.resolve` and speaks through `provider.chat` (external.js:6-12,
+  97-100) — the same catalog and connection machinery a turn uses, only the
+  WHICH model/connection changed. There is no second routing implementation
+  that could disagree about endpoints.
+- The reviewer **has no tools, no filesystem, no shell** (SYSTEM prompt at
+  external.js:43-68): claims to have acted are flagged, not passed through.
+- **NOT CONFIGURED is a real state** — plainly reported, never falling back
+  to LAIN's own model and calling it an external review.
+- The actor family (actors.js) delivers packets: HumanActor (paste relay),
+  ApiActor, ReverseActor (declared-not-built seam that says so), BrowserActor
+  (the one browser-coupled actor, dies per the map above). /external stays
+  isolated from the core coding-agent lifecycle: troubleshoot's local loop
+  is unaffected, and the request verbs (`send`/`show`/`cancel`) act on the
+  pending draft only.
+- **Verdict: /external survives Phase 2** minus its browser actor, exactly
+  as §0-C requires ("keep it temporarily… do not expand it, do not redesign
+  unless required to prevent coupling"). The only removal needed to prevent
+  coupling is the browser actor itself, already in the map.
+
+### Row 25 — the elision note's recovery route (src/tools/tests.js, one block)
+
+The quietPass elision note advised: "re-run `<command>` with run_bash and grep
+it" — teaching the model to spend a second full suite run (minutes, plus
+another request to read) to recover one line the first run already established
+as passing. The note now names the runner's own filter (`-t`/`--filter`/`-k`)
+as the recovery route. The compaction stub's "Re-run the call if you need the
+rest" was audited and deliberately left: it already carries name + args + a
+semantic residue outline, so re-running there is recovery of elided EVIDENCE,
+not re-derivation of a settled verdict. A retrieve-by-id tool was rejected as
+tool-count expansion.
+
+Unit tests: `tests/unit/testing.test.js` gains one case pinning the note's
+direction on the OLD advice's signature (`run_bash`, `grep`) — not on any
+mention of re-running, which the new note legitimately contains as the advice
+against the waste. **NOT VERIFIED — written, not run.**
+
+### What the fresh benchmark must answer (pending #30)
+
+The 2026-09-05T20-18-39 mock run (8/8 verified, all instrumentation matched) is
+the "before". The fresh run on the changed tree answers: does the git section
+appear in mock turns against git fixtures without breaking any instrumentation
+check, and does tool-selection stay within the detectors' expectations. Mock
+token figures validate ACCOUNTING ONLY.
+
+**A bench-environment decision to record before that run.** `bench/out/` is
+inside the lain-v2 repo and gitignored. With the new `-- .` subtree scoping,
+a fixture cwd under `bench/out/` sits on an ignored path: the per-turn section
+is silently clean in every bench run. That is the correct behavior for the
+host repo (the host tree's ~90 dirty files must NOT render into a fixture
+session's prompt — that would be per-turn corruption, silent for every bench
+turn since none of the fixtures have their own git), but it means **the bench
+does not measure the section at all**. Options weighed for #30:
+
+1. Leave the bench silent (the default). The section is measured elsewhere —
+   by the gitsnapshot unit tests' seam cases and the real-repo case in
+   semantic.test.js — while the bench measures the rows 24/25 candidates'
+   request cost (no section rendered = no tokens spent) and everything else
+   unchanged.
+2. Give fixtures their own `git init` + a baseline commit. This would measure
+   the section rendering inside real bench turns, but it changes the fixture
+   ENVIRONMENT mid-mission — a truth-machinery-adjacent change ("do not
+   modify benchmark truth machinery"), and one that invalidates the mock
+   "before" comparison (the "before" tree ran with no fixture git, so the two
+   runs would no longer differ by "the row-24 candidates" alone; §17's
+   one-meaningful-difference rule would be violated).
+3. Force dirty-tree content under `bench/out/`? No — bench/out is the run
+   output directory; making it "dirty" from the host repo's perspective would
+   require removing the gitignore, which would couple the host repo to the
+   bench fixtures.
+
+Decision: option 1 for this mission's #30 run. The unit-tier real-repo case
+(semantic.test.js) is the section's correctness measurement, and the bench
+still answers the request-cost question (no tokens spent on the section in
+either tier). Option 2 is the right follow-up AFTER the mission, run as its
+own A/B (its own before run, its own tree state), not as a mid-mission
+confounder baked into the #30 comparison.
+
+### Phase 1 baseline — the Lain Probe integration surface, fully mapped
+
+**Label: read-and-traced, NOT a removal.** Task #33, the new brief's §1 rule
+(baseline before refactor). Every file the word "probe" touches was read and
+sorted into one of four buckets. This section is the Phase-2 removal plan's
+input; nothing has been deleted yet (§19's order is map → remove → guard).
+
+**The four buckets, and what each one means for removal:**
+
+1. **GENERIC STATE READS named `probe` — SURVIVE UNTOUCHED.**
+   `supervisor.probe()` reads the supervisor binary's file+pid and answers
+   `available/why` — a liveness check with no Probe-client logic
+   (providerhealth.js, runtimefacts.js, guardian.js all read it;
+   tests/smoke/rc.test.js:80 pins it). rust/lain-supervisor jobs.rs's
+   "probe" is likewise the supervisor's own cheap liveness check ("the slow
+   probe meant the feature silently broken" — line 176/756/771). Neither is
+   Lain Probe integration; deleting either would damage the supervisor's
+   health surface.
+
+2. **The `computer` DUAL-TRANSPORT FAMILY — SURVIVES VIA THE DESKTOP BRIDGE,
+   with one honest degradation already written in code.** tools/index.js:128
+   gates `computer` on `probeLive || mcpConfigured`, so with the Probe gone
+   the tool remains reachable through the desktop bridge alone. The
+   FOCUS/keyboard path already refuses the desktop transport with the
+   measured reason (computer.js:420-427: "the desktop bridge cannot verify
+   the foreground before each keystroke, and an unverified keystroke goes
+   wherever the user is looking") and the channels ledger's fallback ("ask
+   the user to press it"). **No new code is needed for the keyboard
+   question — the existing refusal IS the post-removal answer.** Files:
+   computer.js, keyboarddelivery.js, heldkeys.js, channels.js,
+   capability.js (its STAGE vocabulary and desktop-dialect rows — the
+   probe-dialect rows 131-156 die), tools/computer.js, uxphases.js,
+   tools/visual.js (uses computer's channels/visualReadiness; probes the
+   transports generically), ui/panes.js:593 visual readiness rows,
+   ui/status.js. The `.FIFTEEN` naming layers its name onto all three
+   vocabularies.
+
+3. **PURE PROBE INTEGRATION — DIES (the §0-B removal).** probe.js (the
+   connection class: config discovery, python discovery via the reused
+   `probe.python` config key, `-m probe` spawn, hello handshake, `_live`,
+   mirrorTurn, companion attach), tools/probe.js (the `probe` tool:
+   DIALECT.probe operations), probeskill.js (the system-prompt contract
+   paragraphs), probefacts.js (`.lain-probe/` survey facts; also the only
+   writer to `.lain-probe/`), probecommand.js (`/mcp probe` routing, probe
+   revoke), probetask.js (PROBE_TASK_RE), companion.js (the probe-window
+   event relay — its only attach site is probecommand.js:208), the
+   environment.js PROBE-window state machine (lines 1-268: ENVIRONMENTS,
+   PROBE_TOOL_GROUPS, ALWAYS_ALLOWED, BRIDGE_TOOL, enterProbe/enterCli,
+   checkToolAllowed, describe, note, _reset — all probe-specific; envdetect.js
+   is a separate module re-exported at :284, and the 7 generic consumers
+   — contracts.js, survey.js, clifacts.js, prompt.js, briefcommand.js,
+   externalrequest.js, ui/contextview.js, tools/tests.js — call only
+   detect/summary and are untouched), identify.js:63-75 (the CLI→PROBE
+   handoff), mode.js:218 (KIND.PROBE detection), permissions.js:73-285 (the
+   probe-scope grants), prompt.js:159-160 (the Probe contract paragraphs),
+   promptparts.js:104-106 (probeskill.decorate call), app.js:228 (the
+   decorate seam) and app.js:369 (`probe.mirrorTurn`), tools/index.js:119-122
+   (the `probeLive || envIsProbe` gate), tools/exec.js:49-56
+   (`findPython`'s reuse of `probe.python` — see the decision below),
+   survey.js:422 (probefacts gather), turnevents.js:178-230 (the probe actor
+   labeling), describe.js:31-71 (probe phrasing), ui/phrasing.js:62-83
+   (probe labels), ui/memoryview.js:52 (the `/note fact lain-probe takes
+   decimal PIDs` example string — the view is generic; only the example
+   string is stale), src/tests/helpers context. The `/mcp` command's probe
+   routing (commands.js:278, :298-303) dies with probecommand.
+
+4. **UI PHRASING LABELS — die with their facts.** describe.js:31-71 and
+   turnevents.js:178-240's probe rows describe states only the probe
+   integration produced; when the states can no longer exist, the rows go
+   with them.
+
+**Decisions recorded before Phase 2:**
+
+> **Update 2026-09-07 (Phase 2 COMPLETE — the Probe removal, verified):** the
+> bucket-3 files are deleted, every src seam is cut, and the **unit tier ran
+> green on the changed tree: 2,094 passed, 0 failed** — including the
+> architecture guard ("every source file is reachable from the entry point"),
+> which is the §19 closedown check and which **caught two real residues the
+> textual sweep had missed**: `numfmt.js` (the probe tool's dual-base number
+> rendering — its only consumer was the deleted tool; no live consumer means
+> it is Probe-payload presentation, not generic infrastructure, and it is
+> deleted) and `tools/browser.js` (a dead file whose registration had already
+> gone; pre-deleted by the browser phase that was to come, and counted here).
+> What survived per the rulings below: `computer` (bridge-gated now), the
+> keyboard family with its refusal, the events bus, `probe.python`,
+> `capability.js`'s dialect tables, and the caller-less-but-tested
+> keyboarddelivery/capability.preflight contracts. Test restructures:
+> inputdelivery.test.js reduced to its transport-agnostic vocabulary core;
+> onecomputer.test.js keeps the consolidation assertions and ADDS a negative
+> (`probe` is not a tool name, not dispatchable, not on disk) while the four
+> redirect/schema tests died with the tool they grepped; observe.test.js's
+> `_probe` doubles moved to bridge doubles (the regionOf/NO_TARGET matching
+> rules — LAIN-owned, transport-agnostic — are re-pinned; the `vision.ocr`
+> region-capture test died as probe-dialect-only, its intent already covered
+> by regionOf + the REGIONS-gate refusal test); uxphases PHASE M rewritten
+> onto the bridge; capability.test.js's retired-name assertions converted to
+> negatives (`describeTarget('probe', …) === ''` — retired names must not be
+> special-cased back into existence). Two live UI breakages found and fixed on
+> the way: status.js's VERB table and actor gate both tested the retired
+> `probe`/`desktop` names and missed `computer`, so every bridge action in
+> flight would have drawn as plain RUNNING/TOOL instead of RUNNING MCP/MCP.
+> Eleven present-tense Probe misstatements in src comments were reworded;
+> historical traces (lifecycle.js, markdown.js, events.js) were kept as
+> history. mcp-input.test.js is deleted (its cross-references in
+> keyboarddelivery.js/wininput/keyboarddelivery headers now record that the
+> transport-path live test died with the transport).
+
+- **`computer` survives** via the desktop bridge, not deleted. §0-B says
+  separate generic mechanisms from Probe-specific code; tools/index.js's own
+  comment documents that screen/input operations were consolidated across
+  three vocabularies (desktop/probe/computer) and that memory/breakpoints/
+  findings "genuinely are the Probe's domain". The consolidation survives;
+  only the probe transport dies.
+- **The keyboard FOCUS path keeps its existing refusal** — no capability is
+  invented to replace the Probe's verified-focus sequence. The refusal
+  text and the channels fallback ("ask the user to press it") are already
+  the correct post-removal behavior, written in the code today.
+- **The events bus survives.** companion.js is the only subscriber in src,
+  but the bus and every emitter (turnevents.js, tools/jobs.js, tools/visual.js,
+  ui/index.js:439) are the named-facts contract — exactly what the future
+  Harness (§2 of the brief) will subscribe to. app.js:117's comment already
+  names the dashboard as a second subscriber-to-be. Deleting the bus would
+  be deleting the mechanism the brief's target architecture needs.
+- **`probe.python` config key**: tools/exec.js reads `cfg.probe.python` as
+  one of three python-discovery sources. This is a REUSE of a Probe-era key
+  as generic python discovery, not Probe integration — the consumer is the
+  generic `python_run` tool, and the key keeps working for anyone who
+  configured a python for the old Probe. KEPT, with a comment noting the
+  history, in line with "do not delete reusable generic infrastructure
+  merely because Probe used it".
+- **`.lain-probe/` (`.gitignore:6`)**: probefacts.js is the only writer
+  (`.lain-probe/` holds the probe's local survey facts). It dies with
+  probefacts.js; the gitignore entry goes stale and is removed in Phase 2.
+- **Test files (Phase 2 restructure, not blind delete):**
+  tests/unit/probeskill.test.js, environment.test.js (the PROBE ROUTING
+  cases — note the file also pins envdetect via `require('../../src/
+  environment')`; the re-exports keep the file loadable, so the probe cases
+  must be cut while the machine-detection cases stay), inputdelivery.test.js,
+  keyboarddelivery.test.js (unit tier drives the sequence through a double —
+  the keyboard family survives, so the test survives, driving the desktop
+  refusal), onecomputer.test.js (half its cases are structural source-grep
+  tests of tools/probe.js:52-88 — those die with the probe tool), facts.test.js
+  (the `/mcp probe` / probe-live seam cases), companion.test.js (dies with
+  companion.js), desktop.test.js (desktop bridge — SURVIVES), tests/live/
+  mcp-input.test.js + wininput.test.js (live-tier probe-transport tests —
+  die; the live tier already skips when no probe is configured),
+  e2e-probe-environment.js (dies), tests/unit/architecture.test.js:343/385 —
+  companion.js entries removed from HELPERS/EXTRACTED lists when the file
+  goes (the :341 HELPERS list has NO existsSync guard and will throw on a
+  missing file, so the entry must be removed, not left).
+- **Docs:** README / STATUS.md / docs/ probe references are historical
+  records, annotated not rewritten. docs/ui-prototype/workspace.js's probe
+  mentions are UI prototype scenery, untouched.
+
+**What this map does NOT yet cover** (recorded as gaps, not silently
+skipped): the Rust supervisor's probe side (rust/lain-supervisor/src/remote.rs
+is the Telegram bot — separate mission; the supervisor's own liveness probe
+is bucket 1 and survives); the `.FIFTEEN` capability naming audit promised by
+§14's tool-surface classification; the exact import lines that die with each
+bucket-3 file (listed at file level here; Phase 2 lands them per §19's order:
+locate registrations → imports → tests → docs → architecture guards).
+
+## The cache forensics pass — the corpus contradicts the standing claim
+
+**Label: corpus-derived, NOT VERIFIED live.** Everything in this section was
+extracted from the recorded session JSON (`sessions/20260905-112051-o2pn.json`)
+— 765 requests, turn-level usage and per-request audits, every number read
+directly, and the seven turns that read cache summed to exactly the session's
+total cacheReadTokens (7,538,787). No live experiment has been run; the
+correction is to the *diagnosis*, not to any code. Full evidence in
+CONTROL-LOOP §2a; the one-line version:
+
+**"Every resumed turn reads cacheReadTokens = 0" is false.** Five of the
+seven caching turns WERE resumed turns (t3 78,912; t12 767,936 after a
+2h13m gap; t13 628,800; t14 733,184; t19 3,228,643). Dead cache is a
+late-session phase change (Sep 5 evening onward, turns 20+), not a resume
+property and not a TTL property. Two LAIN-side causes are confirmed from the
+corpus: (1) the stable head drifts across turn boundaries (the project
+brief's tree listing reacts to the target tree's own mutations, plus
+conditional tool availability changing the schemas block); (2) the fold
+regime — `_foldOldest` splices at messages[1], so at the message cap every
+append re-prices the conversation from index 1, bounding cache at the ~18k
+head (t25's only read is exactly head-sized). The fold mechanism is also
+**pinned as three WRITTEN unit cases** in `tests/unit/session.test.js` (a fold
+replaces the bytes at messages[1]; consecutive folds at the cap keep changing
+it; the snap-to-unit-boundary never leaves a dangling tool half — the pair
+planted exactly at the computed cut, with `KEEP_RECENT=10` giving
+floor=cut=14, the tool answer's index, so the backward snap is genuinely
+exercised). NOT RUN — written, not executed; the corpus-derived observation
+becomes UNIT-VERIFIED behavior only when the tier runs.
+The literal-0 on turns
+t23/t24/t26 — ideal stablePrefix shape, constant head, still zero — remains
+UNEXPLAINED by anything the session JSON records; per-request model/connection
+(reqtrace, sink was off in that run) is the instrument that would catch
+route failover, which t24's own transcript (mid-turn omniroute 401/429s)
+makes the leading suspect. Also measured: this gateway never reports
+cacheCreationTokens on ANY of the 765 requests, including turn 1 —
+creation-0 is evidence of nothing.
+
+No code was changed for this. The §5 experiment protocol (live run with
+`LAIN_REQTRACE` on + promptCache A/B) needs zero code changes; it is blocked
+on the provider bridge (429), reset ~2026-09-12.
+
+
 
 ## The truncation guard, and the model boundary
 
@@ -583,8 +1439,8 @@ those, `/help` described something that does not happen and there was no way to
 turn it off.
 
 It is a preference now. `/mouse off` restores native selection and copy exactly
-as they behave without LAIN; the clickable caret and tabs go with it, and the
-trade is stated on screen rather than hidden. `/mouse` toggles, `/mouse on`
+as they behave without LAIN; the clickable caret and the feed's click targets go
+with it, and the trade is stated on screen rather than hidden. `/mouse` toggles, `/mouse on`
 restores. `/copy` is unaffected and still copies what LAIN knows rather than
 what happens to be on screen.
 
@@ -600,6 +1456,19 @@ what happens to be on screen.
   real code path with a deterministic workload; none of it is a provider bill.
 
 ## Remote control — Telegram carries, a local model speaks, the runtime decides
+
+> **Update 2026-09-07 (Phase 2):** the CLI-side surface of this — the `/rc`
+> command (rccommand.js, the Telegram setup flow, the token/brain adapters) and
+> the 2-second watcher (remotewatch.js, which polled queued intents and applied
+> stops/model switches) — was **removed from LAIN CLI** per the stabilization
+> brief. What survived, unchanged: the supervisor binary and its capability
+> wire (remotecontrol.js), `/session` as the terminal window onto it, the held
+> queue + `inputgate.drainQueued` door (a queued continuation still runs through
+> the SAME recovery — the test that proves it now drives `drainQueued`
+> directly), and `guardian.stopClear` (the runtime-side API the Harness that
+> inherits remote control will call). The sections below describe the
+> architecture as built, which is the architecture the supervisor still
+> implements; only the CLI's own presentation/control surface is gone.
 
 The third boundary of the migration, and the first to put a surface OUTSIDE this
 machine in front of the runtime. It is deliberately not "LAIN on your phone":
@@ -653,7 +1522,9 @@ session.continue    session.stop        session.model_switch    job.stop
 The four controls **record an intention and act on nothing**. Running a model
 turn needs the transcript, the tools, the credentials and the abort controller,
 and all four live in the CLI — so the runtime writes down what was asked and
-`remotewatch.js` honours it when nothing is in flight. Reporting "stopped" for a
+the CLI-side door honours it when nothing is in flight (`inputgate.drainQueued`,
+since the /rc-era watcher was removed in 2026-09; see the note above).
+Reporting "stopped" for a
 turn this process cannot reach would be inventing a success.
 
 ### One continuation, two doors
@@ -722,7 +1593,10 @@ as the bot token.
   TLS client by hand would be the worst decision in the repository. `curl`
   missing is a reported `UNAVAILABLE` state, never a silent failure.
 * **The CLI polls for remote intentions** every 2s while a bot is configured, and
-  not at all otherwise. A push would need the runtime to hold a connection to
+  not at all otherwise — *(the /rc-era watcher that did this polling was removed
+  from LAIN CLI in 2026-09 along with /rc; the runtime side still records the
+  intentions and the drain door still honours them, so the limitation describes
+  the architecture as built.)* A push would need the runtime to hold a connection to
   every attached CLI and know when one died — the problem owner-pid exists to
   avoid.
 * **The remote voice must be local.** A hosted endpoint is refused, because a
@@ -2452,8 +3326,8 @@ liveness function was correct and none of it reached a terminal.
 | Output: command, stdout, exit code only when non-zero | LIVE-VERIFIED |
 | Completion palettes size to their contents, never take the screen | LIVE-VERIFIED |
 | Panel opens with the cursor on the first CHOOSABLE row | LIVE-VERIFIED |
-| Scroll indicator beside the tabs when content overflows | LIVE-VERIFIED |
-| Shift+Tab cycles views backwards | IMPLEMENTED (`[Z`); not isolated in a test |
+| Scroll indicator on the header's rule when content overflows | LIVE-VERIFIED (the tab strip it used to ride on is gone; see the one-surface rewrite) |
+| Shift+Tab cycles views backwards | REMOVED with the panes — Tab now only accepts a completion |
 | Exit prints a SHORT resume token that resolves to the real session | LIVE-VERIFIED |
 | `--resume <token>` restores the session in a fresh process | LIVE-VERIFIED |
 | Splash (wordmark, project, Ready) before the alternate screen opens | IMPLEMENTED (TTY-only path; not exercised over a pipe) |
@@ -2464,14 +3338,14 @@ liveness function was correct and none of it reached a terminal.
 | TTY stdout belongs to the Screen — nothing paints over the regions | LIVE-VERIFIED |
 | Command output is captured and rendered inside the workspace | LIVE-VERIFIED |
 | Tool results shown only when they are messages, not file contents | UNIT-VERIFIED (length rule) |
-| Diff lists changed files with real +N -M counts | LIVE-VERIFIED |
-| Enter opens a file picker; the diff is line-numbered; Esc returns | LIVE-VERIFIED |
-| Files shows a bounded project tree with changed files marked | LIVE-VERIFIED |
-| Output view carries real shell results and exit codes | LIVE-VERIFIED |
-| Tab cycles views; Alt+1..5 jump to one | LIVE-VERIFIED |
-| `Ctrl+1..5` view switching | WAS BROKEN — the reader could never emit those key names; replaced by Tab / Alt+N |
-| Plan view: progress bar, active step marked, expansion with note + timestamp | LIVE-VERIFIED |
-| Enter opens a plan step picker; expansion stays display-only | LIVE-VERIFIED |
+| `/changes` lists changed files with real +N -M counts | LIVE-VERIFIED (was the DIFF pane) |
+| `/changes` prints the diff itself, line-numbered, with no picker to go through | LIVE-VERIFIED |
+| `/changes files` shows a bounded project tree with changed files marked | LIVE-VERIFIED (was the FILES pane) |
+| The conversation carries real shell results and exit codes, in order | LIVE-VERIFIED (was the OUTPUT pane) |
+| Tab cycles views; Alt+1..5 jump to one | REMOVED — ONE surface, and every pane's content is a command. tests/unit/onesurface.test.js and tests/smoke/onesurface.test.js assert the machinery is gone and unreachable |
+| `Ctrl+1..5` view switching | REMOVED with Tab / Alt+N; there is nothing to switch to |
+| `/plan`: progress bar, active step marked, note and files shown where there are any | LIVE-VERIFIED (was the PLAN pane; `detail` replaced the expansion keystroke) |
+| Enter opens a plan step picker | REMOVED — `/plan` prints every step's detail, so nothing is asked which |
 | `/models` filters by name and opens on the current model | LIVE PROVIDER VERIFIED (2,760 ids → 1,151 models; `/models opus` → 120) |
 | `/config` Enter CHANGES a value and persists it | LIVE-VERIFIED |
 | A modal panel reports NEEDS USER, not WORKING | LIVE-VERIFIED |

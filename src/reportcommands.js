@@ -15,10 +15,15 @@
  * the work is in compare.js, audit.js, projecthealth.js, health.js and
  * diagnose.js, and these are the doors.
  *
- * `/troubleshoot` is NOT here, deliberately. It reads like a report command and
- * is not one: it starts a model turn of its own, so it is BLOCKED during a turn
- * and its output belongs to the task rather than to the machinery. It stays in
- * commands.js next to the other things that start work.
+ * `/audit` IS NO LONGER ONE OF THE DOORS — removed from the command surface in
+ * 2026-09 as part of the UX subtraction pass. Not because the reading is not
+ * worth having: because the AGENT should gather it when the work calls for it,
+ * and a user should not have to choose "audit mode" to get a project read. The
+ * engine (audit.js) is untouched and still reachable — by `/compare`'s comparison
+ * of two trees, by `/health` (whose graded findings ARE an audit reading), by
+ * `/copy audit`, and by the model itself, which reads the project with real
+ * tools whenever the task warrants it. `/compare` remains: "read this against
+ * that" is a named source argument, not a mode.
  */
 
 /**
@@ -53,25 +58,6 @@ function register({ define, C, config }) {
   });
 
   /**
-   * READ THIS PROJECT BEFORE CHANGING IT.
-   *
-   * A plain-language, evidence-based reading of the current project —
-   * structure, how it runs, what it can already do, what looks unfinished, and
-   * where the work stands. Read-only, which is what lets it be the safe first
-   * move on a codebase nobody in the room knows.
-   *
-   * With a source argument it IS `/compare` — "read this" and "read it against
-   * that" are one door, and the comparison lives in exactly one place.
-   */
-  define('/audit', {
-    surface: true,
-    flashMs: 0,
-    args: '[<folder|github-url>]',
-    desc: 'Read this project (or compare it to another) before changing anything',
-    run(app, ctx) { return require('./audit').runCommand(app, ctx, { C, config }); },
-  });
-
-  /**
    * TWO HEALTH QUESTIONS, TWO COMMANDS. They were one, and the one answered the
    * wrong question: running `/health` inside a project reported LAIN's provider,
    * context window and connections — true, and about the tool rather than the
@@ -81,13 +67,10 @@ function register({ define, C, config }) {
    *   /health  THE PROJECT — structure, code health, work state, graded findings
    *   /ready   LAIN ITSELF — RC readiness: stable, wired, missing, excluded
    *
-   * `/ready` WAS `/rc`, AND THE RENAME IS NOT COSMETIC. `/rc` now means REMOTE
-   * CONTROL — a Telegram bot answered by a local model over the runtime — which
-   * is what somebody typing those two letters is overwhelmingly looking for.
-   * The readiness report is unchanged: same engine, same output, new name. The
-   * invariant the old tests protected still holds and is still tested — remote
-   * control and readiness are two different commands with two different engines,
-   * and neither is an alias of the other.
+   * `/ready` WAS `/rc` BEFORE THAT NAME MEANT REMOTE CONTROL, and the remote-
+   * control command itself was removed from LAIN CLI in 2026-09 — the supervisor
+   * capability wire survived without it. The readiness report is unchanged:
+   * same engine, same output, the name it has now.
    */
   define('/health', {
     surface: true,
@@ -201,8 +184,9 @@ function register({ define, C, config }) {
     surface: true,
     flashMs: 0,
     desc: 'Check the environment LAIN is running in',
-    run(app) {
+    async run(app) {
       app.render.write('\n' + C.bold('Doctor') + '\n');
+      app.render.write(require('./bot/service').describe(await require('./bot/service').control()) + '\n');
       for (const c of require('./diagnose').checks(app)) {
         app.render.write((c.ok ? C.green('  ✓ ') : C.yellow('  ⚠ ')) + c.text + '\n');
       }

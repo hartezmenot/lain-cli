@@ -7,8 +7,8 @@
  * THE GAP THIS CLOSES, and it is the one the outstanding ledger was pointing
  * at even though it named it wrongly.
  *
- * The feed is full of rows that name things: `Read src/loader.js`,
- * `Patched src/parser.js`. Clicking one did NOTHING. `recallAt` in ui/mouse.js
+ * The feed is full of rows that name things: `read · src/loader.js`,
+ * `patched · src/parser.js`. Clicking one did NOTHING. `recallAt` in ui/mouse.js
  * resolved USER rows only, so the entire account of what LAIN had done was
  * inert — a list of filenames that looked like an index and behaved like a
  * paragraph.
@@ -55,21 +55,51 @@ function fixture() {
   return cwd;
 }
 
+// ---- IT EDITS THE FILE, IT DOES NOT MERELY READ IT -------------------
+//
+// A successful READ no longer leaves a row in the conversation: it is live
+// state, drawn in the one row above the caret while it happens and gone
+// afterwards (ui/durable.js). So there was nothing on screen naming a file to
+// click, and this test was looking for a row that is correctly absent.
+//
+// A CHANGE TO THE PROJECT IS EXACTLY THE ROW THIS FEATURE IS FOR. `Edited
+// src/loader.js  +1 -0` persists, because it is the account of the work - and
+// the file you most want to open from the conversation is the one LAIN just
+// changed, not one it glanced at.
 const SCRIPT = [
-  { text: 'Reading the loader.', tool_calls: [{ name: 'read_file', input: { path: 'src/loader.js' } }] },
+  {
+    text: 'Reading the loader.',
+    tool_calls: [{
+      name: 'edit_file',
+      input: {
+        path: 'src/loader.js',
+        old: 'const REGISTRY = new Map();',
+        new: 'const REGISTRY = new Map();  // touched',
+      },
+    }],
+  },
   { text: 'Issue' + NL + 'The registry is keyed by name.' + NL + NL + 'Verified' + NL + '- read the file' },
 ];
 
 /** Rows of the last drawn frame, blanks kept — a row number is the whole point. */
 function lastRows(out) {
   const f = String(out).split(ESC + '[?25l').pop() || '';
-  return f.split(new RegExp(ESC + '\\[\\d+;1H')).slice(1)
+  // ANY COLUMN: the content frame moved every region off column 1
+  // (ui/frame.js `contentBounds`).
+  return f.split(new RegExp(ESC + '\\[\\d+;\\d+H')).slice(1)
     .map(plain).map((r) => r.replace(/\s+$/, ''));
 }
 
 module.exports = async function () {
   await test('CLICK NAV: a row naming a file can be clicked, and the file opens', async () => {
-    const cwd = fixture();
+    // ---- A FIXTURE PER RUN, BECAUSE THE CALL NOW CHANGES THE FILE --------
+    //
+    // This used to share one directory between the probe and the click, which was
+    // safe while the script only READ the file. It edits now (see SCRIPT), and an
+    // edit is not idempotent: the probe's change made the second run's `find`
+    // string no longer match, so the edit failed and the click had nothing to
+    // open. Two fixtures, because the row number this is looking for is a
+    // function of the terminal geometry and not of the directory.
 
     // ---- FIND THE ROW FIRST, THEN CLICK IT -----------------------------
     //
@@ -77,18 +107,18 @@ module.exports = async function () {
     // line. This runs once to see where the row actually landed, then runs
     // again and clicks there — which is also what a person does.
     const probe = await runCli([], {
-      cwd, env: { LAIN_FORCE_TUI: '1', COLUMNS: '100', LINES: '30' },
+      cwd: fixture(), env: { LAIN_FORCE_TUI: '1', COLUMNS: '100', LINES: '30' },
       stdin: 'look at the loader' + NL + '/exit' + NL,
       script: SCRIPT, timeoutMs: 90000,
     });
     assert.strictEqual(probe.code, 0);
     const rows = lastRows(probe.out);
-    const idx = rows.findIndex((r) => /Read src[\\/]loader\.js/.test(r));
+    const idx = rows.findIndex((r) => /edited · src[\\/]loader\.js/.test(r));
     assert.ok(idx >= 0, `the action row must be drawn at all:${NL}${rows.join(NL)}`);
     const row = idx + 1;                       // terminal rows are 1-based
 
     const r = await runCli([], {
-      cwd, env: { LAIN_FORCE_TUI: '1', COLUMNS: '100', LINES: '30' },
+      cwd: fixture(), env: { LAIN_FORCE_TUI: '1', COLUMNS: '100', LINES: '30' },
       stdinSteps: [
         'look at the loader' + NL,
         PRESS(12, row) + RELEASE(12, row),
@@ -121,7 +151,7 @@ module.exports = async function () {
       stdin: 'run it' + NL + '/exit' + NL, script, timeoutMs: 90000,
     });
     const rows = lastRows(probe.out);
-    const idx = rows.findIndex((r) => /Ran node/.test(r));
+    const idx = rows.findIndex((r) => /node · /.test(r));
     assert.ok(idx >= 0, 'the command row must be drawn');
 
     const r = await runCli([], {

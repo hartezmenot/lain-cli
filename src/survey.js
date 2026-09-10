@@ -4,7 +4,7 @@
  * THE SURVEY — gather every evidence source into one coherent picture.
  *
  * LAIN already has the instruments: a parser, a symbol model, a typo checker, a
- * residue scanner, a diff sensor, an execution ledger, a browser. Each answers
+ * residue scanner, a diff sensor, an execution ledger. Each answers
  * its own question well and none of them knows about the others, so using them
  * means calling six tools, holding six results in your head, and doing the
  * correlation yourself. That correlation is the work this file does once,
@@ -15,13 +15,17 @@
  * BUILD SUCCESS IS NOT ENGINEERING SUCCESS, and this is the file where that
  * distinction is enforced rather than merely believed.
  *
- * Five axes, computed separately and never allowed to overwrite one another:
+ * Four axes, computed separately and never allowed to overwrite one another:
  *
  *   BUILD      does the source parse and type-check
  *   TEST       does the suite pass
  *   RUNTIME    did the last thing that ran actually work
- *   FRONTEND   does the page load without errors and lay out as intended
  *   ENGINEERING is the codebase in good order
+ *
+ * (A FRONTEND axis — the page's own console, read by the Chromium LAIN owned —
+ * was a fifth until the browser was removed in 2026-09 per the browser-ownership
+ * ruling. With no browser there was no way to observe a running front end, and
+ * an axis that can never be anything but UNVERIFIED is not an axis.)
  *
  * A project can be `BUILD: PASS · TESTS: PASS · ENGINEERING: DEGRADED`, and
  * that combination is not a contradiction — it is the ordinary state of most
@@ -198,53 +202,13 @@ function executionFindings(session) {
 
 // ---------------------------------------------------------------- frontend ----
 
-/**
- * THE PAGE'S OWN REPORT, when a real browser is running.
- *
- * With no browser this returns UNVERIFIED and says why. It never converts
- * "the tooling exists" into "the front end was checked": unit-reachable browser
- * code is not a browser, and a briefing that blurred those would be asserting
- * something nobody measured.
- */
-function frontendFindings(app) {
-  const b = app && app._browser;
-  if (!b || !b.running) {
-    return {
-      state: HEALTH.UNVERIFIED,
-      why: 'No browser session is running, so nothing about the front end has been observed. '
-        + 'The user starts one with /external browser.',
-      findings: [],
-    };
-  }
-  const log = b.consoleLog({ limit: 40 });
-  if (!log.ok) return { state: HEALTH.UNVERIFIED, why: log.error, findings: [] };
-  const out = [];
-  for (const m of log.messages) {
-    if (m.level !== 'error' && m.level !== 'exception') continue;
-    out.push(F.make({
-      category: F.CATEGORY.FRONTEND_CONSOLE,
-      severity: m.level === 'exception' ? F.SEVERITY.ERROR : F.SEVERITY.WARNING,
-      // The browser SAW this. What it means for the feature is not established.
-      confidence: F.CONFIDENCE.OBSERVED,
-      source: F.SOURCE.BROWSER_CONSOLE,
-      file: m.url || null,
-      line: m.line,
-      column: m.column,
-      message: m.text,
-      explanation: m.level === 'exception'
-        ? 'An uncaught exception stops the handler it was thrown from. Everything after it in that handler did '
-          + 'not run, which is usually why a control "does nothing".'
-        : 'The page reported this itself while running. It is evidence of what happened, not yet of the cause.',
-      evidence: `Browser console, ${log.total} message(s) captured since the page opened.`,
-    }));
-  }
-  return {
-    state: out.length ? HEALTH.DEGRADED : HEALTH.PASS,
-    why: out.length ? null : `The page has produced ${log.total} console message(s) and no errors.`,
-    findings: out,
-    total: log.total,
-  };
-}
+// (A frontendFindings function lived here — the front-end health axis, read
+// off the console of the Chromium LAIN owned. It was removed with the browser
+// in 2026-09 per the browser-ownership ruling, together with the axis it fed:
+// with no browser there is no way to observe a running front end, and an axis
+// that can never be anything but UNVERIFIED is not an axis. The static
+// front-end boundary detection in audit.js and projecthealth.js survives — it
+// never needed the browser, only the filenames.)
 
 // -------------------------------------------------------------- dead code ----
 
@@ -286,7 +250,7 @@ function deadCodeFindings(root) {
  * The order of the checks matters: UNVERIFIED is tested FIRST everywhere, so
  * that an axis nobody measured can never fall through into PASS.
  */
-function grade({ findings, ran, testRun, frontend, lastCommand }) {
+function grade({ findings, ran, testRun, lastCommand }) {
   const has = (pred) => findings.some(pred);
   const buildBlocking = (f) => (f.category === F.CATEGORY.SYNTAX || f.category === F.CATEGORY.TYPE)
     && (f.severity === F.SEVERITY.CRITICAL || f.severity === F.SEVERITY.ERROR);
@@ -312,7 +276,9 @@ function grade({ findings, ran, testRun, frontend, lastCommand }) {
       ? HEALTH.DEGRADED
       : HEALTH.CLEAN;
 
-  return { build, test, runtime, frontend: frontend.state, engineering };
+  // (The FRONTEND axis was removed with the browser in 2026-09. The axes are
+  // build, tests, runtime and engineering.)
+  return { build, test, runtime, engineering };
 }
 
 /**
@@ -320,7 +286,7 @@ function grade({ findings, ran, testRun, frontend, lastCommand }) {
  *
  * @param {object} o
  * @param {string} o.root
- * @param {object} [o.app]      supplies the browser and this session's ledgers
+ * @param {object} [o.app]      supplies this session's ledgers
  * @param {object} [o.session]
  * @param {object} [o.testRun]  `{ ok, command, exitCode, output }` if a suite was run
  * @param {object} [o.residue]  `{ gone, removed, present }` to check a migration
@@ -366,21 +332,9 @@ async function run({ root, app = null, session = null, testRun = null, residue: 
   if (session && session.attempts) ran.add(F.SOURCE.EXECUTION_ENGINE);
 
   // ---- front end ---------------------------------------------------------
-  const frontend = frontendFindings(app);
-  findings.push(...frontend.findings);
-  if (frontend.state !== HEALTH.UNVERIFIED) ran.add(F.SOURCE.BROWSER_CONSOLE);
-  if (frontend.state === HEALTH.UNVERIFIED) {
-    findings.push(F.make({
-      category: F.CATEGORY.UNVERIFIED,
-      severity: F.SEVERITY.UNVERIFIED,
-      confidence: F.CONFIDENCE.PROVEN,
-      source: F.SOURCE.FILESYSTEM,
-      message: 'Front-end runtime was not observed.',
-      explanation: frontend.why,
-      risk: 'Console errors, layout offsets and network failures are absent from this briefing because nothing '
-        + 'looked, not because there are none.',
-    }));
-  }
+  // (This used to read the browser console of a running front end — see the
+  // frontend note above the dead-code section. The browser it read is gone,
+  // and with it the only way this survey had of observing a page at runtime.)
 
   // ---- migration residue, when a migration was named ---------------------
   let residueResult = null;
@@ -419,9 +373,6 @@ async function run({ root, app = null, session = null, testRun = null, residue: 
   const cli = gather('CLI and configuration contract', () => require('./clifacts').discover(root));
   if (cli) { facts.push(...cli.facts); findings.push(...cli.contradictions); }
 
-  const probeFacts = gather('Probe contract', () => require('./probefacts').discover(root));
-  if (probeFacts) facts.push(...probeFacts);
-
   const data = gather('data contract', () => require('./datafacts').discover(root));
   if (data) { facts.push(...data.facts); findings.push(...data.findings); }
 
@@ -456,7 +407,7 @@ async function run({ root, app = null, session = null, testRun = null, residue: 
   }
 
   const lastCommand = life ? life.lastCommand : null;
-  const health = grade({ findings, ran, testRun, frontend, lastCommand });
+  const health = grade({ findings, ran, testRun, lastCommand });
 
   return {
     root,
@@ -471,7 +422,6 @@ async function run({ root, app = null, session = null, testRun = null, residue: 
     environment: safeEnvironment(root),
     git: git.review,
     loops: exec.loops,
-    frontend,
     residue: residueResult,
     lastCommand,
     testRun,
@@ -547,4 +497,4 @@ function residueToFindings(r) {
   return out;
 }
 
-module.exports = { run, HEALTH, grade, residueToFindings, executionFindings, frontendFindings, pythonFiles };
+module.exports = { run, HEALTH, grade, residueToFindings, executionFindings, pythonFiles };

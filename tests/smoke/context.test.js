@@ -70,8 +70,17 @@ module.exports = async function () {
       script: readingScript(6), timeoutMs: 45000,
     });
     const out = r.out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
-    assertIncludes(out, 'elided', 'silently shrinking the conversation would be indistinguishable from forgetting');
+    // ---- SAID, BUT IN ONE LINE -----------------------------------------
+    //
+    // The notice used to run to three lines — what it elided, and a `kept:` list
+    // naming the objective, the corrections and the plan — printed over the work
+    // it was making room for. It is one line now, and the accounting moved to
+    // `/token`. What must not change is THAT IT IS SAID AT ALL: silently shrinking
+    // somebody's conversation is indistinguishable from forgetting it.
+    assertIncludes(out, 'Context compacted',
+      'silently shrinking the conversation would be indistinguishable from forgetting');
     assertIncludes(out, 'nothing was deleted', 'and the user must know it is recoverable');
+    assertIncludes(out, '/token', 'and where the detail is');
   });
 
   await test('CTX SMOKE: what is PERSISTED is under the budget and still a valid conversation', async () => {
@@ -114,7 +123,10 @@ module.exports = async function () {
       env: { LAIN_PROVIDER: 'mock' }, timeoutMs: 30000,
     });
     const out = r.out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
-    assertIncludes(out, 'Nothing to elide', 'a short conversation must not be pruned, and must say so');
+    // `Nothing to compact` now, with the size beside it — the same honest answer
+    // in fewer words. What matters is that a short conversation is NOT pruned and
+    // that `/compact` says so rather than claiming to have done something.
+    assertIncludes(out, 'Nothing to compact', 'a short conversation must not be pruned, and must say so');
   });
 
   await test('CLAIM SMOKE: a false "all tests pass" is contradicted on screen', async () => {

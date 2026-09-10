@@ -14,36 +14,18 @@
  * shows up as "clicking is slightly off" and is very hard to trace. The map is
  * a record of what was actually drawn.
  *
- * WHAT A CLICK MAY DO. Move the caret, change tab, scroll, or choose the row it
+ * WHAT A CLICK MAY DO. Move the caret, scroll, or choose the row it
  * landed on in an open panel. It may not submit, run, confirm or destroy
  * anything: a mis-click must never cost the user work. That is also why a click
  * outside an open modal does nothing at all rather than dismissing it.
  */
 
-/**
- * The order comes from ui/tabs.js, so a click and a Tab can never land on
- * different panes — which is exactly what a second copy of this list allowed.
- */
-const { VIEWS } = require('./tabs');
-
-/**
- * Where in the tab strip each label sits, derived from the SAME list and the
- * same spacing the strip uses (`[1 context]` for the active one, ` 2 plan ` for
- * the rest). Returns the view under column `x`, or null.
- *
- * Column arithmetic rather than a stored table: the strip is drawn from this
- * list too, so there is one source for both.
- */
-function tabAt(view, x) {
-  // The strip opens with `┌─`, so labels start at column 3 (1-based).
-  let col = 3;
-  for (const name of VIEWS) {
-    const label = name === view ? `[${VIEWS.indexOf(name) + 1} ${name}]` : ` ${VIEWS.indexOf(name) + 1} ${name} `;
-    if (x >= col && x < col + label.length) return name;
-    col += label.length;
-  }
-  return null;
-}
+// ------------------------------------------------------------------------
+// `tabAt` STOOD HERE — column arithmetic that inverted the tab strip's labels
+// back into a pane name, so a click on `3 diff` landed on the same pane Alt+3
+// did. Both are gone with the strip. A click on the header row is now what a
+// click on the header always should have been: nothing.
+// ------------------------------------------------------------------------
 
 /**
  * A click on the INPUT row becomes a caret position.
@@ -264,9 +246,21 @@ function handleMouse(ui, ev) {
         let ok = false;
         try { ok = require('../copy').toClipboard(text); } catch { ok = false; }
         const lines = text.split('\n').length;
-        ui.app.render.notice(ok ? 'info' : 'warn', ok
-          ? `Copied ${lines} line(s) — ${text.length} characters.`
-          : 'Could not reach the clipboard on this system; the text is still selected.');
+        // ---- AN OPERATION, NOT A MESSAGE ---------------------------------
+        //
+        // `Copied 3 line(s) — 184 characters.` was a `notice`, so it landed in
+        // the conversation and stayed there: a permanent record that somebody
+        // had once pressed the mouse. The acknowledgement is worth one transient
+        // row — you need it for a second, to know the copy happened — and it is
+        // worth nothing tomorrow. See ui/operation.js.
+        //
+        // A FAILED COPY IS ALSO AN OPERATION, at warn level. It is about the
+        // terminal rather than about the user's work, and the text is still
+        // selected so the next attempt costs nothing.
+        require('./operation').note(ui, ok
+          ? `Copied ${lines} line(s) · ${text.length} characters`
+          : 'Could not reach the clipboard — the text is still selected',
+        { level: ok ? 'info' : 'warn' });
       }
       ui.refresh();
       return true;
@@ -293,6 +287,20 @@ function handleMouse(ui, ev) {
 
   if (kind !== 'press') return false;
 
+  // ---- THE SCROLL ANCHOR ON THE HEADER'S RULE ---------------------------
+  //
+  // One row, one target, one action: go back to the message that started the
+  // turn in hand. It is only drawn when that message has scrolled out of view
+  // (ui/anchors.js `scrollAnchor`), so a click here can only ever mean the one
+  // thing — and `jumpToRow` reports whether the view actually moved, so a click
+  // that cannot move anything falls through rather than claiming to have acted.
+  //
+  // BEFORE THE PANEL CHECK, because the rule is above the panel's rows and
+  // nothing else is ever drawn on it.
+  if (m.anchorRow && y === m.anchorRow && m.anchorTarget >= 0) {
+    if (screen.jumpToRow(m.anchorTarget)) return true;
+  }
+
   // ---- AN OPEN PANEL OWNS ITS OWN ROWS ----------------------------------
   //
   // Clicking a row MOVES THE CURSOR to it; it does not choose it. A modal is
@@ -312,15 +320,6 @@ function handleMouse(ui, ev) {
   // A click OUTSIDE an open modal does nothing at all. Dismissing on an
   // outside click would cancel a question the user may simply have clicked past.
   if (ui.panel.visible && !ui.panel.isCompletion) return true;
-
-  // ---- THE TAB STRIP -----------------------------------------------------
-  if (y === m.tabs) {
-    const name = tabAt(screen.view, x);
-    if (!name) return true;
-    screen.setView(name);
-    ui.ensureReport(name);
-    return true;
-  }
 
   // ---- THE INPUT ROWS ----------------------------------------------------
   //
@@ -384,4 +383,4 @@ function handleMouse(ui, ev) {
   return true;
 }
 
-module.exports = { handleMouse, tabAt, caretAt, VIEWS };
+module.exports = { handleMouse, caretAt };

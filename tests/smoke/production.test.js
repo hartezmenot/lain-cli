@@ -362,7 +362,9 @@ module.exports = async function () {
       ],
     });
     assert.strictEqual(r.code, 0);
-    assertIncludes(r.stdout, 'modified');
+    // `/changes` prints the diff and its grouping — see src/workcommands.js
+    // on where the DIFF and FILES panes went.
+    assertIncludes(r.stdout, 'MODIFIED');
     assert.strictEqual(fs.readFileSync(path.join(cwd, 'f.txt'), 'utf8'), 'BEFORE\n');
   });
 

@@ -31,8 +31,12 @@ module.exports = async function () {
     const p = views.progressOf(mkPlan(['done', 'done', 'done']));
     assert.strictEqual(p.percent, 100);
     assert.strictEqual(p.completed, p.total);
-    const h = views.header({ plan: mkPlan(['done', 'done', 'done']), status: views.STATE.COMPLETE, width: 80 });
-    assert.ok(h.join('\n').includes('COMPLETE'));
+    // THE HEADER NO LONGER CARRIES A STATUS WORD OR A PROGRESS BAR. What LAIN
+    // is doing is the live row above the caret — one owner, one sentence — and
+    // the plan's progress is `/plan`. The MEASUREMENT above is the property
+    // this test was ever about, and it is untouched.
+    assert.ok(views.progressCompact(p, 40).includes('100%'),
+      'and it is still rendered where progress belongs');
   });
 
   await test('UI: an unknown total yields NO invented percentage', () => {
@@ -48,15 +52,35 @@ module.exports = async function () {
   });
 
   // ---- header -------------------------------------------------------------
-  await test('UI: header shows model, connection and effort as SEPARATE fields', () => {
+  await test('UI: the header is LAIN, the project, the model and the live output count', () => {
+    // ------------------------------------------------------------------
+    // FOUR FIELDS, AND THIS TEST USED TO ASSERT SEVEN.
+    //
+    // It held that model, CONNECTION and EFFORT were separate fields — which
+    // was right while they were on the header, because collapsing them into
+    // one string is what makes "is it down or am I logged out?" unanswerable.
+    // They are not on the header any more:
+    //
+    //   the route    routing is LAIN choosing correctly, not LAIN announcing
+    //                its classifier. `/status` and `/harness` still say it.
+    //   the effort   a setting, not a state. `/effort` says it and sets it.
+    //   the status   what LAIN is doing is the live row above the caret, which
+    //                says it in more detail and one row from the input. Two
+    //                owners for one fact is how they come to disagree.
+    //
+    // What a permanent row must answer is where am I, which model, and is
+    // anything still coming.
+    // ------------------------------------------------------------------
     const h = views.header({
       cwd: 'C:\\Projects\\TradingBot', model: 'Claude Opus 5', connection: 'OmniRoute',
-      effort: 'high', status: views.STATE.WORKING, width: 80,
+      output: { tokens: 624, measured: false }, width: 80,
     }).join('\n');
     assert.ok(h.includes('LAIN'));
     assert.ok(h.includes('TradingBot'), 'project folder');
-    assert.ok(h.includes('Claude Opus 5') && h.includes('OmniRoute') && h.includes('high'));
-    assert.ok(h.includes('WORKING'));
+    assert.ok(h.includes('Claude Opus 5'), 'the model a person checks before sending anything');
+    assert.ok(h.includes('~624'), 'the live output count, marked as the estimate it is');
+    assert.ok(!h.includes('high') && !h.includes('WORKING'),
+      'and nothing that belongs to a command or to the live row');
   });
 
   await test('UI: header never exceeds the terminal width', () => {
@@ -237,7 +261,11 @@ module.exports = async function () {
     // See ui/answer.js. The guarantee is unchanged: the same question and
     // options render the same rows every time, and every option is present.
     const body = p.render(60, 12).join('\n');
-    assert.ok(body.includes('LAIN NEEDS YOUR INPUT'), body);
+    // THE TITLE IS SENTENCE CASE NOW, and it is a row rather than a boxed banner —
+    // the panel lost its frame, its rules and its shouting header (ui/panel.js
+    // `render`). Matched case-insensitively, because what this test is about is
+    // that the question identifies itself, not how loudly.
+    assert.match(body, /Lain needs your input/i, body);
     assert.ok(body.includes('Which frontend?'));
     assert.ok(body.includes('A.  React + Vite'), body);
     assert.ok(body.includes('C.  Svelte'), body);
@@ -252,7 +280,14 @@ module.exports = async function () {
   await test('LAYOUT: header and input are fixed; workspace absorbs the rest', () => {
     const s = new Screen({ out: fakeOut(80, 30) });
     const g = s.geometry();
-    assert.strictEqual(g.inputRows, 3, 'input never shrinks');
+    // THREE ROWS FOR THE COMPOSER. It was three — a top border carrying a label,
+    // the text, and a bottom border — and the border is gone. What replaced it is
+    // not one row but a three-row FLOOR, with the text centred in it: with no
+    // outline to give the region a shape, that shape comes from the grey ground and
+    // the air above and below the caret. See ui/geometry.js MIN_TEXT_ROWS, which
+    // still yields rows back on a terminal short enough that seeing the
+    // conversation matters more.
+    assert.strictEqual(g.inputRows, 3, 'an empty prompt is three rows, and never fewer');
     assert.strictEqual(g.panelRows, 0, 'panel hidden by default');
     // FIVE regions now, not four: the LLM status strip sits between the
     // workspace and the input. Every row of the terminal is still accounted for
@@ -279,7 +314,7 @@ module.exports = async function () {
       panel.open(panelMod.effortAdapter({ available: ['low', 'high'], current: null }));
       const g = s.geometry();
       assert.ok(g.workspace >= 1, `workspace kept at ${rows} rows`);
-      assert.ok(g.inputRows === 3, 'input preserved');
+      assert.ok(g.inputRows >= 1, 'input preserved');
       assert.ok(g.headerRows + g.workspace + g.statusRows + g.inputRows + g.panelRows <= rows);
     }
   });
@@ -289,10 +324,18 @@ module.exports = async function () {
     assert.strictEqual(new Screen({ out: fakeOut(80, 12) }).geometry().compactHeader, true);
   });
 
-  await test('LAYOUT: workspace windows huge content to the visible rows', () => {
+  await test('LAYOUT: the conversation windows huge content to the visible rows', () => {
+    // BOUNDED BY CONSTRUCTION: long content may never push the terminal
+    // endlessly downward. The content used to be a 9,000-line command result on
+    // the OUTPUT pane; with one surface it is a conversation with a huge
+    // message in it, which is the same property against the same guarantee.
     const s = new Screen({ out: fakeOut(80, 30) });
-    s.state = { outputs: [{ command: 'npm test', output: Array.from({ length: 9000 }, (_, i) => `line ${i}`).join('\n'), exitCode: 0 }] };
-    s.view = 'output';
+    const wall = Array.from({ length: 9000 }, (_, i) => `line ${i}`).join('\n');
+    s.state = {
+      cwd: process.cwd(),
+      session: { cwd: process.cwd(), task: null, turns: [{ userInput: wall, text: 'read', actions: [], errors: [] }] },
+      transcript: [], liveActions: [], liveNarration: [], extras: [],
+    };
     const total = s.workspaceLines(80, 28).length;
     assert.ok(total > 200, `content really is huge, got ${total}`);
     const g = s.geometry();

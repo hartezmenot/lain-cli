@@ -55,7 +55,7 @@ const providerMod = require('./provider');
  *   `live` rides at the tail of the wire, after the conversation, where a
  *   change costs only itself.
  */
-function of(app, from = null) {
+function of(app) {
   const pc = providerMod.resolve({ ...app.cfg, _evidence: app.connectionEvidence });
   const built = prompt.build({
     cwd: app.session.cwd,
@@ -86,13 +86,24 @@ function of(app, from = null) {
 
   // ---- THE CHANGING HALF -------------------------------------------------
   let live = built.live;
+  // WHAT GIT SAYS ABOUT THE TREE, per turn. The gap this closes: gitsense
+  // existed but nothing fed it to the model, so working-tree state was a
+  // run_bash the model had to spend. It is measured in the background at
+  // submit time (gitsnapshot.js prefetch — which is where the ledger's
+  // expected-paths list goes, because gitsense owns the one normalization
+  // rule that compares it to git names) and rendered here, in the volatile
+  // half — NEVER the stable prefix, because tree state is the definition of
+  // volatile. Silent for a clean tree, a tree with no .git, or a turn that
+  // started before the measurement landed.
+  const git = require('./gitsnapshot').say(app._gitSnapshot);
+  if (git) live += `${live ? '\n\n' : ''}# Working tree (git)\n${git}`;
   // ONLY THIS SESSION'S PLAN can ever reach the prompt: it is a field on this
   // session object, so there is no other plan it could pick up. It advances as
   // steps complete, which is precisely why it is here and not above.
   if (app.session.plan) live += `\n\n# Plan (this session)\n${app.session.plan.digest()}`;
-  // The probe decoration depends on `from` and on the live environment, so it
-  // is volatile by construction.
-  live = require('./probeskill').decorate(app, live, from);
+  // (The probe decoration that rode here — volatile by construction, since it
+  // depended on `from` and the live environment — was removed with the Probe
+  // integration in 2026-09. The tail above is the whole volatile half.)
 
   return { stable, live: live.trim() };
 }

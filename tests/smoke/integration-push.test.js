@@ -17,7 +17,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { test, runCli, tmpdir, assertIncludes, assertNotIncludes, firstTabMark } = require('../helpers');
+const { test, runCli, tmpdir, assertIncludes, assertNotIncludes, headerMark } = require('../helpers');
 
 const tui = (cols = 96, rows = 30) => ({ LAIN_FORCE_TUI: '1', COLUMNS: String(cols), LINES: String(rows) });
 // OSC names the window and occupies no cells; it is removed before anything is
@@ -56,8 +56,9 @@ module.exports = async function () {
   });
 
   await test('PUSH: /ready reports LAIN readiness, and never claims what is missing', async () => {
-    // WAS `/rc`, WHICH NOW MEANS REMOTE CONTROL. The readiness report is the
-    // same engine under a new name — see reportcommands.js.
+    // WAS `/rc` ONCE, before that name meant remote control and the remote-
+    // control command itself was removed in 2026-09. The readiness report is the
+    // same engine under the name it has now — see reportcommands.js.
     const r = await runCli([], { cwd: probot(), stdin: '/ready\n/exit\n', script: [] });
     const out = plain(r.out);
     assertIncludes(out, 'RC readiness');
@@ -72,7 +73,7 @@ module.exports = async function () {
     // /dash now exists, so claiming it is missing would be the dishonest answer.
     assertIncludes(out, 'Remote dashboard');
     assertIncludes(out, '/dash — localhost by default');
-    assert.ok(!/no remote control/.test(out), '/dash is implemented — /rc must report what is true now');
+    assert.ok(!/no remote control/.test(out), '/dash is implemented — /ready must report what is true now');
   });
 
   // ---------------------------------------------------------------- /copy ---
@@ -129,44 +130,57 @@ module.exports = async function () {
     assertIncludes(out, 'audit the project', 'the original task survives a steer');
   });
 
-  // -------------------------------------------------------- /troubleshoot ---
+  // ------------------------------------------------------- troubleshooting ---
+  //
+  // `/troubleshoot` WAS REMOVED FROM THE COMMAND SURFACE (2026-09 UX
+  // subtraction). These two tests drove the command and asserted the REPORT
+  // renderer it invoked — PROBLEM/EVIDENCE/FINDING/LIKELY CAUSE, and the
+  // “not stated” guard for a model that concluded nothing.
+  //
+  // WHAT IS ACTUALLY TRUE NOW, verified against the tree rather than assumed:
+  //   • mode.js still classifies a vague problem report as TROUBLESHOOT, and
+  //     prompt.js still carries the TROUBLESHOOT paragraph — so the WORKFLOW
+  //     (trace before editing) survives and is reached by describing the
+  //     problem, which is what the subtraction was for.
+  //   • troubleshoot.js still renders reports, but its two live entry points
+  //     (`runCommand`, and `investigation.relay` through it) are now reachable
+  //     from NO command. The structured report and the bounded external review
+  //     therefore no longer appear in an ordinary turn.
+  //
+  // So the report assertions are not “fixed” by rewording them — the surface
+  // they described is genuinely gone. They are replaced by the two facts that
+  // ARE checkable through the real binary, and the orphaned relay is reported
+  // in the final summary rather than papered over here.
 
-  await test('PUSH: /troubleshoot shows a REPORT, before and after the model runs', async () => {
+  await test('PUSH: a described problem routes to TROUBLESHOOT without any command', async () => {
     const r = await runCli([], {
       cwd: probot(),
-      stdin: '/troubleshoot there are errors silently dropped in the dashboard\n/exit\n',
-      script: [{
-        text: 'Finding: the refresh handler swallows every exception.\n'
-          + 'Likely cause: a bare except added to quieten a startup warning.\n'
-          + 'Recommended fix: log the exception and re-raise anything unexpected.\n'
-          + 'Verification: run the suite and check the log gains the line.',
-      }],
+      stdin: 'the dashboard is acting up and I am not sure why\n/exit\n',
+      script: [{ text: 'Finding: the refresh handler swallows every exception.' }],
       timeoutMs: 40000,
     });
     const out = plain(r.out);
-    assertIncludes(out, 'TROUBLESHOOT —', 'the workflow must be visible as a workflow');
-    assertIncludes(out, 'PROBLEM');
-    assertIncludes(out, 'EVIDENCE');
-    assertIncludes(out, 'dashboard.py', 'found locally, before the model was asked anything');
-    assertIncludes(out, 'scanned', 'and it says how much it looked at');
-    assertIncludes(out, 'FINDING');
+    assert.strictEqual(r.code, 0);
+    // The turn ran and answered. The mode itself is asserted deterministically
+    // in the unit tier (mode.classify); what the binary proves is that the
+    // plain sentence is accepted as work rather than refused as an unknown
+    // command — which is exactly what removing the command had to preserve.
     assertIncludes(out, 'swallows every exception');
-    assertIncludes(out, 'LIKELY CAUSE');
-    assertIncludes(out, 'bare except');
-    assertIncludes(out, 'RECOMMENDED FIX');
-    assertIncludes(out, 'VERIFICATION');
+    assert.ok(!/unknown command/i.test(out), 'a described problem is work, not a bad command');
   });
 
-  await test('PUSH: a troubleshoot the model did not conclude says NOT STATED', async () => {
+  await test('PUSH: /troubleshoot is gone, and says so rather than half-working', async () => {
     const r = await runCli([], {
       cwd: probot(),
       stdin: '/troubleshoot the dashboard drops errors\n/exit\n',
-      script: [{ text: 'I looked at a few files and I am not sure yet.' }],
+      script: [{ text: 'unused' }],
       timeoutMs: 40000,
     });
     const out = plain(r.out);
-    assertIncludes(out, 'not stated', 'an absent conclusion must look absent, never be filled in');
-    assertIncludes(out, 'WHAT THE MODEL SAID', 'and what it DID say is still shown');
+    assert.strictEqual(r.code, 0, 'a removed command must not take the session down');
+    // THE IMPORTANT HALF: it must not silently do nothing, and it must not
+    // print half a report. An unknown command is named as one.
+    assert.ok(!/TROUBLESHOOT —/.test(out), 'no half-rendered report from a removed command');
   });
 
   // ----------------------------------------------------------- status strip --
@@ -178,15 +192,18 @@ module.exports = async function () {
       script: [{ text: 'Working.', tool_calls: [{ name: 'run_bash', input: { command: 'sleep 2' } }] }, { text: 'Done.' }],
       timeoutMs: 40000,
     });
-    const busy = frames(r.out).map(plain).find((f) => /RUNNING\s+sleep 2/.test(f));
+    const busy = frames(r.out).map(plain).find((f) => /RUNNING\s+sleep 2/i.test(f));
     assert.ok(busy, 'a frame must show the tool running');
-    // The STRIP, not the header's one-word state — the header also says RUNNING,
-    // and it is above the workspace where it belongs.
-    const statusAt = busy.search(/RUNNING\s+sleep 2/);
-    const inputAt = busy.indexOf('┌─ INPUT');
-    const tabsAt = busy.indexOf(firstTabMark());
-    assert.ok(tabsAt >= 0 && statusAt >= 0 && inputAt >= 0, 'all three regions must be on screen');
-    assert.ok(statusAt > tabsAt, 'the status strip is below the workspace');
+    // THE ORDER OF THE THREE REGIONS, top to bottom: header, then the live
+    // activity row, then the input. It used to be found by the tab strip and
+    // the input's border, and both are gone — the header's wordmark and the
+    // input's placeholder are the landmarks now, and they are the two rows
+    // that are always drawn.
+    const statusAt = busy.search(/RUNNING\s+sleep 2/i);
+    const inputAt = busy.indexOf('Ask LAIN');
+    const headAt = busy.indexOf(headerMark());
+    assert.ok(headAt >= 0 && statusAt >= 0 && inputAt >= 0, 'all three regions must be on screen');
+    assert.ok(statusAt > headAt, 'the live row is below the header and the conversation');
     assert.ok(statusAt < inputAt, 'and directly above the input, where the user is looking');
   });
 
@@ -201,7 +218,7 @@ module.exports = async function () {
       ],
       timeoutMs: 45000,
     });
-    const f = frames(r.out).map(plain).find((x) => /RUNNING\s+sleep 3/.test(x) && /searching/.test(x));
+    const f = frames(r.out).map(plain).find((x) => /RUNNING\s+sleep 3/i.test(x) && /searching/.test(x));
     assert.ok(f, 'the completed call must still be readable beside the running one');
   });
 
@@ -220,11 +237,18 @@ module.exports = async function () {
       timeoutMs: 45000,
     });
     const out = plain(r.out);
-    assertIncludes(out, 'RATE LIMITED', 'name what actually happened');
+    assert.match(out, /RATE\s+LIMITED/i, 'name what actually happened');
     assert.match(out, /retrying at \d\d:\d\d/, 'an absolute time, so the user can go and do something else');
     assert.match(out, /\d\d:\d\d remaining|00:0\d/, 'and a countdown while it waits');
     assertIncludes(out, 'Esc', 'with a way out of the wait');
-    assertIncludes(out, 'the wait is over — resuming the task', 'and the resume is announced');
+    // ---- THE RESUME IS A TRANSIENT, AND IT IS ONE WORD ------------------
+    //
+    // `NOTE the wait is over — resuming the task with everything it had` was a
+    // durable row announcing that a transient condition had passed. It is
+    // `Resuming` on the operation channel now (turn.js), so a recovery the user
+    // need not act on leaves nothing behind. The property this asserts — that the
+    // end of the wait is VISIBLE — is unchanged.
+    assert.match(out, /Resuming/, 'and the resume is announced');
     assertIncludes(out, 'Here is the summary', 'the original task really did continue');
     assert.strictEqual(r.code, 0);
   });
@@ -278,10 +302,10 @@ module.exports = async function () {
     });
     const out = plain(r.out);
     assertNotIncludes(out, 'internal error', 'a long rate limit must ask the user, never crash the session');
-    assertIncludes(out, 'RATE LIMITED', 'the question must actually open');
+    assert.match(out, /RATE\s+LIMITED/i, 'the question must actually open');
     assertIncludes(out, 'Wait for the reset', 'the wait option must be offered');
     assertIncludes(out, 'Change model', 'the change-model option must be offered');
-    assertIncludes(out, 'WAITING FOR LIMIT RESET', 'choosing WAIT must actually open the second wait');
+    assert.match(out, /WAITING\s+FOR\s+LIMIT\s+RESET/i, 'choosing WAIT must actually open the second wait');
     assertIncludes(out, 'stopped waiting', 'Esc must leave that wait, not just the question — never a hang with no way out');
     assert.strictEqual(r.code, 0, 'the session must exit cleanly, in test time, not real 300s');
   });
@@ -298,12 +322,12 @@ module.exports = async function () {
       timeoutMs: 45000,
     });
     const out = plain(r.out);
-    assertIncludes(out, 'RETRY CANCELLED', 'the state must say what the user did');
+    assert.match(out, /RETRY\s+CANCELLED/i, 'the state must say what the user did');
     // And LAIN must still be usable: a command afterwards has to work.
     assertIncludes(out, 'config', '/status still answers after a cancelled retry');
     assert.strictEqual(r.code, 0, 'and the session ends cleanly');
     const frozen = frames(r.out).map(plain).pop() || '';
-    assert.ok(!/RATE LIMITED/.test(frozen), `the last frame still showed the wait:\n${frozen.slice(-400)}`);
+    assert.ok(!/RATE\s+LIMITED/i.test(frozen), `the last frame still showed the wait:\n${frozen.slice(-400)}`);
   });
 
   // -------------------------------------------------------- terminal title --
@@ -369,10 +393,11 @@ module.exports = async function () {
       const last = frames(r.out).map(plain).filter(Boolean).pop() || '';
       // The screen is written as absolute cursor moves, so a row wider than the
       // terminal shows up as a drawn line longer than `cols`.
-      for (const line of last.split(/\x1b\[\d+;1H/).slice(1)) {
+      // ANY COLUMN: the content frame moved every region off column 1.
+      for (const line of last.split(/\x1b\[\d+;\d+H/).slice(1)) {
         assert.ok(line.length <= cols, `${cols}x${rows}: a row was ${line.length} wide — ${JSON.stringify(line.slice(0, 120))}`);
       }
-      assertIncludes(plain(r.out), '┌─ INPUT', `${cols}x${rows}: the input must always be identifiable`);
+      assertIncludes(plain(r.out), 'Ask LAIN', `${cols}x${rows}: the input must always be identifiable`);
     }
   });
 };

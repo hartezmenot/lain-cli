@@ -46,7 +46,7 @@ const DEFAULT_MAX_STEPS = 0;
  * outside this file; what stays here is the decision to USE it, which is the
  * loop's business. See that file for why the retry is not an LLM retry loop.
  */
-const { MAX_RETRIES, backoffFor } = require('./backoff');
+const { MAX_RETRIES, backoffFor, sleep } = require('./backoff');
 /** How far to fold when a provider refuses on message COUNT. See msgfold.js. */
 const msgfold = require('./msgfold');
 /** The ONE place that knows what a provider will accept. */
@@ -111,24 +111,12 @@ function status(opts, phase, detail = {}) {
   if (opts && opts.onStatus) opts.onStatus({ phase, ...detail });
 }
 
-function sleep(ms, signal) {
-  return new Promise((resolve) => {
-    if (signal && signal.aborted) return resolve();
-    const t = setTimeout(done, ms);
-    function done() {
-      clearTimeout(t);
-      if (signal) signal.removeEventListener('abort', done);
-      resolve();
-    }
-    if (signal) signal.addEventListener('abort', done, { once: true });
-  });
-}
-
 /**
  * @param {Session} session   MUTATED — the tool protocol is appended to it
  * @param {string}  userInput
  * @param {object}  opts  cfg, systemPrompt, signal, maxSteps, onStatus
  */
+
 async function* runTurn(session, userInput, opts = {}) {
   const cfg = opts.cfg || {};
   const pc = provider.resolve(cfg);
@@ -165,7 +153,8 @@ async function* runTurn(session, userInput, opts = {}) {
     return;
   }
 
-  // Probe tools ride the session's environment; the App is forwarded for it.
+  // The vocabulary follows the App: `computer` appears only while a transport
+  // is connected, so the reader must forward the App it is working for.
   const schemas = opts.tools === false ? [] : toolRegistry.schemas(opts.app);
   // `ask` lets ask_user reach the interaction panel. Absent on non-interactive
   // runs, where the tool says so rather than hanging.
@@ -488,18 +477,31 @@ async function* runTurn(session, userInput, opts = {}) {
           status: failure.status || null,
           reason: failure.message,
         });
+        // ---- TRANSIENT, AND COMPACT ---------------------------------------
+        //
+        // It was DURABLE and carried the provider's whole body — `WARN omniroute:
+        // 503 … {"error":{…}} retry 4/5 at 16:17:24 (6s)` — every field of which the
+        // live row already draws, and replaces when the wait ends. `transient` sends
+        // it to the operation row on a TUI and to one dim line on a pipe, which has
+        // no such row and must not fall silent for sixty seconds. The raw payload
+        // stays on `record.errors` for /status. See turnevents.js.
         yield {
-          type: 'notice', level: 'warn',
-          message: `${pc.provider}: ${failure.message} — retry ${retries}/${maxRetries} at `
-            + new Date(resumeAt).toTimeString().slice(0, 8)
-            + ` (${Math.round(waitMs / 1000)}s) · Esc cancels the wait`,
+          type: 'notice',
+          level: 'warn',
+          transient: true,
+          message: `${errors.retryWord(failure)} · ${errors.shortReason(failure)} · retry in `
+            + `${Math.round(waitMs / 1000)}s · ${retries}/${maxRetries}`,
         };
         await sleep(waitMs, signal);
         // Escape (or Ctrl+C) during the wait aborts the signal. Say that the
         // wait ended because it was cancelled, not because the provider came
         // back — the two look identical from here otherwise.
         if (signal && signal.aborted) { record.stopReason = 'aborted'; break; }
-        yield { type: 'notice', level: 'info', message: 'the wait is over — resuming the task with everything it had' };
+        // AND THE END OF THE WAIT IS A TRANSIENT TOO: on a TUI `Ⅱ Rate limited`
+        // simply becomes `◐ Receiving` and this row is superseded; on a pipe it is
+        // the one line that says the gap is over. Either way a recovery the user
+        // need not act on leaves no trace in the conversation.
+        yield { type: 'notice', level: 'info', transient: true, message: 'Resuming' };
         step -= 1;
         continue;
       }

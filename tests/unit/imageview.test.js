@@ -43,11 +43,14 @@ module.exports = async function () {
     assert.ok(fs.existsSync(r.page), 'and a page was written to look at it in');
   });
 
-  await test('IMAGE: it says WHICH window — LAIN\'s own or the user\'s', async () => {
-    // The distinction matters: one of them is the browser LAIN is allowed to
-    // drive, and one of them is the user's session.
+  await test('IMAGE: it says WHICH window — the machine\'s own viewer', async () => {
+    // (This used to name two windows — LAIN's own Chromium, the browser LAIN
+    // was allowed to drive, kept out of the user's session, and the machine's
+    // default viewer as the fallback. The browser was removed in 2026-09, so
+    // the default viewer is the only window there is, which is the same one a
+    // person would have opened by hand.)
     const r = await view.open({}, withImage());
-    assert.ok(['lain-chromium', 'default-viewer'].includes(r.how),
+    assert.strictEqual(r.how, 'default-viewer',
       `"${r.how}" is not a window anyone can identify`);
   });
 

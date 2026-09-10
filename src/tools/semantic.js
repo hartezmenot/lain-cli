@@ -628,7 +628,7 @@ tools.engineering_brief = {
     let out;
     try {
       out = await briefcommand.build(
-        { _browser: ctx.app && ctx.app._browser },
+        ctx.app,
         { argv: flags.join(' '), session: ctx.session, root: ctx.cwd },
       );
     } catch (e) {
