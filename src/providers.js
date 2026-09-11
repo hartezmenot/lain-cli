@@ -91,6 +91,19 @@ const KNOWN = Object.freeze([
     baseUrl: 'https://ollama.com/v1',
     envKey: 'OLLAMA_API_KEY',
   }),
+  // ---- SUPPLIED BY THE OPERATOR ------------------------------------------
+  //
+  // Not guessed and not recalled: api.b.ai/v1 is the endpoint this build is
+  // actually served through, given to /api's table the way the V1 rows below
+  // were earned — by being a route this machine really uses. The `/v1` root
+  // means the OpenAI chat shape, which is what the sender already speaks.
+  Object.freeze({
+    id: 'bai',
+    label: 'b.ai',
+    protocol: 'chat',
+    baseUrl: 'https://api.b.ai/v1',
+    envKey: 'BAI_API_KEY',
+  }),
   // ---- CORROBORATED FROM THE USER'S OWN WORKING V1 CONFIGURATION ---------
   //
   // `~/.lain/config.json` carries these providers with these base URLs. They

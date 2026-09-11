@@ -350,4 +350,132 @@ module.exports = async function () {
     const home = process.env.LAIN_CONFIG_DIR;
     assert.ok(home && path.resolve(home) !== path.resolve(path.join(os.homedir(), '.lain-v2')));
   });
+
+  // ---- RE-KEY: THE REPAIR FOR A CREDENTIAL THAT STOPPED WORKING -------------
+  //
+  // The 401 that motivated this: `lain:custom: could not read a model list —
+  // 401 Authorization Required — Invalid TokenFaucet API key.` The endpoint and
+  // the model list were fine; only the stored credential went bad. Until now
+  // the only repair was editing config.json by hand — the CLI had no way to
+  // replace a key under the connection that already owned it, and the
+  // alternative (`/api <new-key>` from scratch) would have added a SECOND
+  // route for the same endpoint, leaving the broken one in the picker beside
+  // it.
+
+  const customConn = () => ({
+    id: 'lain:custom', provider: 'freetokenfaucet.com', via: 'native', auth: 'api_key',
+    protocol: 'chat', baseUrl: 'https://freetokenfaucet.com/v1',
+    apiKey: 'old-refused-key', models: [],
+  });
+
+  const customCfg = () => ({
+    connections: {
+      'lain:custom': {
+        provider: 'freetokenfaucet.com', via: 'native', auth: 'api_key',
+        protocol: 'chat', baseUrl: 'https://freetokenfaucet.com/v1', apiKey: 'old-refused-key',
+      },
+    },
+  });
+
+  await test('API: /api custom replaces the key under the SAME connection id', async () => {
+    const refreshed = [];
+    const r = rig({ answers: ['sk-fresh-rotation-9f2a'], connections: [customConn()], cfg: customCfg() });
+    try {
+      await apiMod.rekeyFlow(r.app, 'custom', { C, config: r.config, refreshCatalog: (a, o) => refreshed.push(o) });
+      assert.strictEqual(r.saved.length, 1, 'exactly one save');
+      const saved = r.saved[0].connections['lain:custom'];
+      assert.strictEqual(saved.apiKey, 'sk-fresh-rotation-9f2a', 'the replacement key is stored');
+      assert.strictEqual(saved.baseUrl, 'https://freetokenfaucet.com/v1', 'the endpoint is not re-asked');
+      assert.strictEqual(saved.provider, 'freetokenfaucet.com', 'nor is the provider');
+      assert.strictEqual(Object.keys(r.saved[0].connections).length, 1, 'no second route for the same endpoint');
+      assert.ok(r.out().includes('Re-keying lain:custom'), 'says which route it is re-keying');
+      assert.deepStrictEqual(refreshed, [{ only: 'lain:custom', quiet: true }], 'and re-reads that one route\'s catalog');
+    } finally { r.restore(); }
+  });
+
+  await test('API: Esc at the replacement prompt leaves the old key untouched', async () => {
+    const r = rig({ answers: [], connections: [customConn()], cfg: customCfg() });
+    try {
+      await apiMod.rekeyFlow(r.app, 'lain:custom', {
+        C, config: r.config,
+        refreshCatalog: () => { throw new Error('must not be reached'); },
+      });
+      assert.strictEqual(r.saved.length, 0, 'nothing was stored');
+      assert.ok(r.out().includes('Cancelled. Nothing was stored.'), 'and says so');
+    } finally { r.restore(); }
+  });
+
+  await test('API: a refused discovery keeps the NEW key — a bad moment must not undo the repair', async () => {
+    const refreshed = [];
+    const r = rig({
+      answers: ['sk-fresh-rotation-9f2a'], connections: [customConn()], cfg: customCfg(),
+      discover: async () => ({
+        ok: false,
+        error: '401 Authorization Required — {"error":"UNAUTHORIZED","message":"Invalid TokenFaucet API key."}',
+      }),
+    });
+    try {
+      await apiMod.rekeyFlow(r.app, 'lain:custom', { C, config: r.config, refreshCatalog: (a, o) => refreshed.push(o) });
+      assert.strictEqual(r.saved[0].connections['lain:custom'].apiKey, 'sk-fresh-rotation-9f2a', 'the key is stored anyway');
+      assert.ok(/discovery failed/i.test(r.out()), 'the refusal is reported in the provider\'s own words');
+      assert.ok(r.out().includes('/api refresh lain:custom'), 'with the way to re-read once the cause is fixed');
+      assert.strictEqual(refreshed.length, 0, 'the catalog is not re-read from a dead route');
+    } finally { r.restore(); }
+  });
+
+  await test('API: a route answers to its id, its bare name, and its provider — a bridge is refused, not re-keyed', async () => {
+    const conns = [customConn(), {
+      id: 'omniroute', provider: 'omniroute', via: 'bridge', auth: 'none',
+      protocol: 'chat', baseUrl: 'http://127.0.0.1:20128/v1', apiKey: '', models: [],
+    }];
+    const r = rig({ connections: conns, cfg: customCfg() });
+    try {
+      const find = (n) => apiMod.connectionByName(r.app, n);
+      assert.strictEqual(find('lain:custom'), conns[0], 'the full id');
+      assert.strictEqual(find('custom'), conns[0], 'the bare spelling');
+      assert.strictEqual(find('LAIN:CUSTOM'), conns[0], 'either case');
+      assert.strictEqual(find('freetokenfaucet.com'), conns[0], 'the provider name');
+      assert.strictEqual(find(''), null, 'nothing named');
+      assert.strictEqual(find('no-such-route'), null, 'an unknown name names nothing');
+      // A bridge authenticates upstream itself; LAIN holds no credential for
+      // it, so naming it is answered with the reason, not a prompt.
+      assert.strictEqual(find('omniroute'), conns[1], 'the bridge is found — it IS the route named');
+      await apiMod.rekeyFlow(r.app, 'omniroute', {
+        C, config: r.config,
+        refreshCatalog: () => { throw new Error('must not be reached'); },
+      });
+      assert.strictEqual(r.saved.length, 0, 'nothing is stored for a bridge');
+      assert.ok(/is a bridge/.test(r.out()), 'and the reason is on screen');
+    } finally { r.restore(); }
+  });
+
+  await test('API: the /api command sends a route NAME to the re-key flow, never stores it as a credential', async () => {
+    // `lain:custom` is eleven characters with no spaces, so the credential
+    // rule alone says it IS one. The dispatch checks the routes first; this
+    // pins that ORDER through the real command, because the order is the whole
+    // difference between repairing a route and storing its own name as its
+    // API key.
+    const { REGISTRY } = require('../../src/commands');
+    const r = rig({
+      answers: ['sk-fresh-rotation-9f2a'], connections: [customConn()], cfg: customCfg(),
+      discover: async () => ({ ok: false, error: '401 Authorization Required' }),
+    });
+    // The command closure holds the REAL config module — the rig's stubbed
+    // `config` never reaches it. Stub the module's own save in place so the
+    // round trip writes nothing anywhere, which is the invariant the temp-home
+    // test above pins for every other test in this file.
+    const configMod = require('../../src/config');
+    const realSave = configMod.save;
+    configMod.save = () => {};
+    try {
+      await REGISTRY.get('/api').run(r.app, { args: ['lain:custom'] });
+      assert.ok(r.out().includes('Re-keying lain:custom'), 'the route is recognised and announced');
+      assert.ok(!/which provider/i.test(r.out()), 'the provider question is never asked — the route already answered it');
+      assert.strictEqual(
+        r.app.cfg.connections['lain:custom'].apiKey, 'sk-fresh-rotation-9f2a',
+        'the new key is stored under the named route',
+      );
+      assert.ok(/discovery failed/i.test(r.out()), 'and the dead old key\'s refusal is still reported honestly');
+    } finally { configMod.save = realSave; r.restore(); }
+  });
 };

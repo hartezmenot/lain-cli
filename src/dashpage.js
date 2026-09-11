@@ -344,7 +344,7 @@ function draw(s){
     +(s.lifecycle?row('lifecycle',esc(s.lifecycle.state)):'')
     +(s.verification?row('last check',esc(s.verification.command),s.verification.ok?'ok':'bad'):'')
     +row('changed',s.changed.length?s.changed.map(f=>esc(f.path)).join('<br>'):'nothing','dim')
-    +row('external',s.external.configured?esc(s.external.model||'configured'):'not configured','dim')
+    +row('chat source',esc(s.chatSource.label)+(s.chatSource.model?' · '+esc(s.chatSource.model):(s.chatSource.web?' · no model chosen':'')),'dim')
     +row('mcp',d.state==='CONNECTED'?'<span class="ok">✓ CONNECTED</span>':'<span class="dim">'+esc(d.state)+'</span>')
     +(s.control.actions?'':row('control','read-only — /dash actions on','dim'));
   const on=s.control.actions;

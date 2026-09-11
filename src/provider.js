@@ -115,10 +115,10 @@ function credentialHint(pc, cfg = null) {
   if (!pc.protocol) {
     const hasConnections = cfg && cfg.connections && Object.keys(cfg.connections).length > 0;
     if (hasConnections && !cfg.model) {
-      return 'No model selected. /models to browse what your connections serve, or /model <name>.';
+      return 'No model selected. /model to browse what your connections serve, or /model <name>.';
     }
     if (hasConnections && cfg.model) {
-      return `Model "${cfg.model}" is not served by any configured connection. /models to pick one, or /provider refresh to re-read a route's catalog.`;
+      return `Model "${cfg.model}" is not served by any configured connection. /model to pick one, or /provider refresh to re-read a route's catalog.`;
     }
     return 'No provider configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, or declare a connection in ~/.lain-v2/config.json.';
   }

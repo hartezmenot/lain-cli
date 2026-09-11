@@ -175,6 +175,20 @@ async function runCli(args = [], o = {}) {
     ...(process.env.LAIN_SUPERVISOR_LEASE_PORT ? { LAIN_SUPERVISOR_LEASE_PORT: process.env.LAIN_SUPERVISOR_LEASE_PORT } : {}),
     LAIN_NO_COLOR: '1',
     NO_COLOR: '1',
+    // ---- THE RETRY SCHEDULE, WITHOUT WAITING FOR IT ---------------------
+    //
+    // backoff.js is ten attempts totalling about nineteen minutes, which is
+    // right for a real provider and impossible for a smoke: the outage test
+    // has a 45s deadline and the first three waits alone are 55s, so it was
+    // killed by its own timeout and reported `code null`.
+    //
+    // An in-process test injects `opts.timers` (see turn.js); a smoke drives
+    // the real binary in another process and cannot. This is the same kind of
+    // seam as LAIN_MOCK_SCRIPT and LAIN_FORCE_TUI, and it changes only the
+    // WAITING — every attempt still happens, in order, under the real policy.
+    //
+    // A test that wants the real schedule can override it through `o.env`.
+    LAIN_BACKOFF_MS: '1,1,1,1,1,1,1,1,1,1',
     ...(o.env || {}),
   };
   if (o.script !== undefined && o.script !== null) {

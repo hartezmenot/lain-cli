@@ -193,6 +193,14 @@ const PLACEHOLDER = 'Ask LAIN…';
  * something, what you have typed is the more useful thing to show.
  */
 function promptFor(screen) {
+  // ---- A COMPOSER SAYS WHAT IT IS CAPTURING ---------------------------
+  //
+  // While `/goal` or `/plan` has the line, Enter does NOT send a prompt — it
+  // commits a goal or a plan. That is the single most important thing on the
+  // screen at that moment and there is nowhere else to put it: the composer is
+  // the region you are typing into. Checked before the answer label because a
+  // composer and an open question cannot both own the line.
+  if (screen && screen.compose) return `${screen.compose} ›`;
   const p = screen && screen.panel;
   if (p && p.visible && p.acceptsTyped && !p.isCompletion) {
     try { return require('./answer').inputLabel(p.options, p.takes); } catch { /* fall through */ }
@@ -219,14 +227,29 @@ function draw(screen, { row: startRow, cols, textRows: totalRows, col: startCol 
   const at = (r, c) => ESC + '[' + r + ';' + c + 'H';
   const EOL = ESC + '[K';
   /**
-   * One row of the region: the whole terminal width on the grey ground.
+   * One row of the region: the FRAME's width, on the grey ground.
    *
    * THE GROUND COVERS THE PADDING AND THE EMPTY REMAINDER, not just the text.
    * A fill that stopped at the last character would be a ragged right edge
    * that moves as you type, which is the opposite of an anchor.
+   *
+   * ------------------------------------------------------------------------
+   * IT WAS ONE COLUMN SHORT, AND THE PAD IS WHY. Measured, not guessed: at a
+   * 224-column frame this painted 223.
+   *
+   *     ground = PAD + body + fill        so  fill = width - PAD - bodyWidth
+   *     visible = PAD + bodyWidth         so  bodyWidth = visible - PAD
+   *     therefore                             fill = width - visible
+   *
+   * The old expression was `width - PAD - visible`, which subtracts the pad a
+   * SECOND time — once as the literal prefix and again inside `visible`. So the
+   * composer's grey ground stopped one column before the frame's right edge
+   * while the header, the rule and the live row all reached it, and the bottom
+   * of the screen read as very slightly narrower than the top. One column is
+   * not much to look at and it is exactly enough to make a screen look crooked.
    */
   const ground = (body, visible) => P.surface(
-    ' '.repeat(PAD) + body + ' '.repeat(Math.max(0, width - PAD - visible)),
+    ' '.repeat(PAD) + body + ' '.repeat(Math.max(0, width - visible)),
   );
 
   const view = shown(screen);
@@ -335,6 +358,20 @@ function draw(screen, { row: startRow, cols, textRows: totalRows, col: startCol 
     // MEASURED ON THE PLAIN WIDTH. Reverse-video and colour codes carry no
     // columns, and measuring them would tear the right-hand edge off the fill.
     const visible = PAD + (empty && vi === 0 ? placeholder.length : text.length + tag.length);
+    // ---- THE ERASE STAYS, AND IT IS NOT AN OUTER-BOUND DECISION -------
+    //
+    // This pass removed the trailing erase-to-end-of-line, reasoning that it
+    // reached past the frame's right gutter and so was a renderer deciding its
+    // own outer geometry. That reasoning was wrong and twelve smoke tests said
+    // so: the erase PAINTS NOTHING. It CLEARS. Without it, a frame drawn after
+    // wider one leaves the earlier row's glyphs stranded to the right of the
+    // composer — a command palette's remnants sitting beside the prompt, which
+    // is what those tests were reading.
+    //
+    // It runs AFTER the grey ground has already reset the colour, so it erases with
+    // the default background and cannot bleed the grey ground into the gutter.
+    // The painted extent — which is what the eye measures and what
+    // tests/unit/geometry-rails.test.js asserts — is exactly the frame width.
     out.push(at(row++, startCol) + ground(body, visible) + EOL);
   }
   return out;

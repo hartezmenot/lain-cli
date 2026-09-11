@@ -139,9 +139,25 @@ function dashState(app) {
   let desktop = { state: 'NOT CONFIGURED', configured: false, permissions: { capabilities: {}, active: false }, activity: [] };
   try { desktop = app.desktop().bridge.status(); } catch { /* keep the honest default */ }
 
-  const ext = require('./external').settings(app.cfg);
-  let extRoute = { ok: false, why: ext.why };
-  try { extRoute = require('./external').route(app); } catch (e) { extRoute = { ok: false, why: e.message }; }
+  // WHICH MODEL ANSWERS A CHAT TURN — LAIN's own runtime, ChatGPT.com or
+  // Gemini.google.com. Read from the registry, which is per SESSION; the
+  // external-reviewer setting this replaced was per config and belonged to a
+  // command that no longer exists.
+  //
+  // CHEAP BY CONSTRUCTION: `selectedId` and `usingWeb` read session fields and
+  // launch nothing. A dashboard poll that opened a browser to draw a row would
+  // be a status view with a side effect.
+  let chat = { source: 'lain', label: 'LAIN', model: null, web: false };
+  try {
+    const reg = require('./modelsource/registry');
+    const src = reg.selectedId(app);
+    chat = {
+      source: src,
+      label: reg.LABEL[src] || src,
+      model: ((s.sourceSelections || {})[src]) || null,
+      web: reg.usingWeb(app),
+    };
+  } catch { /* keep the honest default */ }
 
   const recent = [];
   for (const a of (ui.liveActions && ui.liveActions.length ? ui.liveActions : (last && last.actions) || []).slice(-RECENT)) {
@@ -162,7 +178,11 @@ function dashState(app) {
       steps: s.plan.steps.slice(0, 20).map((x) => ({ text: String(x.text).slice(0, 120), status: x.status })),
     } : null,
     model: { id: pc.canonicalModel || pc.model || app.cfg.model || null, provider: pc.provider || null, connection: pc.connectionId || null, effort: app.cfg.effort || 'auto' },
-    external: { configured: Boolean(ext.ok), reachable: Boolean(extRoute.ok), model: ext.model || null, why: extRoute.ok ? null : (extRoute.why || ext.why), rounds: ext.maxRounds },
+    // WHO ANSWERS A CHAT TURN. `coding` is stated rather than implied because
+    // it is the question a reader of this payload is most likely to get wrong:
+    // selecting a website source changes who answers a QUESTION and never who
+    // writes a file. See src/modelsource/lane.js.
+    chatSource: { ...chat, coding: 'LAIN' },
     phase: phase ? { phase: phase.phase, actor: phase.actor || 'LAIN', tool: phase.tool || null, target: phase.target || null } : null,
     busy: Boolean(ui.busy || phase),
     interrupted: Boolean(ui.interrupted),

@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * ADAPTERS FOR THE ACTOR AND SESSION PICKERS.
+ * ADAPTERS FOR THE SESSION PICKERS.
  *
  * Split from ui/panel.js, which owns the panel STATE MACHINE and was already
  * close to the god-object guard. The seam is the one that file already draws:
  * an adapter is DATA — it reads state that already exists and never draws — and
- * the panel renders whatever it is handed. These are three more of them.
+ * the panel renders whatever it is handed. These are two more of them.
  *
  * Neither picker knows anything about the catalog or the session store. WHAT to
  * offer is decided by the caller; this arranges it.
@@ -15,87 +15,15 @@
 const { KIND, MODE, pad, clip } = require('./panel');
 
 /**
- * `/external` — WHO reviews, not WHICH MODEL.
- *
- * The command used to answer "which model from the catalog", so the top-level
- * question was a 900-row list and every non-model reviewer had to be spelled as
- * a model or not exist. Three actors, one row each, and the row says what each
- * one COSTS you: automated, or a packet you hand over yourself. (A fourth row —
- * LAIN's own Chromium driving a chat page — was removed with the browser in
- * 2026-09.)
- *
- * Choosing the API actor drills into the ordinary model picker. That is a
- * SECOND question, asked only once the first is answered, and it is the same
- * picker `/models` opens — because there is only one.
+ * (An EXTERNAL ACTOR picker lived here — three rows saying who gives LAIN a
+ * second opinion on an investigation, and what each one costs you. It went with
+ * the `/external` command in this pass: WHO answers a chat turn is now a SOURCE
+ * selection on the session rather than a reviewer configured for one command,
+ * and the picker for it belongs to the Harness application. See
+ * src/modelsource/registry.js `overview`, which exposes the three facts a picker
+ * needs — source, state, selected model — and nothing about browsers, cookies or
+ * site structure.)
  */
-function externalActorAdapter({ status, onPick, onPickApi = null }) {
-  // "Currently" MUST NOT NAME AN ACTOR THAT IS NOT SET UP. The chosen kind
-  // defaults to API so an existing model-only config keeps working — but with
-  // nothing configured at all that made the panel announce "Currently: API
-  // model" over a reviewer that does not exist. What is currently true is that
-  // there is none.
-  const live = status.off ? null : status.actors.find((a) => a.chosen && a.ok);
-  const items = [
-    { label: 'Who gives LAIN a second opinion on an investigation.', selectable: false },
-    {
-      label: `Currently: ${status.off
-        ? 'OFF — /troubleshoot stays local'
-        : (live ? live.label : 'NOT CONFIGURED — /troubleshoot stays local')}`,
-      selectable: false,
-    },
-    { label: '', selectable: false },
-  ];
-
-  for (const a of status.actors) {
-    // WHAT IT COSTS YOU, in the row. "automated" versus "you paste the reply
-    // back" is the whole difference between these, and burying it one screen
-    // deeper is how a browser page comes to be mistaken for an API.
-    //
-    // SHORT ENOUGH TO SURVIVE THE COLUMN. The first version of these ran past
-    // the field and was clipped to "paste the reply b…" — the row explaining
-    // what you were about to choose was cut off exactly where the meaning was.
-    const note = a.kind === 'API'
-      ? (a.ok ? `automated · ${a.model}` : (a.model ? `automated · ${a.why}` : 'automated · no model chosen'))
-      : a.kind === 'HUMAN' ? 'packet to clipboard; paste the reply back'
-        : a.why;
-    items.push({
-      label: `${a.chosen ? '● ' : '  '}${pad(clip(a.label, 28), 30)}${clip(note, 46)}`,
-      value: a.kind,
-      actor: a,
-    });
-  }
-
-  items.push({ label: '', selectable: false });
-  items.push({ label: '  off — no external reviewer at all', value: 'OFF', off: true });
-
-  return {
-    title: 'EXTERNAL ACTOR',
-    kind: KIND.PROVIDER_SELECTION,
-    mode: MODE.EXPANDED,
-    items,
-    footer: '↑↓ select · Enter choose · Esc cancel',
-    onSelect(item) {
-      if (item.off) { onPick({ kind: 'OFF' }); return { close: { kind: 'OFF' } }; }
-      const a = item.actor;
-      if (!a) return undefined;
-      // NOT CONFIGURED IS NOT A DEAD ROW. Choosing the reverse adapter says what
-      // it would be and that it is not built, which is the honest answer;
-      // silently doing nothing would read as a broken menu.
-      if (a.kind === 'REVERSE') {
-        onPick({ kind: a.kind, unavailable: a.why });
-        return { close: { kind: a.kind } };
-      }
-      // The API actor still needs a MODEL. That is the second question, and it
-      // is asked by pushing the one model picker rather than by a copy of it.
-      if (a.kind === 'API' && onPickApi) {
-        const next = onPickApi();
-        if (next) return { push: next };
-      }
-      onPick({ kind: a.kind });
-      return { close: { kind: a.kind } };
-    },
-  };
-}
 
 /**
  * `/resume` — SESSIONS DESCRIBED BY WHAT THEY WERE.
@@ -202,4 +130,4 @@ function sessionDetailsAdapter({ session: s }) {
   };
 }
 
-module.exports = { externalActorAdapter, sessionListAdapter, sessionDetailsAdapter };
+module.exports = { sessionListAdapter, sessionDetailsAdapter };

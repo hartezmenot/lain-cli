@@ -29,26 +29,44 @@ const sample = (attempt, n = 400) => Array.from({ length: n }, () => backoffFor(
 
 module.exports = async function () {
   await test('BACKOFF: the waits escalate — a reset and a restart want different patience', () => {
-    // Checked on the TABLE, not on samples: jitter must not be large enough to
-    // reorder the steps, and comparing sampled values would let it.
+    // NON-DECREASING rather than strictly increasing: the schedule deliberately
+    // FLATTENS at five minutes (300, 300) rather than growing without limit,
+    // because past that a longer wait is not more patience, it is a hang.
     for (let i = 1; i < BACKOFF_MS.length; i++) {
-      assert.ok(BACKOFF_MS[i] > BACKOFF_MS[i - 1],
-        `attempt ${i + 1} must wait longer than attempt ${i}`);
+      assert.ok(BACKOFF_MS[i] >= BACKOFF_MS[i - 1],
+        `attempt ${i + 1} must not wait less than attempt ${i}`);
     }
+    assert.ok(BACKOFF_MS[BACKOFF_MS.length - 1] > BACKOFF_MS[0], 'and it must escalate overall');
   });
 
-  await test('BACKOFF: the total across all five attempts stays short enough to watch', () => {
+  await test('BACKOFF: the total is bounded and it always ends', () => {
+    // THIS USED TO ASSERT `total <= 25_000`, and that ceiling was the defect.
+    // Twenty-five seconds across five attempts means answering a 429 half a
+    // second after it arrives and four more times inside half a minute — which
+    // is asking too often at the one moment a provider has said so. The
+    // schedule is now ~19 minutes across ten attempts.
+    //
+    // WHAT STILL MATTERS IS THAT IT IS FINITE. A retry loop with no end is
+    // indistinguishable from a hang and can keep an outage alive by feeding it.
     const total = BACKOFF_MS.reduce((a, b) => a + b, 0);
-    assert.ok(total <= 25_000,
-      `${total}ms of waiting reads as a hang, not as a retry`);
+    assert.ok(Number.isFinite(total) && total > 0);
+    assert.ok(total <= 30 * 60 * 1000, `${total}ms is past any useful patience`);
+    assert.strictEqual(BACKOFF_MS.length, 10, 'ten attempts, then the failure semantics take over');
   });
 
-  await test('BACKOFF: it is JITTERED — two clients do not retry in lockstep', () => {
+  await test('BACKOFF: it is EXACT — an announced resume time is not a guess', () => {
+    // THE REVERSAL. This asserted the schedule was jittered, to stop many
+    // clients retrying in lockstep. That argument was sound for a 500ms first
+    // retry, where the whole schedule fits inside one restart; with delays of
+    // tens of seconds to minutes, clients are already spread by when their own
+    // request failed, by far more than ±20% of a short wait.
+    //
+    // The cost was real: the strip promises "retry 3/10 in 30s" and prints an
+    // absolute resume time, and a wait that could run to 36s made both a guess.
+    assert.strictEqual(JITTER, 0);
     const seen = new Set(sample(1));
-    // The whole point is that this is not one value. A deterministic schedule
-    // would produce exactly one.
-    assert.ok(seen.size > 10,
-      `the first backoff produced ${seen.size} distinct delays — that is a fixed table, not a spread`);
+    assert.strictEqual(seen.size, 1, 'the schedule must be exactly what it announces');
+    assert.strictEqual([...seen][0], 10_000);
   });
 
   await test('BACKOFF: the spread is BOUNDED, so an announced resume time stays honest', () => {

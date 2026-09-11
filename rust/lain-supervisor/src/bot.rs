@@ -386,7 +386,8 @@ pub fn normalize(u: &Value, r: &crate::remote::Remote) -> Option<Value> {
                 &name
             }),
         );
-        item.set("mime", Value::s(if photo.is_some() { "image/jpeg" } else { &a.str("mime_type") }));
+        let mime = a.str("mime_type");
+        item.set("mime", Value::s(if photo.is_some() { "image/jpeg" } else { &mime }));
         item.set("size", a.get("file_size").cloned().unwrap_or(Value::n(0)));
         e.set("attachments", Value::Arr(vec![item]));
     }

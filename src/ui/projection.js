@@ -232,6 +232,8 @@ function frameState(ui) {
     liveNarration: ui.liveNarration,
     liveNotes: ui.liveNotes,
     liveUser: ui.liveUser || null,
+    // WHAT THE COMPOSER IS CAPTURING, or '' — see ui/inputbox.js promptFor.
+    compose: require('../composemode').label(ui.app),
     liveFrom: ui.liveFrom || null,
     /**
      * THE ACTIVITY TIMELINE — the live operation and the diff window, if any.
@@ -246,11 +248,21 @@ function frameState(ui) {
     resumeToken: ui.lastSessionToken(),
     transcript: app.render.transcript,
     changedCount: ui.changedCount(),
-    stats: summary ? {
-      toolCalls: summary.toolCalls,
-      filesChanged: summary.filesChanged,
-      elapsedMs: ui.startedAt ? Date.now() - ui.startedAt : 0,
-    } : null,
+    // ---- A `stats` BLOCK STOOD HERE, AND IT CARRIED A SECOND CLOCK -------
+    //
+    // `{ toolCalls, filesChanged, elapsedMs: Date.now() - ui.startedAt }`. NO
+    // RENDERER HAS EVER READ IT — asserted before removing it — so its two
+    // counters were dead weight. Its third field was worse than dead: a SECOND
+    // derivation of elapsed time, off a different start stamp from the real
+    // clock, with nothing on screen or in the code to say which of the two was
+    // true. `ui.startedAt` is set in app.js on task identity and never pauses,
+    // so it would have disagreed with ui/workclock.js by exactly the minutes a
+    // rate limit spent refusing us.
+    //
+    // One authority for elapsed work: ui/workclock.js, projected as `clock`
+    // above. An architecture guard now fails if a second subtraction off a
+    // start stamp reappears anywhere in ui/ — see
+    // tests/unit/workclock-lifecycle.test.js.
   };
 }
 

@@ -272,40 +272,57 @@ module.exports = async function () {
     });
   });
 
-  // ---- §9: /external GRANTS NO EXECUTION, and must not start ------------
+  // ---- §9: A CONSULTED MODEL GRANTS NO EXECUTION, and must not start -----
   //
-  // Checked here rather than in the external tests because the property being
-  // guarded is about THIS migration: the supervisor is a privileged execution
-  // service, and the temptation once one exists is to let the second opinion
-  // reach it. `/external` is a review — it has no tools, no filesystem and no
-  // shell, it is TOLD so, and a claim to have acted is flagged rather than
-  // passed through. Giving it supervisor authority would add privilege where
-  // the design deliberately has none.
-  await test('EXTERNAL: the second opinion is granted no execution, and says so', () => {
-    const external = require('../../src/external');
-    assert.ok(/cannot read files, run commands, or inspect anything/i.test(external.SYSTEM),
-      'the reviewer must be told it has no tools');
+  // Checked here rather than beside the model-source tests because the property
+  // being guarded is about THIS migration: the supervisor is a privileged
+  // execution service, and the temptation once one exists is to let the second
+  // opinion reach it. A consulted model — `/external`'s reviewer once, a web
+  // chat source now — has no tools, no filesystem and no shell, it is TOLD so,
+  // and a claim to have acted is flagged rather than passed through. Giving it
+  // supervisor authority would add privilege where the design deliberately has
+  // none.
+  //
+  // `/external` and its four modules are retired; what replaced them is
+  // src/modelsource. The assertions are the same property, re-aimed.
+  await test('CONSULT: a chat model source is granted no execution, and says so', () => {
+    const contract = require('../../src/modelsource/contract');
+    const ctx = require('../../src/modelsource/context');
+    // It is TOLD it has nothing, in the payload that actually leaves.
+    const built = ctx.build({ session: { cwd: ROOT, messages: [] } }, 'why is this slow?', { continuing: false });
+    assert.match(built.text, /no tools, no filesystem and no shell/i,
+      'the consulted model must be told it has none of them');
     // A claim to have acted is caught, whatever else the reply contains.
-    assert.ok(external.overclaims('FACT: the loader is fine. I ran the tests and they pass.'),
+    assert.ok(contract.overclaims('FACT: the loader is fine. I ran the tests and they pass.'),
       'a claim to have executed must be flagged');
-    assert.strictEqual(external.overclaims('FACT: the loader reads JSON. RECOMMENDATION: check the writer.'), null,
-      'and an honest review must not be');
-    // Nothing in the external path may reach the execution service.
-    const src = fs.readFileSync(path.join(ROOT, 'src', 'external.js'), 'utf8');
-    assert.ok(!/supervisor/i.test(src),
-      'external.js must not reach the supervisor — a review does not get execution authority');
-    const reqSrc = fs.readFileSync(path.join(ROOT, 'src', 'externalrequest.js'), 'utf8');
-    assert.ok(!/require\(['"]\.\/supervisor['"]\)/.test(reqSrc),
-      'and neither may the request path');
+    assert.strictEqual(contract.overclaims('FACT: the loader reads JSON. RECOMMENDATION: check the writer.'), null,
+      'and an honest reply must not be');
+    // NOTHING IN THE WHOLE PACKAGE MAY REACH THE EXECUTION SERVICE — asserted
+    // over every file rather than the two that happened to exist before, so a
+    // module added later is covered by construction.
+    const dir = path.join(ROOT, 'src', 'modelsource');
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.js'))) {
+      const src = fs.readFileSync(path.join(dir, f), 'utf8');
+      assert.ok(!/supervisor/i.test(src),
+        `modelsource/${f} must not reach the supervisor — consultation is not execution authority`);
+    }
+    // AND NEITHER MAY THE DISPATCHER that puts a reply into the conversation.
+    const disp = fs.readFileSync(path.join(ROOT, 'src', 'chatdispatch.js'), 'utf8');
+    assert.ok(!/require\(['"]\.\/supervisor['"]\)/.test(disp), 'and neither may the dispatch path');
   });
 
-  await test('EXTERNAL: a malformed reply degrades to a flagged review, never an action', () => {
-    const external = require('../../src/external');
-    const sections = external.sections('total nonsense with no headings at all');
-    assert.ok(sections && typeof sections === 'object', 'it must still return a shape');
-    for (const k of ['fact', 'evidence', 'hypothesis', 'recommendation']) {
-      assert.ok(k in sections, `missing section ${k} must be present and empty, not absent`);
-    }
+  await test('CONSULT: an empty or malformed reply degrades to a failure, never an action', () => {
+    const { result, STATUS } = require('../../src/modelsource/contract');
+    // COMPLETED REQUIRES TEXT. A well-formed empty result is exactly how a
+    // broken extraction comes to look like a working one, and it is refused at
+    // the one place every source passes through.
+    const empty = result({ source: 'chatgpt-web', model: 'gpt-x', status: STATUS.COMPLETED, text: '   ' });
+    assert.strictEqual(empty.status, STATUS.FAILED);
+    assert.match(empty.error, /no text/i);
+    // And whatever the shape, it still carries provenance — so nothing can
+    // enter the conversation without a record of who said it.
+    assert.strictEqual(empty.provenance.sourceId, 'chatgpt-web');
+    assert.strictEqual(empty.usage, null, 'a website publishes no authoritative usage');
   });
 
   async function supervisedJobState(id) {

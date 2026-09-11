@@ -1,7 +1,13 @@
 'use strict';
 function register({ define }) {
-  define('/bot', { surface: true, flashMs: 0, args: '[start|stop|restart|platforms]', desc: 'LAIN messaging connections', async run(app, { rest = '' } = {}) {
+  define('/bot', { surface: true, flashMs: 0, args: '[start|stop|restart|platforms|doctor]', desc: 'LAIN messaging connections', async run(app, { rest = '' } = {}) {
     const service = require('./bot/service'); const action = rest.trim();
+    if (action === 'doctor') {
+      const doctor = require('./bot/doctor');
+      try { app.render.write(doctor.render(await doctor.inspect({ cfg: app.cfg })) + '\n'); }
+      catch { app.render.write('Bot diagnostics unavailable; no service was started.\n'); }
+      return;
+    }
     if (['start', 'restart'].includes(action) && !app.ui?.enabled) {
       app.render.write('Run lain --bot for a foreground messaging service, or /bot start inside the interactive CLI.\n'); return;
     }
@@ -30,7 +36,7 @@ function register({ define }) {
         try { app._botService = await service.start({ cfg: app.cfg, cwd: app.session.cwd }); }
         catch { app.render.write('Bot could not start; check configuration or an existing service.\n'); return; }
       }
-    } else if (action && action !== 'stop') { app.render.write('Use /bot [start|stop|restart|platforms].\n'); return; }
+    } else if (action && action !== 'stop') { app.render.write('Use /bot [start|stop|restart|platforms|doctor].\n'); return; }
     app.render.write(service.describe(await service.control()) + '\n');
   } });
 }

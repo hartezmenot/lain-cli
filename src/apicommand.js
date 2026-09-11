@@ -82,6 +82,24 @@ function looksLikeCredential(arg, cfg = {}) {
   // picker itself is built from — so this cannot drift out of step with it.
   const name = s.toLowerCase();
   if (providers.choices(cfg).some((p) => String(p.id).toLowerCase() === name)) return false;
+  // ---- NOR IS A CONNECTION ID, AND THAT HALF WAS MISSING ----------------
+  //
+  // `connectionByName` accepts three spellings of one route — `custom`,
+  // `lain:custom`, and the provider name — but this only excluded the bare
+  // one, because it is the only spelling `providers.choices` lists.
+  //
+  // So `/api lain:custom` typed before that connection exists (a typo, a
+  // route since removed, or simply doing it in the wrong order) fell through
+  // to the length test: eleven characters, no spaces, therefore a credential.
+  // The literal string `lain:custom` was stored as an API key, and the route
+  // then failed to authenticate for a reason nothing on screen explained —
+  // the exact failure the paragraph above this one describes, arrived at
+  // through the prefix instead of the name.
+  //
+  // `lain:` is LAIN's own namespace for "a key we hold" (see connectionIdFor).
+  // Nothing a provider issues is spelled that way, so a word wearing that
+  // prefix is always a route being named and never a secret being handed over.
+  if (name.startsWith('lain:')) return false;
   // A credential has no spaces. A mistyped subcommand is caught by the same
   // test, and gets told what the subcommands are rather than being stored.
   return !/\s/.test(s) && s.length >= 8;
@@ -298,13 +316,111 @@ async function discoverModels(app, connectionId) {
 }
 
 /**
+ * THE ROUTE THIS NAME NAMES — exact connection id first, then the bare provider.
+ *
+ * `lain:custom` and `custom` are the same route, and a person should not have
+ * to know which spelling the config uses. Bridges are deliberately NOT matched
+ * by provider: a bridge authenticates upstream itself, so LAIN holds no
+ * credential for it and there is nothing here to replace — the same exclusion
+ * `providers.choices()` applies when offering rows.
+ *
+ * @param {object} app  anything with `connections()`, as commands receive it
+ * @returns {object|null} the connection, or null when the name names nothing
+ */
+/**
+ * IS THIS WORD THE NAME OF A PROVIDER `/api` COULD ADD?
+ *
+ * Read from `providers.choices` — the same list the picker is built from — so
+ * a word that would appear in that menu is a word `/api <word>` can act on.
+ * Kept beside `connectionByName` because the two answer the two halves of one
+ * question: does this route exist yet, and could it.
+ */
+function providerNamed(app, name) {
+  const raw = String(name || '').trim().toLowerCase();
+  if (!raw) return null;
+  // THE `lain:` PREFIX IS STRIPPED HERE TOO, mirroring `connectionByName`.
+  // Somebody typing `/api lain:custom` for a route that does not exist yet is
+  // asking for that route — offering to add it is the answer to what they
+  // typed, where showing them the routes they already have was not.
+  const want = raw.startsWith('lain:') ? raw.slice('lain:'.length) : raw;
+  return providers.choices((app && app.cfg) || {})
+    .find((p) => String(p.id).toLowerCase() === want) || null;
+}
+
+function connectionByName(app, name) {
+  const want = String(name || '').trim().toLowerCase();
+  if (!want) return null;
+  const conns = app.connections() || [];
+  const byId = conns.find((c) => String(c.id || '').toLowerCase() === want);
+  if (byId) return byId;
+  // `/api custom` IS `/api lain:custom`: the `lain:` prefix says WHO HOLDS THE
+  // KEY (see connectionIdFor), not part of the name a person has to type. The
+  // bare spelling, the full id, and the provider name all reach one route.
+  const bare = want.startsWith('lain:') ? want.slice('lain:'.length) : want;
+  return conns.find((c) => c.via !== 'bridge'
+    && (String(c.id || '').toLowerCase() === `lain:${bare}`
+      || String(c.provider || '').toLowerCase() === bare)) || null;
+}
+
+/**
+ * REPLACE AN EXISTING ROUTE'S CREDENTIAL, UNDER THE SAME CONNECTION ID.
+ *
+ * `/api lain:custom` — or `/api custom` — exists because a stored key can STOP
+ * working: rotated, expired, refused with a 401 on a route whose endpoint and
+ * model list were perfectly good. The fix is a new key under the SAME id, not
+ * a second route for the same endpoint. So this flow skips the provider and
+ * base-URL questions — the route already answered them — and asks only for the
+ * replacement, masked, then re-runs the same discovery the first flow uses so
+ * a refusal comes back in the provider's own words.
+ *
+ * NON-DESTRUCTIVE IN BOTH DIRECTIONS. Esc stores nothing; a discovery failure
+ * keeps the NEW key, which may be perfectly good while the network is not —
+ * the same rule credentialFlow applies.
+ */
+async function rekeyFlow(app, name, { C, config, refreshCatalog }) {
+  const w = (s) => app.render.write(s);
+  const conn = connectionByName(app, name);
+  if (!conn) {
+    w(C.yellow(`  No connection named '${String(name || '').trim()}'.\n`));
+    w(C.dim('  /provider status lists the ids.\n'));
+    return;
+  }
+  if (conn.via === 'bridge') {
+    w(C.yellow(`  ${conn.id} is a bridge: it authenticates upstream itself, so LAIN holds no credential to replace.\n`));
+    return;
+  }
+  if (!app.ui || !app.ui.enabled) {
+    w(C.yellow('  /api <connection> needs the interactive panel to ask for the replacement key.\n'));
+    w(C.dim('  Without a terminal, edit config.json instead — see /provider status.\n'));
+    return;
+  }
+  w(C.dim(`  Re-keying ${conn.id}  ${conn.baseUrl || '(no endpoint recorded)'}\n`));
+  const cred = await app.ui.ask(credentialAdapter());
+  if (!cred) { w(C.dim(CANCELLED)); return; }
+  const id = store(app, config, {
+    provider: conn.provider, protocol: conn.protocol, baseUrl: conn.baseUrl,
+    credential: String(cred).trim(), connectionId: conn.id,
+  });
+  w(C.green(`  ${id}`) + C.dim(`  ${shapeOf(cred)}  →  ${conn.baseUrl}\n`));
+  w(C.dim(`  FETCHING AVAILABLE MODELS from ${conn.baseUrl} …\n`));
+  const found = await discoverModels(app, id);
+  if (!found.ok) {
+    w(C.yellow(`  Model discovery failed: ${found.error}\n`));
+    w(C.dim(`  The new credential is stored. \`/api refresh ${id}\` re-reads the catalog once the cause is fixed.\n`));
+    return;
+  }
+  w(C.green(`  ${found.models.length} model(s) available\n`));
+  await refreshCatalog(app, { only: id, quiet: true });
+}
+
+/**
  * The whole flow. Returns nothing; everything it has to say, it says on screen.
  *
  * NON-TTY IS NOT A DEGRADED TTY. With no panel to ask through there is no way
  * to choose a provider, and guessing one would store a credential against a
  * route the user never named. It says so and stores nothing.
  */
-async function credentialFlow(app, credential, { C, config, refreshCatalog }) {
+async function credentialFlow(app, credential, { C, config, refreshCatalog, preselect = null } = {}) {
   const w = (s) => app.render.write(s);
   if (!app.ui || !app.ui.enabled) {
     w(C.yellow('  /api <credential> needs the interactive picker to ask which provider it belongs to.\n'));
@@ -325,8 +441,23 @@ async function credentialFlow(app, credential, { C, config, refreshCatalog }) {
   }
 
   const list = providers.choices(app.cfg);
-  const pickedId = await app.ui.ask(providerAdapter(list));
+  // ---- `/api <provider>` NAMES THE ROUTE, SO DO NOT ASK AGAIN -----------
+  //
+  // `/api custom` used to fall through to `/provider status`: somebody trying
+  // to ADD that route was shown a list of the routes they already had, with
+  // nothing saying how to add one. The add path existed — bare `/api` — and
+  // was not reachable from the thing they typed.
+  //
+  // Naming a provider LAIN already knows is an unambiguous answer to the
+  // question the picker would have asked, so it is taken as one. The
+  // credential is still asked for through the panel, and a word matching no
+  // provider still falls through to the status view.
+  const wanted = preselect
+    ? list.find((x) => String(x.id).toLowerCase() === String(preselect).toLowerCase())
+    : null;
+  const pickedId = wanted ? wanted.id : await app.ui.ask(providerAdapter(list));
   if (!pickedId) { w(C.dim('  Cancelled. Nothing was stored.\n')); return; }
+  if (wanted) w(C.dim(`  ${wanted.label || wanted.id}\n`));
 
   let provider = pickedId;
   let protocol = 'chat';
@@ -387,5 +518,6 @@ async function credentialFlow(app, credential, { C, config, refreshCatalog }) {
 // the list — see tests/unit/apiflow.test.js. Its position is a property of the
 // picker rather than of a flow, so it is asserted on the adapter directly.
 module.exports = {
-  credentialFlow, looksLikeCredential, shapeOf, validBaseUrl, providerAdapter, SUBCOMMANDS,
+  providerNamed,
+  credentialFlow, rekeyFlow, connectionByName, looksLikeCredential, shapeOf, validBaseUrl, providerAdapter, SUBCOMMANDS,
 };

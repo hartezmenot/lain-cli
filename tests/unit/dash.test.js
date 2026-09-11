@@ -188,7 +188,11 @@ module.exports = async function () {
       const res = await get(r.port, `/api/state?t=${r.startupPassword}`);
       const s = JSON.parse(res.body);
       assert.ok(s.project && s.project.name, 'the project must be named');
-      assert.ok('task' in s && 'model' in s && 'desktop' in s && 'external' in s);
+      assert.ok('task' in s && 'model' in s && 'desktop' in s && 'chatSource' in s);
+      // WHO ANSWERS A CHAT TURN, and — stated rather than implied, because it is
+      // the thing a reader of this payload is most likely to get wrong — who
+      // owns coding whatever is selected.
+      assert.strictEqual(s.chatSource.coding, 'LAIN');
       assert.ok(!/sk-secret-value|sk-should-never-appear/.test(res.body), 'no credential may cross the wire');
       // Nor the conversation itself.
       assert.ok(!('messages' in s) || !Array.isArray(s.messages), 'message content is not the dashboard business');

@@ -4,7 +4,7 @@ const supervisor = require('../supervisor');
 const caps = { version: 1, platform: 'telegram', maxLength: 4096, format: 'plain', edit: true, typing: true, threads: true, buttons: true, mediaIn: true, mediaOut: true };
 class Telegram {
   constructor(cfg = {}, { rpc = (req) => supervisor.call(req, { timeoutMs: 25000 }) } = {}) {
-    this.cfg = cfg; this.rpc = rpc; this.accountId = cfg.accountId || 'default'; this.owner = randomBytes(24).toString('hex'); this.state = 'stopped';
+    this.cfg = cfg; this.rpc = rpc; this.accountId = cfg.accountId || 'default'; this.owner = randomBytes(24).toString('hex'); this.state = 'stopped'; this.mediaProtocol = 0;
   }
   async call(op, args = {}) {
     const r = await this.rpc({ op: `remote_gateway_${op}`, owner: this.owner, ...args });

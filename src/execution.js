@@ -214,6 +214,41 @@ function powerShellIsLegacy() {
  *
  * @returns {[string, string[]]} the executable, and the args BEFORE the command
  */
+/**
+ * ---- A FALSE `PASSED` IN A HANDOVER: LOOKED FOR, NOT FOUND ---------------
+ *
+ * A previous session reported that a handover said `Last check actually run:
+ * ... - PASSED` for a command that had failed immediately because the shell
+ * did not have the program. That would be a serious defect - a claim surviving
+ * into the next model's context with nothing behind it - so it was MEASURED
+ * rather than assumed, and on this machine IT DOES NOT REPRODUCE.
+ *
+ * Every failure shape, run through the shell LAIN actually resolves (pwsh 7,
+ * not the in-box 5.1), already exits non-zero:
+ *
+ *     cmdlet error                     exit 1
+ *     cmdlet error inside a pipeline   exit 1
+ *     missing program in a pipeline    exit 1
+ *     native non-zero                  exit 1
+ *     native non-zero in a pipeline    exit 1
+ *     success                          exit 0
+ *
+ * tools/shell.js sets `isError: code !== 0`, lifecycle.js records
+ * `ok: !isError`, and handover.js prints PASSED/FAILED from that - so the
+ * chain is faithful end to end.
+ *
+ * The reported command, `... | tail -30`, SUCCEEDS here: `tail` is present in
+ * Git's usr/bin and the pipeline exits 0 correctly. A `$?`/`$LASTEXITCODE`
+ * epilogue was written for this and then REMOVED, because it changed no
+ * outcome in any of the six cases above and wrapping every user command has
+ * its own risks (a trailing comment, a here-string, `exit` semantics).
+ * Shipping it would have been a speculative fix carrying a comment that
+ * claimed a defect nobody could demonstrate.
+ *
+ * If it is seen again, the thing to capture is the SHELL: Windows PowerShell
+ * 5.1 behaves differently from pwsh 7, and is what `findPowerShell` falls back
+ * to when 7 is absent.
+ */
 function shellPrefix(shell) {
   if (shell === 'powershell') {
     return [findPowerShell(), ['-NoProfile', '-NonInteractive', '-Command']];

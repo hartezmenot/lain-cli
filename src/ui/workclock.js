@@ -90,9 +90,31 @@ function pause(c, now = Date.now()) {
   return c;
 }
 
-/** Work can progress again. Counting continues FROM THE BANKED VALUE. */
+/**
+ * Work can progress again. Counting continues FROM THE BANKED VALUE.
+ *
+ * ------------------------------------------------------------------------
+ * A STOPPED CLOCK IS REVIVABLE, AND THAT IS NOT A LOOSENING.
+ *
+ * This used to accept only PAUSED, which reads as the stricter rule and was in
+ * fact the dangerous one: it made every mistaken `settle` PERMANENT. Combined
+ * with `apply` settling on a stale SUCCESS from the previous turn — see the
+ * header there — a turn's clock stopped on its first frame and could never be
+ * restarted, so the live row showed `00:00:00` for the whole of a long task
+ * while the token figures beside it climbed. That was the reported defect.
+ *
+ * The rule that actually matters is elsewhere and is unchanged: only `start`
+ * zeroes the value, and only the turn lifecycle calls it. Reviving here
+ * continues FROM THE BANKED FIGURE, so a clock that resumes cannot under-report
+ * the work already done; the worst a spurious revive can do is keep counting a
+ * turn that is genuinely over, which the next `settle` corrects and which is a
+ * far cheaper error than a dead figure nobody can trust.
+ *
+ * IDLE IS STILL REFUSED. A clock nobody started has no banked work to continue,
+ * and starting one here would put `00:00:00` beside an idle prompt.
+ */
 function resume(c, now = Date.now()) {
-  if (!c || c.state !== STATE.PAUSED) return c;
+  if (!c || c.state === STATE.IDLE || c.state === STATE.RUNNING) return c;
   c.since = now;
   c.state = STATE.RUNNING;
   return c;
@@ -171,21 +193,33 @@ function reading(c, now = Date.now()) {
  * `state` is a termtitle STATE — the same five-way classification of the same
  * `liveState` that decides the window-title glyph. See the header.
  *
- * IDLE DOES NOT STOP A RUNNING CLOCK, and that is the whole of the flicker
- * defence §4 asks for. There is a real gap between the user pressing Enter and
- * the turn loop announcing its first phase, and during it `liveState` has
- * nothing to report. Treating that as "the task ended" would stop the clock one
- * frame after starting it, every single turn. Only a TERMINAL word — settled
- * success or a failure — stops it, and so does the turn lifecycle ending.
+ * ------------------------------------------------------------------------
+ * IT RUNS AND PAUSES. IT DOES NOT STOP. ONE OWNER FOR TERMINAL STATE.
+ *
+ * projection.js states this rule in its own header — "WHAT IS NOT HERE:
+ * starting and stopping. Only the turn lifecycle knows that a person pressed
+ * Enter" — and this function used to violate it by settling on `success` and
+ * `error`. That was the reported defect, and the mechanism is worth stating
+ * because it is not obvious:
+ *
+ *   `stateOf` reports SUCCESS from `live.tick`, and `tick` is read off the
+ *   PREVIOUS turn's record. Between a person pressing Enter and the turn loop
+ *   announcing its first phase, the strip is still describing the turn before.
+ *   So the first frame of every turn following a clean one classified as
+ *   SUCCESS — and settled a clock that had been started microseconds earlier.
+ *
+ * A DRAWING PASS MUST NOT BE ABLE TO END A TASK. `settle` is called by exactly
+ * one thing, ui/turnstate.js `endTurn`, which is the only code that knows the
+ * turn is actually over. IDLE is likewise a GAP and not an ending, for the same
+ * reason it always was.
  */
 function apply(c, state, now = Date.now()) {
   if (!c) return c;
   switch (state) {
     case 'working': return resume(c, now);
     case 'paused': return pause(c, now);
-    case 'success':
-    case 'error': return settle(c, now);
-    default: return c;   // idle — see the header
+    // success / error / idle: see the header. Terminal state is endTurn's.
+    default: return c;
   }
 }
 

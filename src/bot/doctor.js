@@ -34,16 +34,18 @@ async function inspect({ cfg = config.load(), dir = config.configDir(), env = pr
     const expected = platform === 'telegram' ? (tg?.botId || store.accounts?.[`${platform}:${account}`] || settings.botId)
       : (store.accounts?.[`${platform}:${account}`] || (platform === 'whatsapp' ? settings.phoneNumberId : settings.botId));
     const fingerprint = expected ? accountFingerprint(platform, account, expected) : current?.accountFingerprint;
-    const token = platform === 'telegram' ? Boolean(tg?.configured || present(env, settings.tokenEnv || 'LAIN_TELEGRAM_TOKEN'))
+    const token = platform === 'telegram' ? Boolean(tg?.configured || present(env, settings.tokenEnv))
       : present(env, settings.tokenEnv || `LAIN_${platform.toUpperCase()}_TOKEN`);
     const credentials = platform !== 'whatsapp' ? token : token
       && present(env, settings.appSecretEnv || 'LAIN_WHATSAPP_APP_SECRET') && present(env, settings.verifyTokenEnv || 'LAIN_WHATSAPP_VERIFY_TOKEN');
     const configured = Boolean(settings.enabled && credentials && (platform !== 'whatsapp'
       || (/^\d{5,30}$/.test(String(settings.phoneNumberId || '')) && /^v\d{2}\.0$/.test(settings.apiVersion || ''))));
-    const connected = current?.state === 'listening' && (platform !== 'discord' || diagnostics.activeSession === true);
+    const connected = current?.state === 'listening' && (platform !== 'discord' || diagnostics.activeSession === true)
+      && (platform !== 'telegram' || (tg?.gatewayOwned === true && tg?.mailboxHealthy === true));
     const row = { platform, enabled: settings.enabled === true, configured, tokenPresent: token,
-      state: !configured ? 'UNCONFIGURED' : (connected && platform !== 'whatsapp' ? 'CONNECTED' : 'CONFIGURED'),
-      checks: [], accountFingerprint: fingerprint, diagnostics,
+      state: connected && platform !== 'whatsapp' ? 'CONNECTED' : !configured ? 'UNCONFIGURED' : 'CONFIGURED',
+      checks: [], accountFingerprint: fingerprint, currentFingerprint: current?.accountFingerprint,
+      diagnostics, connected: connected && platform !== 'whatsapp',
       certification: evidence.read(dir, platform, settings, fingerprint, now) };
     row.checks.push(['enabled', row.enabled ? 'yes' : 'no'], ['credential', token ? 'present' : 'missing']);
     if (platform === 'telegram') {
@@ -93,4 +95,8 @@ function render(report, onlyPlatform) {
   lines.push('  Filesystem access is an observation, not a write test. No state was created.');
   return lines.join('\n');
 }
-module.exports = { inspect, render, present, access, transport };
+async function main(options) {
+  try { process.stdout.write(render(await inspect(options)) + '\n'); return 0; }
+  catch { process.stderr.write('Bot diagnostics unavailable; no service was started.\n'); return 1; }
+}
+module.exports = { inspect, render, main, present, access, transport };

@@ -89,6 +89,12 @@ function register(secret) {
 
 /** Everything a config file and the environment are currently holding. */
 function registerFrom(cfg = {}) {
+  for (const [platform, settings] of Object.entries(cfg.bot?.platforms || {})) {
+    if (!settings || typeof settings !== 'object') continue;
+    for (const key of [settings.tokenEnv || `LAIN_${platform.toUpperCase()}_TOKEN`, settings.appSecretEnv, settings.verifyTokenEnv]) {
+      if (key && process.env[key]) register(process.env[key]);
+    }
+  }
   const conns = (cfg && cfg.connections && typeof cfg.connections === 'object') ? cfg.connections : {};
   for (const c of Object.values(conns)) {
     if (!c || typeof c !== 'object') continue;

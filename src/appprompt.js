@@ -66,6 +66,15 @@ function build(app) {
     try { app._projectBrief = require('./project').brief(app.session.cwd); } catch { app._projectBrief = ''; }
   }
   if (app._projectBrief) sys += `\n\n# This project\n${app._projectBrief}`;
+  // ---- THE STANDING GOAL, BEFORE THE PLAN -------------------------------
+  //
+  // ORDER IS THE ARGUMENT: a goal is what the user is trying to achieve and a
+  // plan is one strategy for reaching it, so the strategy reads under the thing
+  // it serves. Marked as DIRECTION rather than as this turn's request — a model
+  // handed a goal as an instruction starts working on the goal, which is almost
+  // always far larger than the sentence the person just typed. See src/goal.js.
+  const goalText = require('./goal').forPrompt(app.session);
+  if (goalText) sys += `\n\n# Goal\n${goalText}`;
   // ONLY this session's plan can ever reach the prompt: it is a field on this
   // session object, so there is no other plan it could pick up.
   if (app.session.plan) sys += `\n\n# Plan (this session)\n${app.session.plan.digest()}`;

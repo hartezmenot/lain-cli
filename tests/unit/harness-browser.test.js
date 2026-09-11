@@ -120,8 +120,14 @@ module.exports = async function () {
   await test('BROWSER: it is an instrument, not a browsing tool — there is no search', () => {
     // The capability removed in 2026-09 was BROWSING. This must not grow back
     // into it, and the guarantee is the shape of the API rather than a policy.
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'harness', 'browser.js'), 'utf8')
-      + fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'harness', 'browserharness.js'), 'utf8');
+    // env/chromium.js IS PART OF THE SURFACE NOW. It owns every launch in the
+    // tree, so the guarantees below have to be asserted where the flags
+    // actually are — reading only the two old files would let a `search(` or a
+    // real-profile launch appear in the launcher and go unnoticed.
+    const src = ['browser.js', 'browserharness.js']
+      .map((f) => fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'harness', f), 'utf8'))
+      .concat(fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'env', 'chromium.js'), 'utf8'))
+      .join('\n');
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
     assert.ok(!/\bsearch\s*\(/.test(code), 'a search entry point would make this a browsing tool');
     assert.ok(!/google\.com|bing\.com|duckduckgo/i.test(code), 'it never goes anywhere it was not sent');
@@ -129,7 +135,12 @@ module.exports = async function () {
   });
 
   await test('BROWSER: a launched browser is a MANAGED process, so cleanup can reach it', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'harness', 'browserharness.js'), 'utf8');
+    // THE OWNERSHIP RULE MOVED WITH THE LAUNCHER, and so does its guard.
+    // browserharness.js delegates to env/chromium.js, which is where
+    // `processes.start` and the headless flag now live. The BEHAVIOURAL half of
+    // this rule is asserted below ('with no process manager it refuses to
+    // launch'), which is what actually proves the delegation kept it.
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'env', 'chromium.js'), 'utf8');
     assert.match(src, /this\.processes\.start\(/, 'a browser outside process ownership is an orphan waiting to happen');
     assert.match(src, /headless=new/, 'and it does not steal the focus of whoever is at the keyboard');
   });

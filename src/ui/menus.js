@@ -10,10 +10,14 @@
  * OFFER while a line is being typed, and how the offer is accepted.
  *
  * Nothing here classifies the text as a task or a command — `looksLikeCommand`
- * still decides that at submit time. A menu never consumes the line and never
- * submits it; accepting a completion EDITS the line and stops there. The one
- * exception is Enter on the command palette, which is the user saying "run
- * this".
+ * still decides that at submit time. Accepting a completion EDITS the line and
+ * stops there; a menu never rewrites what it was not asked to complete.
+ *
+ * ENTER IS THE EXCEPTION, and it is not optional. While a menu is open the
+ * reader stops submitting (input.js `_consume` → `enterGoesToUI`), so Enter is
+ * only ever sent from here. Every Enter must therefore end in the line going
+ * SOMEWHERE: the highlighted command when there is one, and the line as typed
+ * when there is not. A menu that swallows Enter is a menu that eats the input.
  */
 
 const panelMod = require('./panel');
@@ -64,7 +68,9 @@ function updateMenus(ui, text, { pasted = false } = {}) {
   // one was refused above.
   if (/^\/\S*$/.test(line)) {
     showMenu(ui, panelMod.commandPaletteAdapter({
-      commands: [...commands.REGISTRY.values()],
+      // `offered()` rather than the raw registry: a compatibility alias still
+      // runs when typed and is never proposed. See commands.js `define`.
+      commands: commands.offered(),
       filter: line,
     }));
     return;
@@ -88,7 +94,34 @@ function completionKey(ui, key) {
   if (key !== 'tab' && key !== 'right' && key !== 'enter') return false;
   const app = ui.app;
   const item = ui.panel.current;
-  if (!item) { if (key === 'enter') closeMenu(ui); return true; }
+  // ---- ENTER WITH NOTHING HIGHLIGHTED MUST STILL SUBMIT THE LINE ----------
+  //
+  // This closed the menu and CONSUMED the key, so a `/` line the palette had
+  // no entry for could not be RUN AT ALL: the menu vanished, the text stayed
+  // on the input row, and nothing happened. Pressing Enter again did the same.
+  //
+  // The reader is why silence was total. input.js `_consume` asks
+  // `enterGoesToUI()` and, while a menu is open, emits Enter as a KEY instead
+  // of submitting — so the line is never sent unless something here sends it.
+  // Falling through is not enough; nothing downstream submits a NON-EMPTY line.
+  //
+  // It stayed invisible until a command became HIDDEN. `offered()` fills this
+  // palette and it excludes compatibility aliases, so `/models` — which
+  // commands.js `define` promises "still runs when typed" — produced an EMPTY
+  // palette whose Enter was swallowed. The promise held through a pipe and
+  // broke in the TUI, which is the worst way for it to be wrong.
+  //
+  // Tab and Right still belong to the menu: there is nothing to complete, so
+  // they are consumed and do nothing. ENTER is not a completion key here — it
+  // is the SUBMIT key — so the line goes, reaching either its command or
+  // `Unknown command`. Being told is the point; silence was the only wrong
+  // answer.
+  if (!item) {
+    if (key !== 'enter') return true;
+    closeMenu(ui);
+    app.input.submitLine();
+    return true;
+  }
 
   if (ui.panel.kind === panelMod.KIND.COMMAND_PALETTE) {
     closeMenu(ui);

@@ -164,15 +164,33 @@ module.exports = async function () {
 
   // ---------------------------------------------- stopping for real only --
 
-  await test('CLOCK: it stops on a settled verdict, not on a quiet moment', () => {
+  await test('CLOCK: a settled VERDICT does not stop the clock — only endTurn does', () => {
+    // ---- THIS TEST PINNED A REAL DEFECT, AND THE DECISION CHANGED --------
+    //
+    // It asserted that `apply` STOPS the clock on a terminal verdict, and
+    // `apply` did. The verdict, though, is read from `liveState`, whose `tick`
+    // comes from the PREVIOUS turn's record — and there is a real gap between
+    // a person pressing Enter and the turn loop announcing its first phase. So
+    // the first frame of every turn following a clean one classified as
+    // SUCCESS and settled a clock that had been started microseconds earlier.
+    // `resume` then refused to revive a STOPPED clock, so the figure sat at
+    // `00:00:00` for the whole turn while the tokens beside it climbed. That
+    // was observed on a real screen.
+    //
+    // A DRAWING PASS MAY NOT END A TASK. projection.js already stated that rule
+    // in its own header — "only the turn lifecycle knows that a person pressed
+    // Enter" — and `apply` was violating it. The surviving half of the old
+    // assertion is the test immediately below: endTurn stops it, and keeps the
+    // figure. See tests/unit/workclock-lifecycle.test.js for the whole story.
     const done = { lastTurn: { toolCalls: 3, filesChanged: 1, stopReason: null } };
     const settled = termtitle.stateOf(status.liveState(done, 1000));
     assert.ok(settled === termtitle.STATE.SUCCESS || settled === termtitle.STATE.ERROR,
-      'a finished turn is terminal, not idle: got ' + settled);
+      'a finished turn is still classified as terminal: got ' + settled);
     const c = started();
     wc.apply(c, settled, 120000);
-    assert.strictEqual(c.state, wc.STATE.STOPPED);
-    assert.strictEqual(wc.reading(c, 999999).text, '00:02:00', 'and it keeps what it measured');
+    assert.strictEqual(c.state, wc.STATE.RUNNING,
+      'a verdict about the PREVIOUS turn must not stop THIS turn\'s clock');
+    assert.strictEqual(wc.reading(c, 180000).text, '00:03:00', 'and it is still measuring');
   });
 
   await test('CLOCK: the turn lifecycle ending stops it too', () => {

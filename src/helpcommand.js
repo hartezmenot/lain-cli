@@ -128,16 +128,37 @@ function register({ define, REGISTRY, C }) {
       const want = String((ctx.args && ctx.args[0]) || '').toLowerCase();
       const on = want === 'on' ? true : (want === 'off' ? false : !input.mouseCaptured());
       if (on) input.enableMouse(); else input.disableMouse();
+      // ---- AND IT STICKS ------------------------------------------------
+      //
+      // The preference used to live only in the reader, so it was re-asserted
+      // at every launch: a person who ran `/mouse off` to get their selection
+      // back lost it again the next time they started LAIN, with nothing on
+      // screen explaining why. A setting that does not survive the session is
+      // not a setting.
+      try {
+        const config = require('./config');
+        const cfg = config.load();
+        if (cfg.mouse !== on) { cfg.mouse = on; config.save(cfg); }
+      } catch { /* an unwritable config still leaves the change live this session */ }
       w('');
       w(C.bold('  Mouse capture ') + (on ? C.green('ON') : C.yellow('OFF')));
       w('');
       if (on) {
-        w(C.dim('  The prompt has a clickable caret, and the conversation can be selected and clicked.'));
+        w(C.dim('  The prompt has a clickable caret, the conversation can be selected and clicked,'));
+        w(C.dim('  and the WHEEL scrolls the transcript.'));
         w(C.dim('  Your terminal own drag-selection is taken; Shift+drag usually still works.'));
         w(C.dim('  If it does not in your terminal, run /mouse off.'));
       } else {
         w(C.dim('  Your terminal own selection and copy work exactly as they always do.'));
-        w(C.dim('  The clickable caret and the selectable conversation are off until /mouse on.'));
+        // ---- THE TRADE, STATED RATHER THAN DISCOVERED ---------------------
+        //
+        // The wheel arrives as a MOUSE REPORT (SGR buttons 64/65), so with
+        // reporting off it does not arrive at all. There is no mode that
+        // delivers wheel events and leaves the terminal its own drag-selection:
+        // any tracking mode routes mouse input to the application. Saying so
+        // here is the difference between a trade and a thing that seems broken.
+        w(C.dim('  The wheel and the clickable caret are off; PgUp/PgDn scroll the transcript,'));
+        w(C.dim('  and Alt+↑/Alt+↓ jump between your own messages. /mouse on for the wheel.'));
         w(C.dim('  /copy still works, and copies what LAIN knows rather than the screen.'));
       }
       w('');
@@ -186,7 +207,8 @@ function register({ define, REGISTRY, C }) {
       // exist, and this is the tool people debug the harness itself with. It is
       // simply LAST, and labelled, so the first screen is the program rather
       // than its instrumentation.
-      const rest = [...REGISTRY.values()].filter((c) => !listed.has(c.name));
+      // COMPATIBILITY ALIASES ARE NOT ADVERTISED — see commands.js `define`.
+      const rest = [...REGISTRY.values()].filter((c) => !listed.has(c.name) && !c.hidden);
       if (rest.length) {
         w(NL + C.bold('  Advanced') + C.dim('  — diagnostics and machinery') + NL);
         for (const c of rest) row(c);

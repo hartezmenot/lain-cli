@@ -118,19 +118,35 @@ module.exports = async function () {
     //
     // The rule this was always making is about the ACTIVITY rows: a list of what
     // the model did is a narrative, and hanging a token count off every line
-    // turns it into a ledger nobody reads. It was written as a whole-frame
-    // assertion because at the time there was nowhere else a token count could
-    // appear.
-    //
-    // There is now: the status strip above the input carries the session's
-    // running cost, which is where "what is this costing" is asked and where the
-    // duplicate progress bar used to be. So the rule is stated about the rows it
-    // was always about, and the strip is asserted separately below.
+    // turns it into a ledger nobody reads.
     for (const row of f.split('\n')) {
       if (!/(Read|Wrote|Ran) /.test(row)) continue;
       assert.ok(!/[↑↓⚡]/.test(row), `no token counters on a call row: ${row.trim()}`);
     }
-    assert.ok(/[↑↓]\s*\d/.test(f), 'the strip does carry the running cost, once, in its own row');
+    // ---- AND ONE AUTHORITATIVE TOKEN SIGNAL, ON THE HEADER -----------------
+    //
+    // THIS ASSERTED THE LIVE STRIP, and the live strip deliberately stopped
+    // carrying it — see ui/status.js, which removed the `↑ ⚡ ↓ +…` cluster
+    // because those are LIFETIME SESSION totals: they barely move within a turn,
+    // and a number that does not change beside a spinner that does reads as a
+    // frozen screen.
+    //
+    // So the test failed for having been RIGHT ONCE. It is not weakened to
+    // compensate — the REPLACEMENT signal is asserted instead, and that is a
+    // stronger claim than the old one, which would have accepted a count
+    // anywhere in the frame including on the rows the loop above forbids.
+    //
+    // The header's OUTPUT figure (ui/views.js `outputLabel`) is that signal: it
+    // climbs while the model writes, marks itself `~` while it is an estimate,
+    // and becomes the provider's own count when the receipt lands. Everything
+    // else — per-request input, cache reads, the measured/estimated split — is
+    // `/token`, asked for rather than always drawn.
+    const strip = f.split('\n').find((l) => /LAIN\s+\S+\s+mock-model/.test(l)) || '';
+    assert.ok(strip, 'the header row must be on screen at all');
+    assert.match(strip, /~?\d+\s*$/,
+      `the header carries the output figure, once, at its right: ${strip.trim()}`);
+    assert.ok(!/[↑↓⚡]\s*\d/.test(f),
+      'the session accounting cluster is `/token` now, and belongs on no drawn row');
   });
 
   await test('WS: the screen says what is being worked on ONCE, and carries no diagnostics', async () => {

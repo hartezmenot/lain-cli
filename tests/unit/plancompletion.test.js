@@ -216,7 +216,11 @@ module.exports = async function () {
 
   await test('PLAN100: a new turn clears the stale reason rather than carrying it', () => {
     const src = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'src', 'app.js'), 'utf8');
-    assert.match(src, /this\.pendingCompletion = null;[\s\S]{0,200}beginTurn\(\)/,
+    // THE ORDER IS THE INVARIANT, not the argument list. `beginTurn` now takes
+    // the task verdict (ui/alert.js decides from it whether this is a new
+    // execution attempt), so matching `beginTurn()` literally asserted an arity
+    // this test never cared about and failed on a change that kept the rule.
+    assert.match(src, /this\.pendingCompletion = null;[\s\S]{0,200}beginTurn\(/,
       'submit() must reset it, or VERIFYING sticks to the screen for ever');
   });
 

@@ -362,11 +362,38 @@ const SECTIONS = {
   },
 
   /**
-   * WHAT THE MODEL ACTUALLY HAS. Not the screen — the conversation as it will
-   * be sent, which is the thing worth inspecting when an answer looks like it
-   * forgot something.
+   * THE DIAGNOSTIC EXPORT — what you paste when you go and ask somebody else.
+   *
+   * ---- IT USED TO BE `session.messages`, AND THAT WAS THE WRONG SOURCE ----
+   *
+   * `messages` is the PROVIDER WIRE FORMAT, not the conversation: system
+   * prompts, tool-call plumbing, and whole file bodies re-sent for cache
+   * alignment. Copying it produced tens of thousands of characters that were
+   * mostly not the exchange, and it buried the six lines a diagnosis needed.
+   *
+   * It is built from turn records now — see copysummary.js, which also states
+   * exactly what is excluded and why.
    */
   context(app) {
+    return require('./copysummary').context(app);
+  },
+
+  /** The whole session rather than the current task. `/copy context all`. */
+  'context all': (app) => require('./copysummary').context(app, { all: true }),
+
+  /**
+   * THE TASK SUMMARY — what bare `/copy` now means.
+   *
+   * Request, result, what changed on disk, what was proved, what is left, and
+   * how to run it. Everything transient is excluded by construction rather
+   * than filtered out afterwards.
+   */
+  summary(app) {
+    return require('./copysummary').summary(app);
+  },
+
+  /** The raw provider wire format, for when that IS the question. */
+  messages(app) {
     const msgs = app.session.messages || [];
     if (!msgs.length) return null;
     return msgs.map((m) => {
@@ -376,8 +403,24 @@ const SECTIONS = {
   },
 };
 
-/** With no argument: the most useful thing there is, in this order. */
-const DEFAULT_ORDER = ['question', 'last', 'output', 'diff', 'task', 'status', 'activity'];
+/**
+ * WITH NO ARGUMENT: THE TASK SUMMARY.
+ *
+ * ---- WHAT THIS ORDER USED TO DO ---------------------------------------
+ *
+ * It was ['question', 'last', 'output', 'diff', 'task', 'status', 'activity']
+ * and it took the FIRST non-empty one — which in practice meant `last`, the
+ * model's most recent answer on its own, with no record of what was asked,
+ * what changed, or whether anything was proved. `activity` sat at the end as a
+ * fallback, so a quiet session could put a spinner's worth of frame-by-frame
+ * narration on the clipboard.
+ *
+ * A QUESTION STILL WINS, and only while one is genuinely open: when LAIN is
+ * waiting on you, the thing you want to take somewhere else is the thing it is
+ * waiting about. Everything else falls through to the summary, and `last`
+ * remains as the answer for a session that has not done any work yet.
+ */
+const DEFAULT_ORDER = ['question', 'summary', 'last'];
 
 async function collect(app, name) {
   const fn = SECTIONS[name];

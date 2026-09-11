@@ -356,33 +356,9 @@ function kindOf(entry) {
   return k;
 }
 
-/**
- * WHAT THE USER SAID IS A BLOCK, NOT A LINE.
- *
- * Painted across the full width on its own ground, so the eye finds the thing
- * that started each exchange by SHAPE rather than by reading — the same reason
- * a diff gets its own surface. Rows a person can click to bring back are worth
- * looking clickable.
- *
- * `out.userAt` maps the index of a drawn line to the message it came from, so a
- * click in the feed can put that message back on the input line without
- * re-deriving anything from the painted text. See ui/mouse.js.
- */
-function userBlock(out, text, rows, width, P) {
-  const w = Math.max(8, width);
-  let first = true;
-  for (const row of rows) {
-    const body = (first ? '❯ ' : '  ') + row;
-    out.userAt[out.length] = text;
-    // NO BASE GUTTER HERE. The content frame owns the outer margin and the layout
-    // positions this whole region inside it (ui/views.js `contentBounds`), so a
-    // two-column indent of our own would be counted twice. `body` still carries
-    // the `❯ ` marker and the alignment under it, which is structure rather than
-    // margin.
-    out.push(P.surface(T.pad(body, w)));
-    first = false;
-  }
-}
+// HOW A USER MESSAGE IS DRAWN lives in ui/feeduser.js — see its header for
+// why (the god-object guard was pointing at exactly this seam).
+const { userBlock, userRows } = require('./feeduser');
 
 function renderFeed(entries, width) {
   const { P } = require('./paint');
@@ -579,14 +555,15 @@ function renderFeed(entries, width) {
     // several messages.
     if (e.kind === 'user') {
       let j = i;
-      const rows = [];
+      const run = [];
       let source = '';
       while (j < entries.length && entries[j].kind === 'user') {
         if (!source && entries[j].source) source = entries[j].source;
-        for (const row of V().wrap(entries[j].text || '', Math.max(12, width - indent.length))) rows.push(row);
+        run.push(entries[j].text || '');
         j += 1;
       }
-      userBlock(out, source || rows.join(String.fromCharCode(10)), rows, width, P);
+      const { raw, rows } = userRows(run, Math.max(12, width - indent.length));
+      userBlock(out, source || raw, rows, width, P);
       i = j - 1;
       continue;
     }

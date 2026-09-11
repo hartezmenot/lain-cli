@@ -16,6 +16,7 @@ module.exports = async () => {
     ['whatsapp', whatsapp, requests => new whatsapp.WhatsApp({}, { http: { request: async (route, opts) => { requests.push({ route, opts }); return { id: 'upload', messages: [{ id: 'receipt' }] }; } } })],
   ]) await test(`BOT CONFORMANCE: ${name} sends, respects capabilities, handles files and rejects invented actions`, async () => {
     const requests = [], adapter = make(requests), caps = descriptor(mod.caps); adapter.caps = caps;
+    if (name === 'telegram') adapter.mediaProtocol = 1; // Fixture advertises the current Rust media RPC.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lain-bot-conformance-'));
     const target = { platform: name, accountId: 'default', chatId: '123456', senderId: '123456', replyTo: '765432', timestamp: Date.now() };
     try {
@@ -31,8 +32,15 @@ module.exports = async () => {
       if (caps.mediaOut) {
         const result = await d.sendFile(target, { name: 'evidence.txt', mime: 'text/plain', bytes: Buffer.from('actual file bytes') }, { id: 'file', turnId: 'task', artifactId: 'artifact' });
         assert.equal(result[0].state, 'delivered');
-        const form = requests.find(c => c.opts?.form)?.opts.form; assert.ok(form instanceof FormData);
-        const blob = form.get(name === 'discord' ? 'files[0]' : 'file'); assert.equal(await blob.text(), 'actual file bytes');
+        if (name === 'telegram') {
+          const rpc = requests.find(c => c.op === 'remote_gateway_send_media');
+          assert.equal(Buffer.from(rpc.data, 'base64').toString(), 'actual file bytes');
+          assert.equal(rpc.params.chat_id, target.chatId); assert.equal(rpc.name, 'evidence.txt');
+          assert.equal(rpc.path, undefined); assert.equal(rpc.token, undefined); assert.equal(rpc.url, undefined);
+        } else {
+          const form = requests.find(c => c.opts?.form)?.opts.form; assert.ok(form instanceof FormData);
+          const blob = form.get(name === 'discord' ? 'files[0]' : 'file'); assert.equal(await blob.text(), 'actual file bytes');
+        }
         assert.ok(!fs.readFileSync(path.join(dir, 'transport.json'), 'utf8').includes('actual file bytes'));
       }
     } finally { await adapter.stop(); fs.rmSync(dir, { recursive: true, force: true }); }

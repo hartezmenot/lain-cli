@@ -1150,22 +1150,40 @@ No mode opens `C:\Windows`, `/etc` or `~/.ssh` without asking. `/trust` still
 decides what THIS directory is allowed to do, and `/trust strict` and
 `/trust auto` are the same setting under older names.
 
-### `/external <what you want>`
+### `/source` — which model answers a chat turn
 
-Everything goes through LAIN first. It reads what you asked, gathers the session
-facts that are relevant, and shows you the exact bytes that would leave. Nothing
-is sent until you say so, and drafting costs no tokens and opens no socket.
+A chat turn can be answered by LAIN's own runtime, by ChatGPT.com or by
+Gemini.google.com. The website sources need **no API key**: they drive a browser
+window you are logged into, and you do the logging in.
 
 ```
-/external create a plan for this
-/external this looks like a bug
-/external human write a complaint about the build
+/source                     what is selected, and what each source would cost
+/source chatgpt             choose ChatGPT.com  (or: gemini, lain)
+/source connect             open it; log in there if it asks
+/source models              what THIS account can actually use
+/source use gpt-5.2         a specific model — never "whatever is active"
 ```
 
-Then `Send it` in the panel, or `/external send` where there is no panel.
-`/external show` prints the held draft; `/external cancel` drops it.
-`/external` with no arguments still chooses WHO the external actor is, and
-`/external <model-name>` — one token, no spaces — still selects a model.
+Then just ask. There is no verb to remember: the next question goes to the
+selected source and the answer lands in the same session history as everything
+else, marked with who said it.
+
+**Selecting a website changes who answers a question. It never changes who
+writes a file.** Ask for an explanation and ChatGPT answers; say "implement the
+fix and run the tests" and LAIN's own runtime does it, with the tools, the
+permission gate, the checkpoints and the verification contract — a consulted
+website has none of those and is never given any.
+
+What leaves your machine is bounded and redacted before you can even preview it:
+the question, and on a first turn a handful of session facts and the recent
+exchange. Never tool output, command output, file bodies or credentials.
+
+`/source disconnect` stops using a source and leaves your login alone;
+`/source forget` removes the saved login. `/source check chatgpt` runs a live
+end-to-end certification by hand — no test tier ever contacts either site.
+
+(This replaces `/external`, which was a draft-and-dispatch command. A second
+opinion is a *selection* now, not a verb.)
 
 ## Tests, as LAIN sees them
 

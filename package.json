@@ -26,7 +26,8 @@
     "README.md",
     "docs/HARNESS.md",
     "docs/BOT.md",
-    "docs/BOT-ARCHITECTURE.md"
+    "docs/BOT-ARCHITECTURE.md",
+    "docs/MODEL-SOURCES.md"
   ],
   "scripts": {
     "start": "node bin/lain.js",

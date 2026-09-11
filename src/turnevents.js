@@ -496,10 +496,36 @@ const WHY = {
   blocked: 'it was blocked for producing no new evidence',
   'no-credential': 'there is no usable credential',
 };
+/**
+ * ENDINGS THAT ARE NOT NEWS, AND MUST NOT BECOME DURABLE GLUE.
+ *
+ * `aborted` means THE PERSON STOPPED IT — they pressed Escape, they know, and
+ * ui/status.js already rests the live row on `INTERRUPTED · you stopped the
+ * turn; nothing was lost` until they do something else. Writing it into
+ * `session.actors` as well reported one event twice, and the durable copy
+ * outlived the state by the rest of the session:
+ *
+ *     ERROR
+ *       ERROR — aborted
+ *     NOTE
+ *       PROVIDER REFUSED — the provider stopped answering
+ *
+ * Interrupt a stuck turn four times and that is eight lines of scrollback about
+ * nothing that happened. `stopReason` stays on the RECORD either way — this is
+ * about the primary transcript, not about evidence.
+ *
+ * EVERY OTHER ENDING IS KEPT. A provider that never came back, a missing
+ * credential, a blocked task, a step limit — those are facts about the task
+ * that must survive the turn and `/resume`, and none of them is something the
+ * person already knows because they did it.
+ */
+const NOT_NEWS = new Set(['aborted']);
+
 function noteInterruption(app, record) {
   if (!app.ui.enabled || !record) return;
   const why = record.stopReason;
   if (!why || why === 'end') return;
+  if (NOT_NEWS.has(why)) return;
   // WHO ACTUALLY STOPPED, because "MODEL INTERRUPTED — the provider stopped
   // answering" names the wrong one twice over: the model did not interrupt
   // anything and nobody interrupted it. — a provider failure must not read

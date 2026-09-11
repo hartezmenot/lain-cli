@@ -45,6 +45,21 @@ const slowScript = (secs = 3) => [
   { text: 'Done.' },
 ];
 
+/**
+ * OUTAGE FIXTURES ARE SIZED FROM THE BUDGET, NOT FROM A NUMBER.
+ *
+ * The retry budget has been 2, then 5, then 10. Every time it moved, a
+ * fixture of N hardcoded refusals stopped exhausting it: the script ran out
+ * mid-retry, the mock answered SUCCESSFULLY, and a test about a provider
+ * that never comes back started passing through to a happy path — which
+ * these tests' own comments call the one thing they must not allow.
+ *
+ * Derived from backoff.js, they follow the policy instead of failing on it.
+ */
+const { MAX_RETRIES } = require('../../src/backoff');
+/** Enough refusals to outlast the budget, with room for the first request. */
+const OUTAGE = (make) => Array.from({ length: MAX_RETRIES + 4 }, make);
+
 module.exports = async function () {
   await test('SEE: the screen says THINKING while it waits for the model', async () => {
     const r = await runCli([], { cwd: tmpdir('live-'), env: tui(), stdin: 'audit it\n', script: slowScript(1) });
@@ -237,8 +252,7 @@ module.exports = async function () {
       cwd: tmpdir('live-'), env: tui(), stdin: 'do the thing\n',
       // AN OUTAGE THAT NEVER LIFTS: a script that runs out mid-retry answers
       // SUCCESSFULLY, which is the one thing this test must not let happen.
-      // Three used to be enough when the budget was 2; it is 5 now ().
-      script: Array.from({ length: 8 }, () => ({ error: { code: 'ECONNRESET', message: 'connection reset' } })),
+      script: OUTAGE(() => ({ error: { code: 'ECONNRESET', message: 'connection reset' } })),
     });
     const out = plain(r.out);
     // Both must be true: the header carries the outcome AND the feed explains.
@@ -251,7 +265,7 @@ module.exports = async function () {
     const r = await runCli([], {
       cwd: tmpdir('live-'), env: tui(),
       stdinSteps: ['do the thing\n', '/status\n'], stepDelayMs: 700,
-      script: Array.from({ length: 8 }, () => ({ error: { status: 503, message: 'upstream down' } })),
+      script: OUTAGE(() => ({ error: { status: 503, message: 'upstream down' } })),
       timeoutMs: 30000,
     });
     assert.strictEqual(r.code, 0, 'a provider failure must not kill the REPL');

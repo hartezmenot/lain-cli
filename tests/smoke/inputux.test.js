@@ -295,8 +295,16 @@ module.exports = async function () {
     const r = await runCli([], { env: tui, script, stdin: `/mo${ESC}${CLEAR}/exit${CR}`, timeoutMs: 45000 });
     assert.strictEqual(r.code, 0);
     const items = menuFor(r.out, '/mo', 'COMMANDS').join('\n');
-    assertIncludes(items, '/models', 'the filtered list kept /models');
-    assertIncludes(items, '/model', 'and /model');
+    assertIncludes(items, '/model', 'the filtered list kept /model');
+    // ---- AND `/models` IS DELIBERATELY NOT OFFERED --------------------
+    //
+    // This asserted that BOTH appeared, which was true and was the problem:
+    // two names for one picker meant a choice to make every time and nothing on
+    // screen saying which was which. `/model` is the single advertised command;
+    // `/models` survives as a hidden compatibility alias that still RUNS when
+    // typed (asserted in smoke/commands-audit.test.js) and is proposed nowhere.
+    // See commands.js `define` for what `hidden` means.
+    assert.ok(!/\/models\b/.test(items), `a compatibility alias must not be offered:\n${items}`);
     assert.ok(!/\/exit\b/.test(items), `unrelated commands were filtered out:\n${items}`);
   });
 

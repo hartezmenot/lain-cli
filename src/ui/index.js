@@ -210,7 +210,7 @@ class UI {
   // out when this file reached the architecture guard; see that file's header
   // for why it is a real seam rather than a place to put lines.
   clearExtras() { return require('./turnstate').clearExtras(this); }
-  beginTurn() { return require('./turnstate').beginTurn(this); }
+  beginTurn(verdict = null) { return require('./turnstate').beginTurn(this, verdict); }
   endTurn() { return require('./turnstate').endTurn(this); }
   setRunning(name, target) { return require('./turnstate').setRunning(this, name, target); }
   setPhase(next) { return require('./turnstate').setPhase(this, next); }

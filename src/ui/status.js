@@ -472,14 +472,28 @@ function statusStrip(s = {}, width = 80, rows = 1, now = Date.now()) {
   //
   // The banner keeps it: progress belongs beside the objective it measures, and
   // it is stable — it changes when a step completes, which is minutes apart.
-  // This row is the one that moves every second, and it now answers the
-  // question a person watching a long turn actually has and could not ask
-  // anywhere: what is this costing. See `tokens` above.
   //
-  // NARROW TERMINALS SHED IT ENTIRELY rather than abbreviating it into
-  // something unreadable — the live row's job is to prove LAIN is alive, and
-  // that must never be crowded out by an accounting figure.
-  const prog = w >= 56 ? tokens(s) : '';
+  // ---- AND THE ACCOUNTING CLUSTER THAT REPLACED IT IS GONE TOO ----------
+  //
+  // `↑86M ⚡16M ↓3.7M +…` — four session totals on the row that moves every
+  // second. Observed on a real screen and it is unreadable in the way only
+  // technically-correct output can be: those are LIFETIME SESSION figures, so
+  // within any one turn they barely move, and a number that does not change
+  // beside a spinner that does reads as a frozen screen. Two of the four
+  // (input, cache) are diagnostics nobody acts on mid-turn, and the fourth was
+  // an ellipsis most of the time because no gateway states usage until the end.
+  //
+  // ONE AUTHORITATIVE TOKEN SIGNAL ON THE PRIMARY SURFACE: the header's OUTPUT
+  // figure (ui/views.js `outputLabel`), which climbs while the model writes,
+  // marks itself `~` while it is an estimate, and becomes the provider's own
+  // count when the receipt lands. That is the number that answers "is it still
+  // coming, and how much of it is there".
+  //
+  // EVERYTHING ELSE IS `/token`, which is where per-request input, cache
+  // reads, cache writes and the MEASURED/ESTIMATED split already live in full.
+  // A figure that cannot be maintained authoritatively on a row this small does
+  // not belong on it.
+  const prog = '';
   // ---- THE MARK SAYS WHICH OF FIVE THINGS THIS ROW IS -------------------
   //
   // ONE VOCABULARY WITH THE WINDOW TITLE, which is the point: the glyph in the

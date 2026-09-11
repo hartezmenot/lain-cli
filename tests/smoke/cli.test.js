@@ -90,13 +90,21 @@ module.exports = async function () {
 
   // ---- provider outage & recovery -----------------------------------------
 
-  // AN OUTAGE THAT NEVER LIFTS. Three refusals used to exhaust the retry
-  // budget when it was 2; it is 5 now (, so a gateway having a bad thirty
-  // seconds is ridden out), and three of them would simply be retried through
-  // — which is the new behaviour working. These tests are about what happens
-  // when the provider never comes back, so it never comes back.
+  // ---- AN OUTAGE THAT NEVER LIFTS, AND SIZED SO IT STAYS THAT WAY -------
+  //
+  // The retry budget has grown three times — 2, then 5, then 10 — and each
+  // time a fixture of hardcoded refusals quietly stopped exhausting it: the
+  // script ran out, the mock answered normally, the outage lifted, and a test
+  // about a provider that never comes back started failing on the assertion
+  // rather than on the behaviour. The comment here was rewritten twice for
+  // exactly that.
+  //
+  // DERIVED FROM THE BUDGET, so it cannot go stale again. A few spare entries
+  // past MAX_RETRIES, because a turn may make one request before the retry
+  // loop begins.
+  const { MAX_RETRIES } = require('../../src/backoff');
   const dead = { error: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:20128' } };
-  const outage = Array.from({ length: 8 }, () => dead);
+  const outage = Array.from({ length: MAX_RETRIES + 4 }, () => dead);
 
   await test('SMOKE: provider outage does not kill the REPL, and /status still works', async () => {
     const r = await runCli([], {
@@ -115,7 +123,7 @@ module.exports = async function () {
   await test('SMOKE: after an outage the breaker holds — no retry storm', async () => {
     const r = await runCli([], {
       stdin: 'try now\ntry again\n/exit\n',
-      script: outage,           // only THREE failures scripted
+      script: outage,           // an outage that never lifts — see above
       timeoutMs: 45000,
     });
     assert.strictEqual(r.code, 0);

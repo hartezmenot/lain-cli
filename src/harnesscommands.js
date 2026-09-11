@@ -184,6 +184,21 @@ function artifacts(app, C, rest) {
 async function env(app, C, rest) {
   const h = harnessOf(app);
   const what = String(rest || '').trim().toLowerCase();
+  // ---- THE EXECUTION-ENVIRONMENT SECTIONS ------------------------------
+  //
+  // WHERE work runs and WHICH browser runs it — see envcommand.js. They are
+  // sections of THIS command rather than a command of their own: a second
+  // `/env` is what the registry rejected, and rightly.
+  //
+  // `chromium` and `vm` are handled entirely there (they take verbs and can
+  // act); everything else falls through and this function goes on owning the
+  // process, browser-availability and health sections it always owned.
+  const words = String(rest || '').trim().split(/\s+/).filter(Boolean);
+  if (words[0] === 'chromium' || words[0] === 'vm') {
+    await require('./envcommand').sections(app, C, words);
+    return;
+  }
+  if (!what) await require('./envcommand').sections(app, C, []);
   if (!what || what === 'processes' || what === 'ports') {
     const procs = h.processes.list();
     app.render.write('\n' + C.bold('Processes') + '\n');
@@ -308,8 +323,8 @@ function register({ define, DURING_TURN, C }) {
 
   define('/env', {
     surface: true,
-    args: '[processes|browser|health]',
-    desc: 'The managed environment: services, ports, browser availability',
+    args: '[processes|browser|health|chromium [install]|vm <id> [start|stop]]',
+    desc: 'The execution environment: host or VM, the Harness browser, services and ports',
     async run(app, { rest }) { await env(app, C, rest); },
   });
 

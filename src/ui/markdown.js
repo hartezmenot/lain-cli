@@ -357,6 +357,20 @@ const HEADING = /^\s*(#{1,6})\s+(.*)$/;
 const BULLET_RE = /^(\s*)[-*+]\s+(.+)$/;
 const NUMBERED = /^(\s*)(\d{1,3})[.)]\s+(.+)$/;
 const RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
+/**
+ * `============` — A SEPARATOR LINE, AND THE STRUCTURE AROUND IT.
+ *
+ * `=` appeared in NO rule here — not FENCE, not RULE (`-`/`*`/`_`), not
+ * HEADING — so a separator, the section title under it and the paragraph after
+ * it all fell through to the prose branch and were word-wrapped into one
+ * sentence: `0. ABSOLUTE PROJECT BOUNDARY ===== DO NOT modify LAIN...`.
+ *
+ * DETERMINISTIC AND NARROW. A section is separator / one non-empty line /
+ * separator, or a line underlined by `=`; nothing is promoted for being short,
+ * uppercase or numbered. `-` underlining is deliberately NOT setext here —
+ * `---` is already RULE, and re-reading it would change existing content.
+ */
+const BANNER = /^\s*={3,}\s*$/;
 const QUOTE = /^\s*>\s?(.*)$/;
 
 /**
@@ -563,6 +577,32 @@ function render(lines, width) {
       continue;
     }
 
+    // SECTIONS AND `=` UNDERLINES. After the fence, so `=` inside a code
+    // block stays code. See BANNER for why this is narrow.
+    if (BANNER.test(line)) {
+      const title = String(src[i + 1] == null ? '' : src[i + 1]).trim();
+      const closing = String(src[i + 2] == null ? '' : src[i + 2]);
+      if (title && !BANNER.test(title) && BANNER.test(closing)) {
+        push('');
+        for (const p of wrap(inline(title), measure)) push(P.head(p));
+        push(P.meta('─'.repeat(Math.min(cols, 48))));
+        i += 2;                               // the title and the closing bar
+        continue;
+      }
+      // A lone separator is a DIVIDER, drawn in LAIN's own rule so a wall of
+      // `=` is not the loudest thing on the screen.
+      push(P.meta('─'.repeat(Math.min(cols, 48))));
+      continue;
+    }
+    // `TITLE` on one line, `=====` under it — setext H1.
+    if (line.trim() && BANNER.test(String(src[i + 1] == null ? '' : src[i + 1]))) {
+      push('');
+      for (const p of wrap(inline(line.trim()), measure)) push(P.head(p));
+      push(P.meta('─'.repeat(Math.min(cols, 48))));
+      i += 1;
+      continue;
+    }
+
     // ---- HEADINGS -------------------------------------------------------
     const h = HEADING.exec(line);
     if (h) {
@@ -635,7 +675,11 @@ function render(lines, width) {
  */
 function looksMarked(text) {
   const s = String(text == null ? '' : text);
-  return /(?:^|\n)\s*(?:```|~~~|#{1,6}\s|[-*+]\s|\d{1,3}[.)]\s|>\s)/.test(s)
+  // A SEPARATOR IS STRUCTURE. Without this, a brief written entirely in
+  // `=====` banners and paragraphs never reached this renderer at all: it took
+  // the plain-prose path and arrived as one wall of text.
+  return /(?:^|\n)[ \t]*={3,}[ \t]*(?:\n|$)/.test(s)
+    || /(?:^|\n)\s*(?:```|~~~|#{1,6}\s|[-*+]\s|\d{1,3}[.)]\s|>\s)/.test(s)
     || /`[^`\n]+`/.test(s)
     || /\*\*[^*\n]+\*\*/.test(s)
     // A BARE SCHEMA HEADING IS STRUCTURE TOO, and by exactly the argument

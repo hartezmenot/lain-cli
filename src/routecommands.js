@@ -27,207 +27,59 @@ function register({ define, REGISTRY, C }) {
   /** Re-read what the routes serve. The implementation lives in catalog.js. */
   const refreshCatalog = (app, opts) => catalogMod.refreshAndReport(app, opts, { C });
   /**
-   * THE SECOND OPINION — WHO reviews LAIN's investigations.
+   * ---- `/external` IS RETIRED, AND IT IS NOT COMING BACK ------------------
    *
-   * This used to be a model picker: `/external` meant "which other model from
-   * the catalog", so the top-level question was the same 900-row list `/models`
-   * opens, and a reviewer that is NOT a model in that catalog — a chat page you
-   * are logged into, a person reading the packet — could not be expressed at
-   * all. WHO is the first question; WHICH MODEL is a second one, asked only of
-   * the API actor, and asked through the one model picker rather than a copy of
-   * it. See actors.js.
+   * It lived here and was a DRAFT-AND-DISPATCH verb: compose a packet, preview
+   * it, confirm it, send it once, print the reply, hand it back as advice. Four
+   * files of machinery — external.js, actors.js, externalrequest.js and
+   * investigation.js's relay — and a person who wanted a second opinion had to
+   * remember a command to get one.
    *
-   * `/model` and `/models` are untouched and still browse the catalog. Off by
-   * default, and `/troubleshoot` says NOT CONFIGURED rather than quietly using
-   * LAIN's own model and calling the result an external review.
+   * THE USEFUL HALF OF IT WAS NEVER THE COMMAND. It was "a model other than
+   * LAIN's own looks at this", and that is a PROPERTY OF THE SESSION, not a verb:
+   * once ChatGPT.com is the selected chat source, the next ordinary sentence goes
+   * to it and the answer lands in the same session history as everything else.
+   * See src/modelsource and `/source`.
+   *
+   * WHAT WAS REUSED rather than rewritten:
+   *   · the bounded, redacted session-facts packet   -> modelsource/context.js
+   *   · the call ledger (dispatched / responded /    -> externalstate.js, kept
+   *     failed / timed out, and RESPONDED REQUIRES      whole and now written by
+   *     A RESPONSE)                                     the web sources
+   *   · the overclaim check — a consulted model that -> modelsource/contract.js
+   *     claims to have ACTED is flagged
+   *   · "advisory input, not a result, and not from  -> chatdispatch.js
+   *     the user"
+   *
+   * WHAT WAS RETIRED: the actor taxonomy (API / HUMAN / REVERSE), the clipboard
+   * relay, the draft/confirm/send state machine, and the bounded LAIN → EXTERNAL
+   * → LAIN investigation relay — which had been unreachable since `/troubleshoot`
+   * was removed and was recorded as orphaned in docs/STATUS.md.
+   *
+   * TWO CONSULTATION SYSTEMS WOULD BE WORSE THAN EITHER. That is the whole
+   * argument for removing rather than keeping this beside the new one.
    */
-  define('/external', {
-    // MACHINERY: about LAIN, not about the work. Goes to the command panel.
-    surface: true,
-    // (`browser` was listed here as a subcommand until the actor it named was
-    // removed with the browser in 2026-09; a typed `/external browser` now
-    // falls through to the request path like any other words.)
-    args: '[<what you want> | send | show | cancel | api <model> | human | off | rounds <n>]',
-    desc: 'Ask something outside LAIN — drafted here first, sent only when you say so',
-    async run(app, { args, rest }) {
-      const externalMod = require('./external');
-      const actorsMod = require('./actors');
-      const request = require('./externalrequest');
 
-      /** Every actor and what it would cost, in text. The non-TTY surface. */
-      const show = () => {
-        const st = actorsMod.status(app);
-        app.render.write('\n' + C.bold('External actor') + C.dim('  — who reviews an investigation\n'));
-        if (st.off) app.render.write('  ' + C.yellow('OFF') + C.dim(' — /troubleshoot stays local\n'));
-        for (const a of st.actors) {
-          const mark = a.chosen ? C.green('● ') : '  ';
-          const state = a.ok ? C.green('ready') : C.yellow(a.why || 'NOT CONFIGURED');
-          app.render.write(`${mark}${a.label.padEnd(30)}${state}\n`);
-          if (a.chosen && a.model) app.render.write(C.dim(`    model ${a.model} · via ${a.connection || 'the route that serves it'}\n`));
-          if (a.chosen) app.render.write(C.dim(`    ${a.automated ? 'automated' : 'you hand the packet over yourself'} · ${a.maxRounds} rounds\n`));
-        }
-        app.render.write(C.dim('  /external api <model> · human · rounds <n> · off\n'));
-      };
-
-      /** Record a chosen actor and say what it now means. */
-      const choose = (kind, extra = {}) => {
-        const next = { ...(app.cfg.externalTroubleshoot || {}), ...extra, actor: kind, enabled: true };
-        if (!next.maxRounds) next.maxRounds = externalMod.DEFAULT_MAX_ROUNDS;
-        app.cfg.externalTroubleshoot = next;
-        config.save(app.cfg);
-        const s = actorsMod.status(app).actors.find((a) => a.kind === kind) || {};
-        app.render.write(C.green('  ✓ external actor: ') + C.bold(s.label || kind) + '\n');
-        if (kind === actorsMod.KIND.HUMAN) {
-          app.render.write(C.dim('    The packet goes to your clipboard. Paste the reply back when you have it.\n'));
-        }
-        return next;
-      };
-
-      // A TTY GETS THE ACTOR MENU, not a wall of text and not a model list.
-      if (!rest && app.ui && app.ui.enabled) {
-        const { externalActorAdapter } = require('./ui/pickers');
-        let picked = null;
-        await app.ui.ask(externalActorAdapter({
-          status: actorsMod.status(app),
-          onPick: (p) => { picked = p; },
-          // THE SECOND QUESTION, and only for the actor that has one. It is the
-          // same picker `/models` opens, filtered by nothing — one model list.
-          onPickApi: () => {
-            const cat = app.catalog();
-            if (!cat || !cat.models.length) return null;
-            const { modelsAdapter } = require('./ui/panel');
-            return modelsAdapter({
-              catalog: cat,
-              current: (app.cfg.externalTroubleshoot || {}).model || null,
-              onPickRoute: (model, conn) => {
-                picked = { kind: actorsMod.KIND.API, model: model.id, connection: conn.connectionId };
-              },
-            });
-          },
-        }));
-        if (!picked) { app.render.write(C.dim('  unchanged.\n')); return; }
-        if (picked.kind === 'OFF') {
-          app.cfg.externalTroubleshoot = { ...(app.cfg.externalTroubleshoot || {}), enabled: false };
-          config.save(app.cfg);
-          app.render.write(C.dim('  external reviewer off — /troubleshoot stays local.\n'));
-          return;
-        }
-        if (picked.unavailable) {
-          // A declared seam that is not built says so, and changes nothing.
-          app.render.write('  ' + C.yellow(picked.unavailable) + '\n');
-          return;
-        }
-        choose(picked.kind, picked.model ? { model: picked.model, connection: picked.connection } : {});
-        return;
-      }
-
-      if (!rest) { show(); return; }
-      const sub = String(args[0] || '').toLowerCase();
-      const cfg = { ...(app.cfg.externalTroubleshoot || {}) };
-
-      // ---- THE REQUEST VERBS, WHICH ARE NOT CONFIGURATION -----------------
-      //
-      // `send` is the typed form of "send it" for a session with no panel to
-      // click; `show` and `cancel` are what you do to a draft that is being
-      // held. All three act on the pending draft and none of them changes a
-      // setting, so they are answered before the actor subcommands below.
-      if (sub === 'send' || sub === 'dispatch') { await request.dispatch(app, { C }); return; }
-      if (sub === 'show' || sub === 'draft') { request.show(app, { C }); return; }
-      if (sub === 'cancel' || sub === 'discard') { request.cancel(app, { C }); return; }
-      // `status` and `list` are single tokens, so without this they fall
-      // through to the model-name shorthand below and become a catalog search:
-      // `/external status` answered "No model matches \"status\"". They are
-      // words people type at a CLI far more often than they are model names.
-      if (sub === 'status' || sub === 'list') { show(); return; }
-
-      // AN ACTOR BY NAME, for a pipe and for anyone who would rather type.
-      //
-      // WITH WORDS AFTER IT, THE NAME IS AN ADDRESS RATHER THAN A SETTING.
-      // `/external human` chooses the human actor; `/external human this
-      // looks like a bug` chooses it AND drafts that request for it. Both go
-      // through LAIN — the second one still draws the packet, still shows it,
-      // and still sends nothing until it is confirmed. That is what keeps the
-      // arrow User -> LAIN -> reviewer rather than User -> reviewer.
-      // (A `browser` branch lived here — the Chromium-driving actor — removed
-      // with the browser in 2026-09 per the browser-ownership ruling. A typed
-      // `/external browser` now falls through to the request path below.)
-      const after = rest.slice(String(args[0] || '').length).trim();
-      if (sub === 'human' || sub === 'paste' || sub === 'relay') {
-        choose(actorsMod.KIND.HUMAN);
-        if (after) await request.runRequest(app, after, { C, actorKind: actorsMod.KIND.HUMAN });
-        return;
-      }
-      if (sub === 'reverse') {
-        app.render.write('  ' + C.yellow(new actorsMod.ReverseActor(app, app.cfg).status().why) + '\n');
-        app.render.write(C.dim('    capabilities it would need: process.select, memory.read, screen.inspect, symbol.resolve\n'));
-        return;
-      }
-
-      if (sub === 'off' || sub === 'disable') {
-        cfg.enabled = false;
-        app.cfg.externalTroubleshoot = cfg;
-        config.save(app.cfg);
-        app.render.write(C.dim('  external reviewer off — /troubleshoot stays local.\n'));
-        return;
-      }
-      if (sub === 'rounds') {
-        const n = Number(args[1]);
-        if (!n || n < 1 || n > 6) { app.render.write(C.dim('  Usage: /external rounds <1-6>\n')); return; }
-        cfg.maxRounds = n;
-        app.cfg.externalTroubleshoot = cfg;
-        config.save(app.cfg);
-        app.render.write(C.green(`  max rounds ${n}`) + C.dim(' — the relay stops there whatever happens\n'));
-        return;
-      }
-
-      // ---- ANYTHING ELSE IS SOMETHING THE USER WANTS ASKED ----------------
-      //
-      // THE DEFECT THIS FIXES. Everything below is a MODEL-CATALOG SEARCH, and
-      // it used to be the only thing free text could reach. So `/external
-      // create a plan for this` searched 900 model names for the phrase "create
-      // a plan for this" and answered "No model matches" — as did every other
-      // sentence a person would naturally type after the word external.
-      //
-      // The shorthand it protects is real and still works: `/external <model>`
-      // means `/external api <model>`. A model name is ONE token and a sentence
-      // has spaces in it, which is the whole discriminator — see
-      // externalrequest.looksLikeModelName.
-      if (sub !== 'api' && !request.looksLikeModelName(rest)) {
-        await request.runRequest(app, rest, { C });
-        return;
-      }
-
-      // THE API ACTOR NEEDS A MODEL, and a name is a SEARCH — exactly as it is
-      // for /models, committing only when the answer is unambiguous. `api` is
-      // optional so an existing `/external <model>` keeps working unchanged.
-      const query = (sub === 'api' ? rest.slice(args[0].length).trim() : rest);
-      if (!query) {
-        app.render.write(C.dim('  Usage: /external api <model>   (/models to browse names)\n'));
-        return;
-      }
-      await app.ensureCatalog();
-      const cat = app.catalog();
-      const hits = catalogMod.search(cat, query);
-      if (!hits.length) { app.render.write(C.yellow(`  No model matches "${query}".`) + C.dim(' /models to browse.\n')); return; }
-      if (hits.length > 1) {
-        app.render.write(C.dim(`\n  ${hits.length} models match "${query}" — narrow it:\n`));
-        for (const m of hits.slice(0, 8)) app.render.write('    ' + m.displayName + '\n');
-        return;
-      }
-      cfg.enabled = true;
-      cfg.actor = actorsMod.KIND.API;
-      cfg.model = hits[0].id;
-      cfg.connection = (hits[0].connections[0] || {}).connectionId || null;
-      if (!cfg.maxRounds) cfg.maxRounds = externalMod.DEFAULT_MAX_ROUNDS;
-      app.cfg.externalTroubleshoot = cfg;
-      config.save(app.cfg);
-      app.render.write(C.green('  ✓ external reviewer: ') + C.bold(hits[0].displayName) + '\n');
-      app.render.write(C.dim(`    via ${cfg.connection || 'the route that serves it'} · ${cfg.maxRounds} rounds\n`));
-      app.render.write(C.dim('    /troubleshoot now runs LAIN → external → LAIN, bounded.\n'));
-    },
-  });
-
-  define('/models', {
+  /**
+   * ONE MODEL COMMAND, AND IT IS THE SINGULAR ONE.
+   *
+   * ------------------------------------------------------------------------
+   * THE HISTORY, because the end state only makes sense against it.
+   *
+   * There were two commands with two BEHAVIOURS: `/models` browsed, and `/model`
+   * selected the first fuzzy match without showing what else matched. A previous
+   * pass fixed the dangerous half of that by making `/model` forward to the one
+   * picker — but it left both names advertised, so a person still had to know
+   * two words for one thing and still had to choose between them every time.
+   *
+   * `/model` is now THE command. `/models` survives as a hidden compatibility
+   * alias: it still runs when typed, for anyone with it in their fingers or in a
+   * script, and it appears in neither `/help` nor the palette. See commands.js
+   * `define` for what `hidden` means and what it must never be used for.
+   *
+   * The graphical picker is the Harness application's; this is the terminal's.
+   */
+  define('/model', {
     // MACHINERY: about LAIN, not about the work. Goes to the command panel.
     surface: true,
     args: '[name|refresh]',
@@ -235,21 +87,13 @@ function register({ define, REGISTRY, C }) {
     run(app, ctx) { return require('./modelcommand').pickCommand(app, ctx, { C, config, refreshCatalog }); },
   });
 
-  define('/model', {
-    // MACHINERY: about LAIN, not about the work. Goes to the command panel.
+  define('/models', {
     surface: true,
-    args: '[name] — alias of /models',
-    desc: 'Alias for /models — the same picker, the same filter',
-    /**
-     * AN ALIAS, NOT A SECOND IMPLEMENTATION.
-     *
-     * There were two model commands with two behaviours: `/models` browsed and
-     * `/model` selected the first fuzzy match without showing you what else
-     * matched. Nobody should have to know which of two words gets them a list and
-     * which gets them a silent guess — so `/model` now forwards, verbatim, to the
-     * one picker. One state machine, one filter, one Enter.
-     */
-    run(app, ctx) { return REGISTRY.get('/models').run(app, ctx); },
+    // HIDDEN: runs when typed, offered nowhere. One name is advertised.
+    hidden: true,
+    args: '[name|refresh]',
+    desc: 'Compatibility alias for /model',
+    run(app, ctx) { return REGISTRY.get('/model').run(app, ctx); },
   });
 
   // ONE effort command. V1 shipped /effort AND /efforts; there is no alias here.
@@ -301,21 +145,23 @@ function register({ define, REGISTRY, C }) {
   define('/api', {
     // MACHINERY: about LAIN, not about the work. Goes to the command panel.
     surface: true,
-    args: '[<credential>|refresh [id]|status]  — bare /api asks for a key',
-    desc: 'Give LAIN a credential, or re-read what the configured APIs serve',
+    args: '[<credential>|<connection>|refresh [id]|status]  — bare /api asks for a key',
+    desc: 'Give LAIN a credential, re-key a configured route, or re-read what the APIs serve',
     /**
-     * THREE THINGS, ONE OF WHICH IS NEW.
+     * FOUR THINGS, ONE OWNER EACH.
      *
      * `refresh` and `status` are unchanged and still route to their existing
-     * owners. What did not exist was the obvious one: handing LAIN a key.
-     * There was no way to do it from the CLI at all — a credential had to be
-     * written into config.json by hand, and the model then named by id because
-     * nothing had asked the route what it served.
+     * owners. Handing LAIN a key had no way in from the CLI at all until
+     * `credentialFlow`. The fourth is the repair for a key that STOPPED
+     * working: name a configured route — `/api lain:custom` — and its
+     * credential is replaced under the SAME connection id, so a 401 fixes the
+     * one route rather than adding a second for the same endpoint. See
+     * rekeyFlow in apicommand.js.
      *
-     * A CREDENTIAL IS ANYTHING THAT IS NOT A SUBCOMMAND, which is the only test
-     * LAIN can honestly make: every provider spells its keys differently, and a
-     * shape pattern written today refuses the provider that appears tomorrow.
-     * See apicommand.js.
+     * A CREDENTIAL IS ANYTHING THAT IS NEITHER A SUBCOMMAND NOR A ROUTE NAME,
+     * which is the only test LAIN can honestly make: every provider spells
+     * its keys differently, and a shape pattern written today refuses the
+     * provider that appears tomorrow. See apicommand.js.
      */
     async run(app, { args }) {
       const apiMod = require('./apicommand');
@@ -328,11 +174,32 @@ function register({ define, REGISTRY, C }) {
       // has already echoed the key before anything of LAIN's could mask it.
       // `refresh` is still one word away and still does exactly what it did.
       if (!first) return apiMod.credentialFlow(app, '', { C, config, refreshCatalog });
+      const sub = String(first).toLowerCase();
+      if (sub === 'refresh') { await refreshCatalog(app, { only: args[1] || null }); return; }
+      // ---- A CONFIGURED ROUTE'S NAME RE-KEYS IT ---------------------------
+      //
+      // THE ORDER IS THE WHOLE POINT. `lain:custom` is eleven characters with
+      // no spaces, so under the credential rule alone it WAS a credential —
+      // stored as an API key against a provider the user never chose, and the
+      // route then failed to authenticate for a reason nothing on screen
+      // explained. A word that names a route must repair that route, never
+      // become its credential. `connectionByName` is what decides.
+      if (apiMod.connectionByName(app, first)) {
+        return apiMod.rekeyFlow(app, first, { C, config, refreshCatalog });
+      }
       if (apiMod.looksLikeCredential(first, app.cfg)) {
         return apiMod.credentialFlow(app, String(first).trim(), { C, config, refreshCatalog });
       }
-      const sub = String(first).toLowerCase();
-      if (sub === 'refresh') { await refreshCatalog(app, { only: args[1] || null }); return; }
+      // ---- A PROVIDER'S NAME WITH NO ROUTE YET IS AN ADD ------------------
+      //
+      // `/api custom` fell through to the status view: somebody adding that
+      // route was shown the routes they already had. The name is an answer to
+      // the provider question, so it is passed as one — see credentialFlow's
+      // `preselect`. Re-keying still wins above, because a route that EXISTS
+      // must be repaired rather than duplicated.
+      if (apiMod.providerNamed(app, first)) {
+        return apiMod.credentialFlow(app, '', { C, config, refreshCatalog, preselect: first });
+      }
       // Anything else is the connection view, which already exists. One owner.
       return REGISTRY.get('/provider').run(app, { args: ['status'], rest: '' });
     },
@@ -362,7 +229,7 @@ function register({ define, REGISTRY, C }) {
           else w(C.yellow(`  ${r.id}`) + C.dim(`  no catalog — ${r.error}\n`));
         }
         const cat = app.catalog();
-        w(C.dim(`\n  ${cat.models.length} canonical model(s). /models to browse.\n`));
+        w(C.dim(`\n  ${cat.models.length} canonical model(s). /model to browse.\n`));
         return;
       }
 

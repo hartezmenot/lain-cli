@@ -76,9 +76,17 @@ module.exports = async function () {
     const mcp = m.get('MCP bridge');
     assert.strictEqual(mcp.state.word, 'MISSING');
     assert.match(mcp.note, /NOT CONFIGURED/);
-    // Nor may an unconfigured external reviewer read as a configured one.
-    assert.strictEqual(m.get('Reviewer').state.word, 'MISSING');
-    assert.match(m.get('Reviewer').note, /NOT CONFIGURED/);
+    // ---- THE CHAT MODEL SOURCE, WHICH REPLACED THE EXTERNAL REVIEWER ----
+    //
+    // The old rows asserted that an unconfigured reviewer reads as MISSING
+    // rather than as a working one. That reviewer went with `/external`; what
+    // is reported now is the session's chat SOURCE, and the equivalent honesty
+    // requirement is the second row: a website source may never be shown as
+    // holding execution authority, because it never has any.
+    assert.strictEqual(m.get('Source').state.word, 'IMPLEMENTED');
+    assert.match(m.get('Source').note, /own runtime/);
+    assert.strictEqual(m.get('Coding authority').state.word, 'IMPLEMENTED');
+    assert.match(m.get('Coding authority').note, /always LAIN/);
   });
 
   await test('HEALTH: nothing is granted until someone says yes', async () => {

@@ -289,8 +289,33 @@ module.exports = async function () {
   });
 
   await test('ARCH: exactly ONE byte-snapshot / undo system', () => {
-    const snap = files.filter((f) => /capture\s*\(.*Paths|function snapshot\b/.test(f.text)).map((f) => f.file);
+    // WHAT THIS GUARDS IS A DOMAIN, NOT A WORD. V1 had diffguard AND
+    // checkpoint: two systems that both captured FILE BYTES so a change could
+    // be put back, disagreeing about which copy was authoritative. `/undo`
+    // restores from exactly one of those, and there must go on being one.
+    //
+    // env/vmware.js uses the same English word for something else entirely: a
+    // HYPERVISOR snapshot of a guest machine, taken by `vmrun snapshot` and
+    // restored by `revertToSnapshot`. It captures no file in this project, it
+    // is not reachable from `/undo`, and renaming it would mean not calling
+    // VMware's own operation by VMware's own name. It is carved out here for
+    // the same reason the task-identity guard allows `KIND.CONTINUATION`:
+    // naming another module's vocabulary is proof of consumption, not a second
+    // implementation.
+    const VM_PROVIDER = 'env/vmware.js';
+    const snap = files
+      .filter((f) => f.file !== VM_PROVIDER)
+      .filter((f) => /capture\s*\(.*Paths|function snapshot\b/.test(f.text))
+      .map((f) => f.file);
     assert.ok(snap.length <= 1, `two snapshot systems: ${snap.join(', ')} (V1 had diffguard AND checkpoint)`);
+    // AND THE CARVE-OUT IS ITSELF CHECKED. If the VM provider ever starts
+    // capturing project files, it has entered the guarded domain and this
+    // exemption must be revisited rather than silently protecting it.
+    const vm = files.find((f) => f.file === VM_PROVIDER);
+    if (vm) {
+      assert.ok(!/capture\s*\(.*Paths/.test(vm.text),
+        'env/vmware.js has started capturing file paths — it is no longer only a hypervisor snapshot');
+    }
   });
 
   await test('ARCH: no plan may be read from the project filesystem', () => {

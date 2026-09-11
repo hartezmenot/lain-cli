@@ -1,23 +1,24 @@
 'use strict';
 
 /**
- * THE RELAY, THE DASHBOARD AND THE DESKTOP SEAM — through the real binary.
+ * THE CHAT SOURCES, THE DASHBOARD AND THE DESKTOP SEAM — through the real binary.
  *
  * A unit test proves a function returns the right thing; only this proves the
  * thing reaches a user. Everything here spawns bin/lain.js and asserts on what
  * a person would have read, or talks to the dashboard over real HTTP.
  *
- * LIMITATION, STATED: the model is the scripted mock provider, so both LAIN's
- * own model and the external reviewer are that double. The PATH is real — the
- * binary, the config, the provider resolution, the relay, the packet, the
- * rounds, the exit reason — but no real second model was consulted here.
+ * LIMITATION, STATED: the model is the scripted mock provider. The PATH is real
+ * — the binary, the config, the provider resolution, the command registry, the
+ * session — but no real model was consulted here, nothing below opens a browser,
+ * and nothing contacts chatgpt.com or gemini.google.com. See
+ * docs/MODEL-SOURCES.md for what a LIVE claim about those actually requires.
  */
 
 const assert = require('assert');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const { test, runCli, tmpdir, assertIncludes } = require('../helpers');
+const { test, runCli, tmpdir, assertIncludes, assertNotIncludes } = require('../helpers');
 
 const plain = (s) => String(s).replace(/\x1b\][0-9]+;[^\x07]*\x07/g, '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 const BRIDGE = path.join(__dirname, '..', 'fixtures', 'stub-bridge.js');
@@ -36,18 +37,9 @@ function probot(cfg = {}) {
   return { cwd, configDir };
 }
 
-const REVIEW_1 = {
-  text: 'FACT\n  Two handlers in probot/dashboard.py discard the exception.\n'
-    + 'EVIDENCE\n  The local scan found 2 markers, both in probot/dashboard.py.\n'
-    + 'HYPOTHESIS\n  Not established: they may be hiding a startup failure.\n'
-    + 'RECOMMENDATION\n  Log the exception in refresh(), then run the module.',
-};
-const REVIEW_2 = {
-  text: 'FACT\n  A command ran after the change.\n'
-    + 'EVIDENCE\n  The command exited 0.\n'
-    + 'HYPOTHESIS\n  The bare handlers were the cause.\n'
-    + 'RECOMMENDATION\n  Add a regression test for the log line.',
-};
+// (Two scripted FACT / EVIDENCE / HYPOTHESIS / RECOMMENDATION reviews stood
+// here — the reviewer's half of the bounded relay these tests used to drive.
+// They went with it; nothing scripts a second model any more.)
 
 function get(port, p, headers = {}) {
   return new Promise((resolve) => {
@@ -60,47 +52,28 @@ function get(port, p, headers = {}) {
 }
 
 module.exports = async function () {
-  // ---------------------------------------------------------------- relay ---
+  // --------------------------------------------------------- chat sources ---
 
-  // ---- THE RELAY IS ORPHANED, AND THAT IS THE FINDING --------------------
+  // ---- THE RELAY IS RETIRED, AND THAT IS THE RESOLUTION ------------------
   //
-  // These three tests drove `/troubleshoot` — removed from the command surface
-  // by the 2026-09 UX subtraction pass — and asserted the bounded external
-  // review it started: rounds, FACT/RECOMMENDATION, a NAMED exit, and the
-  // NOT CONFIGURED path when no reviewer exists.
+  // These tests drove `/troubleshoot` — removed from the command surface by the
+  // 2026-09 UX subtraction pass — and then, once that left the bounded external
+  // review unreachable, they asserted the REACHABILITY FACT instead: that
+  // `investigation.relay` had exactly one caller and no registered command
+  // reached it. That was recorded as a known limitation whose repair was a
+  // product decision: give the relay a door, or retire it with its module.
   //
-  // `investigation.relay` is called from exactly one place, `troubleshoot.js`
-  // `runCommand`, and NO registered command reaches that any more. The relay is
-  // therefore unreachable from the CLI: the machinery is intact and nothing can
-  // start it. Rewording these tests to pass would hide that, and deleting them
-  // would erase the only record of what the code can still do — so what is
-  // asserted here is the REACHABILITY fact itself, in the tier that can see it.
+  // THE DECISION WAS MADE, AND IT WAS RETIREMENT. `/external`, external.js,
+  // actors.js, externalrequest.js and investigation.js are gone. A second
+  // opinion is now a chat SOURCE on the session — select ChatGPT.com or
+  // Gemini.google.com and the next question goes there, in the same history,
+  // with provenance on the answer. Maintaining two consultation systems was
+  // the one outcome worse than either. See src/modelsource and `/source`.
   //
-  // This is reported as a known limitation rather than repaired, because the
-  // repair is a product decision: either give the relay a door (a command, or a
-  // model-facing tool) or retire it with its module. Both are larger than a
-  // test fix, and neither is this pass's to make silently.
+  // What is asserted below is that decision, from the outside, through the real
+  // binary — which is the only tier that can see whether a command exists.
 
-  await test('RELAY: the external-review relay has no entry point from the CLI', () => {
-    // Structural, not behavioural — there is nothing to drive. Proven the way
-    // the reachability guard proves anything: by reading who calls it.
-    const fsx = require('fs');
-    const path = require('path');
-    const root = path.join(__dirname, '..', '..', 'src');
-    const callers = fsx.readdirSync(root)
-      .filter((f) => f.endsWith('.js'))
-      .filter((f) => /require\(['\"]\.\/investigation['\"]\)/.test(fsx.readFileSync(path.join(root, f), 'utf8')));
-    assert.deepStrictEqual(callers, ['troubleshoot.js'],
-      'if this changed, the relay gained or lost a caller — update the limitation');
-    // And the only thing that calls INTO troubleshoot.runCommand was the
-    // command that no longer exists.
-    const { REGISTRY } = require('../../src/commands');
-    assert.ok(!REGISTRY.has('/troubleshoot'), '/troubleshoot is not a command');
-  });
-
-  await test('RELAY: the reviewer setting still reads and writes, with no relay to run', async () => {
-    // `/external` is a live command and is what a person would use to point at
-    // a reviewer. It must keep working — the setting is not what broke.
+  await test('RETIRED: the real binary has no /external, and says so', async () => {
     const { cwd, configDir } = probot({});
     const r = await runCli([], {
       cwd, configDir,
@@ -109,29 +82,45 @@ module.exports = async function () {
       timeoutMs: 40000,
     });
     const out = plain(r.out);
-    assert.strictEqual(r.code, 0);
-    assertIncludes(out, 'External actor');
-    assertIncludes(out, 'NOT CONFIGURED');
+    assert.strictEqual(r.code, 0, 'an unknown command is not a crash');
+    assertNotIncludes(out, 'External actor');
+    assertNotIncludes(out, 'external reviewer');
   });
 
-  await test('EXTERNAL: /external shows, sets and disables the reviewer', async () => {
-    // A real catalog, because choosing a reviewer is choosing from the SAME
-    // model list everything else uses — an empty catalog has nothing to pick.
-    const { cwd, configDir } = probot({
-      connections: { omniroute: { provider: 'anthropic', via: 'bridge', baseUrl: 'http://127.0.0.1:1/v1', models: ['claude-opus-5', 'kimi-k3'] } },
-    });
+  await test('SOURCE: the real binary answers /source, and defaults to LAIN', async () => {
+    // THE REPLACEMENT, DRIVEN END TO END. It must list the three sources, mark
+    // LAIN as the one in force with nothing configured, and — the sentence that
+    // matters most — say that coding stays LAIN's whatever is selected.
+    const { cwd, configDir } = probot({});
     const r = await runCli([], {
       cwd, configDir,
-      stdin: '/external\n/external claude-opus-5\n/external\n/external rounds 2\n/external off\n/external\n/exit\n',
+      stdin: '/source\n/exit\n',
+      script: [{ text: 'unused' }],
+      timeoutMs: 40000,
+    });
+    const out = plain(r.out);
+    assert.strictEqual(r.code, 0);
+    assertIncludes(out, 'Chat source');
+    assertIncludes(out, 'LAIN');
+    assertIncludes(out, 'ChatGPT.com');
+    assertIncludes(out, 'Gemini.google.com');
+    assertIncludes(out, "coding request always runs on LAIN's runtime");
+  });
+
+  await test('SOURCE: selecting a website source changes chat and NOT coding', async () => {
+    // Selected without connecting: choosing a source is a local decision and
+    // must not launch a browser, so this stays a smoke test and not a live one.
+    const { cwd, configDir } = probot({});
+    const r = await runCli([], {
+      cwd, configDir,
+      stdin: '/source chatgpt\n/source\n/source lain\n/exit\n',
       script: [],
       timeoutMs: 40000,
     });
     const out = plain(r.out);
-    assertIncludes(out, 'NOT CONFIGURED');
-    assertIncludes(out, '✓ external reviewer:');
-    assertIncludes(out, 'max rounds');
-    assertIncludes(out, 'max rounds 2');
-    assertIncludes(out, 'external reviewer off');
+    assertIncludes(out, 'chat source: ChatGPT.com');
+    assertIncludes(out, 'no model chosen yet');
+    assertIncludes(out, 'chat source: LAIN');
   });
 
   // ----------------------------------------------------------------- dash ---

@@ -33,6 +33,17 @@ const plain = (s) => String(s).replace(/\x1b\][0-9]+;[^\x07]*\x07/g, '').replace
 /** A transport failure the provider really returns, by status. */
 const fail = (status, message) => ({ error: { status, message, retryAfter: 0 } });
 
+/**
+ * THE BUDGET IS READ, NOT SPELLED.
+ *
+ * These asserted `1/5`, `3/5` and `attempts <= 5` against a retry budget
+ * that has now been 2, then 5, then 10. Every time it moved, tests that
+ * hardcoded it failed on the NUMBER rather than on the behaviour they were
+ * about — which is noise that hides a real regression. Derived from
+ * backoff.js, they assert the property and follow the policy.
+ */
+const { MAX_RETRIES } = require('../../src/backoff');
+
 module.exports = async function () {
   // ---------------------------------------------------------- IT RETRIES --
 
@@ -48,7 +59,7 @@ module.exports = async function () {
     // `retry in 1s · 1/5` — the compact transient form. It said `retry 1/5 at
     // 16:17:24 (1s)` as a durable WARN carrying the provider's raw body; the row is
     // one sentence now and goes to the operation channel (turn.js `retryWord`).
-    assert.match(out, /\b1\/5\b/, 'and which attempt, out of the real budget');
+    assert.match(out, new RegExp(`\\b1/${MAX_RETRIES}\\b`), 'and which attempt, out of the real budget');
     assertIncludes(out, 'Four. FINISHED.', 'the task completed on the retry');
     assert.strictEqual(r.code, 0);
   });
@@ -74,7 +85,7 @@ module.exports = async function () {
       timeoutMs: 90000,
     });
     const out = plain(r.out);
-    assert.match(out, /\b3\/5\b/, `three attempts must be within the budget:\n${out.slice(-700)}`);
+    assert.match(out, new RegExp(`\\b3/${MAX_RETRIES}\\b`), `three attempts must be within the budget:\n${out.slice(-700)}`);
     assertIncludes(out, 'Through at last.');
   });
 
@@ -82,12 +93,17 @@ module.exports = async function () {
     const r = await runCli([], {
       cwd: tmpdir('conn-'),
       stdin: 'go\n',
-      script: Array.from({ length: 12 }, () => fail(502, 'Bad Gateway')),
+      script: Array.from({ length: MAX_RETRIES + 4 }, () => fail(502, 'Bad Gateway')),
       timeoutMs: 120000,
     });
     const out = plain(r.out);
-    const attempts = (out.match(/retry in \d+s · \d+\/5/g) || []).length;
-    assert.ok(attempts >= 1 && attempts <= 5, `${attempts} attempts is not a bounded budget`);
+    // COUNTED ON THE ATTEMPT MARKER ALONE, for two reasons found the hard way:
+    // `plain` above replaces each SGR sequence with a NEWLINE, so a coloured
+    // retry line arrives split into pieces and no whole-phrase pattern can
+    // match it; and a `\d` written inside a template literal collapses to a
+    // literal `d`, which silently matched nothing and reported 0 attempts.
+    const attempts = (out.match(new RegExp('\\d+/' + MAX_RETRIES + '\\b', 'g')) || []).length;
+    assert.ok(attempts >= 1 && attempts <= MAX_RETRIES, `${attempts} attempts is not a bounded budget`);
     assert.ok(!/FINISHED|TASK COMPLETE/.test(out), 'a provider that never answered completes nothing');
     assert.strictEqual(r.code, 0, 'and the binary still exits cleanly');
   });
@@ -100,7 +116,7 @@ module.exports = async function () {
       env: { LAIN_FORCE_TUI: '1', COLUMNS: '100', LINES: '30' },
       stdinSteps: ['go\n', '\n'],
       stepDelayMs: 1200,
-      script: Array.from({ length: 12 }, () => fail(502, 'Bad Gateway')),
+      script: Array.from({ length: MAX_RETRIES + 4 }, () => fail(502, 'Bad Gateway')),
       timeoutMs: 120000,
     });
     const out = plain(r.out);

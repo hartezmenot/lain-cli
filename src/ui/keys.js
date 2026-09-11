@@ -44,6 +44,22 @@ function ROUTE(key) {
   if (!this.enabled) return false;
   const g = this.screen.geometry();
 
+  // ---- ESCAPE CLOSES AN OPEN GOAL/PLAN COMPOSER ---------------------------
+  //
+  // FIRST, because a composer is not a panel: it owns the INPUT LINE, and the
+  // thing a person expects Escape to do is give the line back. Nothing else in
+  // this chain is holding the line, so nothing else can be what they meant.
+  //
+  // CANCELLING COMMITS NOTHING. See composemode.js on why an empty Enter is a
+  // cancel too, and why clearing a goal is `/goal clear` typed on purpose
+  // rather than the least deliberate keystroke there is.
+  if (key === 'escape' && require('../composemode').pending(this.app)) {
+    require('../composemode').cancel(this.app);
+    require('./operation').note(this, 'Cancelled');
+    this.refresh();
+    return true;
+  }
+
   // ---- ESCAPE OUT OF A RETRY WAIT OUTRANKS EVERY PANEL --------------------
   //
   // RETRYING is the one state the program puts the user into with no way out

@@ -169,6 +169,39 @@ function endTurn(app, record = null) {
  * one teardown, rather than a teardown per call site that a timeout can skip.
  */
 async function shutdown(app) {
+  // ---- THE AUTHENTICATED BROWSER GOES TOO, AND IT IS NOT THE HARNESS'S ----
+  //
+  // A web model source launches a HEADFUL browser holding the person's login.
+  // It is deliberately NOT a managed process — a browser owned by a task would
+  // be killed when a verification finishes, which would log somebody out of
+  // ChatGPT for the crime of running the tests (see modelsource/webbrowser.js).
+  // The cost of that decision is that something has to close it at the end, and
+  // this is the one place every exit path already passes through.
+  //
+  // FIRST, and in its own try: a wedged harness must not leave a browser window
+  // on screen after LAIN is gone. Closing it does NOT touch the saved profile,
+  // so the next session does not have to log in again.
+  try { await require('./modelsource/webbrowser').forApp(app).closeAll(); } catch { /* the way out is never blocked by cleanup */ }
+  // ---- AND THE FRONTEND WORKSHOP'S PREVIEW BROWSER --------------------
+  //
+  // Same argument, second browser: the Workshop launches a HEADFUL Chromium on
+  // a project-bound profile, and it is deliberately not a task-managed process
+  // (killing a preview because a verification finished is the behaviour it
+  // exists to avoid). The cost of that decision is that something has to close
+  // it at the end, and this is the one place every exit path already passes
+  // through. The dev server it may have started IS managed, and goes down with
+  // the harness below. See src/workshop/index.js.
+  try { await require('./workshop').forApp(app).closeAll(); } catch { /* the way out is never blocked by cleanup */ }
+  // ---- AND ANY BROWSER THE RUNTIME OWNS THAT NOBODY ELSE CLAIMED --------
+  //
+  // The two above close the browsers their own modules hold. This is the
+  // BACKSTOP: env/chromium.js is the only thing in the tree that launches a
+  // browser, so it is the only thing that can enumerate every one that is
+  // still running — including a VERIFY browser whose task died badly and a
+  // future Computer MCP target. §27 asks for proof that no orphan browser
+  // remains, and an orphan is by definition one whose owner is not around to
+  // close it; a sweep from the launcher is the only thing that can.
+  try { await require('./env/chromium').forApp(app).stopAll(); } catch { /* the way out is never blocked by cleanup */ }
   const h = existing(app);
   if (!h) return;
   try { await h.shutdown(); } catch { /* the way out is never blocked by cleanup */ }

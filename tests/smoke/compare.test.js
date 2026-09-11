@@ -109,7 +109,12 @@ module.exports = async function () {
     const out = plain(r.out);
     assertIncludes(out, '/api');
     assertIncludes(out, '/compare');
-    assert.match(out, /\/models \[name\|refresh\]/, 'the refresh form must be visible in help, not folklore');
+    // `/model` IS THE ADVERTISED NAME. `/models` became a hidden compatibility
+    // alias when the two were collapsed into one picker, so it appears in
+    // neither /help nor the palette — by design. The refresh form is what this
+    // test is about, and it must still be discoverable on the name people are
+    // told to use.
+    assert.match(out, /\/model \[name\|refresh\]/, 'the refresh form must be visible in help, not folklore');
   });
 
   await test('REFRESH SMOKE: refreshing costs no model request', async () => {

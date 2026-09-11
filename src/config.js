@@ -38,6 +38,32 @@ const DEFAULTS = {
    */
   maxSteps: 0,
   stream: true,
+  /**
+   * WHETHER LAIN TAKES THE TERMINAL'S MOUSE. Off by default, and that is a
+   * reversal.
+   *
+   * ---- WHAT THE DEFAULT COST ------------------------------------------
+   *
+   * `?1002h` gives LAIN a clickable caret, click targets in the feed, and its
+   * own drag-to-select. In exchange the TERMINAL stops doing selection — and
+   * LAIN's replacement only covers the FEED. The live region at the bottom of
+   * the screen, where `/app` prints its URL, where an error lands, where a
+   * path or a command appears, is selectable by neither: LAIN captured the
+   * gesture and then had nothing to do with it there.
+   *
+   * So the person could not copy the one thing they most often need to copy,
+   * and the standing advice — hold Shift — is true in Windows Terminal, iTerm2
+   * and GNOME Terminal and false in the legacy Windows console and several
+   * multiplexer setups. For those people it was a dead end.
+   *
+   * ON IS STILL ONE COMMAND AWAY (`/mouse on`) and now PERSISTS, which is the
+   * other half of the fix: the preference used to be re-asserted at every start,
+   * so `/mouse off` lasted until the next launch and no further.
+   *
+   * The trade is a convenience against a necessity, and copying an error out of
+   * your own terminal is the necessity.
+   */
+  mouse: false,
 };
 
 /**

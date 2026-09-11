@@ -25,17 +25,7 @@ const { Task } = require('./task');
  */
 const CHARS_PER_TOKEN = 3.6;
 /** Messages at the end that keep their full body: the current working set. */
-/** How much of each folded USER message is reproduced verbatim. */
-const FOLD_USER_KEEP = 400;
 
-/**
- * How many folded instructions one summary lists, newest first.
- *
- * Generous on purpose - instructions are short and they are the thread. The
- * cap exists so a very long session cannot grow a summary that itself needs
- * compacting, and when it bites it SAYS SO. See `foldSummary`.
- */
-const FOLD_SAID_KEEP = 60;
 
 const KEEP_RECENT = 10;
 /** A tool result smaller than its own stub is left alone. */
@@ -119,6 +109,9 @@ class Session {
      * IN ORDER rather than appending every review to the bottom.
      */
     this.actors = [];
+    // WHO ANSWERS A CHAT TURN, and which website thread is this one's.
+    require('./modelsource/sessionstate').attach(this);
+    this.goal = null;    // the standing goal, changed only by /goal — goal.js   // its own module: see there
   }
 
   file() {
@@ -453,10 +446,10 @@ class Session {
     if (!gone.length) return 0;
     // ---- ONE SUMMARY, WHICH SUPERSEDES THE PREVIOUS ONE ----------------
     //
-    // `foldSummary` MERGES a fold it finds inside `gone` rather than quoting
+    // msgfold.foldSummary MERGES a fold it finds inside `gone` rather than quoting
     // it, and hands back the structured parts so the next fold can do the same.
     // See its header for the defect that produced this.
-    const folded = foldSummary(gone);
+    const folded = require('./msgfold').foldSummary(gone);
     const summary = {
       role: 'user',
       content: folded.content,
@@ -493,6 +486,10 @@ class Session {
       // externalstate.ExternalLedger.toJSON for why the packet itself is not
       // written here.
       external: this.external ? this.external.toJSON() : [],
+      // THE CHAT SOURCE SURVIVES A RESUME. See modelsource/sessionstate.js.
+      ...require('./modelsource/sessionstate').toJSON(this),
+      cowork: require('./cowork/sessionstate').from(this.cowork),
+      goal: require('./goal').toJSON(this),
     };
   }
 
@@ -549,6 +546,9 @@ class Session {
     // before this existed simply has none, which is the true answer for it.
     s.actors = Array.isArray(data.actors) ? data.actors : [];
     s.external = require('./externalstate').ExternalLedger.from(data.external);
+    require('./modelsource/sessionstate').restore(s, data);
+    s.cowork = require('./cowork/sessionstate').from(data.cowork);
+    s.goal = require('./goal').from(data.goal);
     return s;
   }
 
@@ -597,97 +597,5 @@ class Session {
   }
 }
 
-/**
- * WHAT THE FOLDED MESSAGES WERE, built from what they ARE rather than from
- * prose a model invents about them.
- *
- * COMPACTION HAS NEVER SUMMARISED, and this does not start. A stub says which
- * call produced the output it replaced; asking a model to write a précis would
- * cost a request, could invent things that were never said, and — the decisive
- * objection — is impossible in the one situation this exists for, because the
- * provider is at that moment refusing every request as too long.
- *
- * SO IT IS DERIVED, and it keeps the half that matters. What the USER said is
- * reproduced verbatim: those are the instructions, the corrections and the
- * steers, they are short, and losing them is losing the thread. What the TOOLS
- * returned is counted by name: that is the bulk, it is reproducible by calling
- * them again, and it is why the history got too long in the first place.
- */
-function foldSummary(gone) {
-  const said = [];
-  const calls = new Map();
-  let stood = 0;
-  for (const m of gone) {
-    if (!m) continue;
-    // ---- A PRIOR FOLD IS MERGED, NEVER SUMMARISED AGAIN ----------------
-    //
-    // THE DEFECT, reproduced against the real Session: a second fold found the
-    // first fold's summary in `gone`, saw `role: 'user'`, and filed the whole
-    // rendered blob as ONE INSTRUCTION - truncated at 400 characters, so
-    // everything the user had said beyond that point was destroyed, and what
-    // survived was nested inside a bullet of the new summary:
-    //
-    //     What you asked for, in order:
-    //       - [61 earlier messages folded...] What you asked for, in order:
-    //         - instruction 0 - instruction 1 - ... - instru
-    //
-    // A third fold would have nested that again. The count went wrong too: the
-    // old summary occupied ONE array slot while standing for sixty-one real
-    // messages, so the new header under-reported by sixty every time.
-    //
-    // MERGED FROM THE PARTS, NOT FROM THE PROSE. The summary carries `said` and
-    // `calls` for exactly this, so the instructions are taken over verbatim and
-    // the call tallies are added - one summary, superseding the old marker,
-    // which is what the old one always claimed to be.
-    if (m.elided === 'folded') {
-      stood += Math.max(1, Number(m.foldedCount) || 1);
-      for (const t of m.said || []) said.push(String(t));
-      for (const [n, c] of Object.entries(m.calls || {})) calls.set(n, (calls.get(n) || 0) + (Number(c) || 0));
-      continue;
-    }
-    stood += 1;
-    if (m.role === 'user' && String(m.content || '').trim()) {
-      said.push(String(m.content).replace(/\s+/g, ' ').trim().slice(0, FOLD_USER_KEEP));
-    }
-    for (const tc of m.tool_calls || []) {
-      const n = String((tc && tc.name) || 'tool');
-      calls.set(n, (calls.get(n) || 0) + 1);
-    }
-  }
-  // ---- BOUNDED, AND HONEST ABOUT IT ----------------------------------
-  //
-  // Instructions accumulate across folds by design - they are the thread, and
-  // losing them is losing it. But a session with four hundred of them would
-  // grow a summary that is itself the thing needing compaction, so the list is
-  // capped at the MOST RECENT, which are the ones still in force. The drop is
-  // STATED rather than silent: a summary that quietly forgot the first half of
-  // a conversation while claiming to hold it is worse than one that says so.
-  let dropped = 0;
-  if (said.length > FOLD_SAID_KEEP) {
-    dropped = said.length - FOLD_SAID_KEEP;
-    said.splice(0, dropped);
-  }
-  const tools = [...calls.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([n, c]) => `${n}×${c}`)
-    .join(', ');
-  const head = `[${stood} earlier messages folded to fit this provider's message limit. `
-    + 'Their full text is still in the session and on screen — it is no longer being sent.]';
-  const parts = [head];
-  if (said.length) {
-    const lead = dropped
-      ? `What you asked for, in order (the ${dropped} oldest are no longer listed here):`
-      : 'What you asked for, in order:';
-    parts.push(lead + '\n' + said.map((s) => `  · ${s}`).join('\n'));
-  }
-  if (tools) parts.push(`Tool calls made in that stretch: ${tools}. Re-run any of them if you need the output.`);
-  // THE PARTS TRAVEL WITH THE TEXT, so the next fold merges instead of parsing.
-  return {
-    content: parts.join('\n'),
-    said,
-    calls: Object.fromEntries(calls),
-    foldedCount: stood,
-  };
-}
 
 module.exports = { Session, newId, budgetChars, CHARS_PER_TOKEN, KEEP_RECENT, TOOL_STUB_MIN, ASSISTANT_KEEP };

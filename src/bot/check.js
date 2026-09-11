@@ -46,7 +46,7 @@ async function run(platform, { live = false, record = false, cfg = config.load()
   const identityMatch = verified.identityMatch !== false && (!row.accountFingerprint || row.accountFingerprint === fingerprint);
   checks.identity = identityMatch ? 'passed' : 'failed';
   const current = row.currentFingerprint === fingerprint && identityMatch;
-  if (current && row.diagnostics.connected === true) checks.connection = 'passed';
+  if (current && row.connected === true) checks.connection = 'passed';
   if (current && row.diagnostics.heartbeatHealthy === true) checks.heartbeat = 'passed';
   // Aggregate traffic proves only these observations. It cannot prove that an
   // approval, stop or reconnect round trip completed correctly.

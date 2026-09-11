@@ -37,7 +37,6 @@
  * told to go.
  */
 
-const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const cdp = require('./cdp');
@@ -69,15 +68,60 @@ class BrowserHarness {
     if (this.bus && typeof this.bus.emit === 'function') this.bus.emit(name, payload);
   }
 
-  availability() { return browser.available({ port: this.port }); }
+  /**
+   * CAN A VERIFICATION BROWSER RUN?
+   *
+   * It asks env/chromium.js, NOT `browser.available({ port })`. That function
+   * reports `attachable: true` when anything is listening on 9222 and calls the
+   * capability AVAILABLE on that basis — which, after the attach path was
+   * removed, would be a availability answer about a browser this Harness will
+   * never use. Availability now means exactly what the launch path needs: a
+   * WebSocket client and a browser binary it is allowed to start.
+   */
+  availability() {
+    const rt = require('../env/chromium');
+    const h = new rt.ChromiumRuntime({ processes: this.processes }).health();
+    return {
+      available: h.available,
+      state: h.available ? 'AVAILABLE' : 'OPTIONAL_UNAVAILABLE',
+      why: h.available ? `launchable: ${h.browser.path}` : h.why,
+      client: h.client,
+      // NEVER ATTACHABLE. Kept in the shape because callers read it, and now
+      // it is always false — which is the honest answer, not a missing field.
+      attachable: false,
+      launchable: Boolean(h.browser),
+      browserPath: h.browser ? h.browser.path : null,
+      browser: h.browser ? h.browser.version : null,
+      owned: h.browser ? h.browser.owned : false,
+      remedy: h.remedy || '',
+      port: 0,
+      tried: [],
+    };
+  }
 
   /**
-   * GET A SESSION, launching a browser only if one is not already listening.
+   * GET A SESSION, LAUNCHING A BROWSER THIS HARNESS OWNS.
    *
-   * ATTACH BEFORE LAUNCH, always. A debug port that is already open belongs to
-   * somebody — often the person, who opened it deliberately to watch — and
-   * launching a second browser beside it wastes a few hundred megabytes to
-   * observe the wrong thing.
+   * ------------------------------------------------------------------------
+   * IT USED TO ATTACH FIRST, AND THAT WAS THE DEFECT.
+   *
+   * The rule here was "ATTACH BEFORE LAUNCH, always", justified as: a debug
+   * port that is already open belongs to somebody, often the person, so use
+   * theirs rather than spending a few hundred megabytes on a second browser.
+   *
+   * The premise was right and the conclusion was backwards. A debug port that
+   * belongs to the person is the one browser this instrument must NEVER touch.
+   * `browser.DEFAULT_PORT` is 9222 — the DevTools convention every tool knows —
+   * so anyone who had ever started Chrome with `--remote-debugging-port=9222`,
+   * for their own debugging or for another tool, silently handed verification
+   * their real browser: their cookies, their logged-in sessions, their open
+   * tabs. And it then created tabs and navigated in it. Nothing announced this.
+   *
+   * The few hundred megabytes were never the expensive part.
+   *
+   * So there is no attach path. Every session runs in a browser this Harness
+   * started, on a port the browser chose, in a disposable profile — see
+   * env/chromium.js, which is now the only thing in the tree that launches one.
    */
   session(opts = {}) {
     const key = String(opts.taskId || 'default');
@@ -106,16 +150,18 @@ class BrowserHarness {
     const client = cdp.clientAvailable();
     if (!client.ok) { this.lastWhy = client.why; return { ok: false, why: client.why }; }
 
-    let live = await cdp.endpoint(this.port);
-    let processId = null;
-    if (!live.ok && launch) {
-      const started = await this._launch(taskId, signal);
-      if (!started.ok) { this.lastWhy = started.why; return started; }
-      processId = started.processId;
-      live = started.endpoint;
+    // NO `cdp.endpoint(this.port)` PROBE HERE. See the header: reaching an
+    // already-open debug port is how this adopted the person's own browser.
+    if (!launch) {
+      this.lastWhy = 'a browser observation needs a browser, and launching was declined';
+      return { ok: false, why: this.lastWhy };
     }
+    const started = await this._launch(taskId, signal);
+    if (!started.ok) { this.lastWhy = started.why; return started; }
+    const processId = started.processId;
+    const live = started.endpoint;
     if (!live.ok || (signal && signal.aborted)) {
-      this.lastWhy = `no browser is listening on port ${this.port}`;
+      this.lastWhy = signal && signal.aborted ? 'browser operation cancelled' : 'the browser did not open a debug port';
       return { ok: false, why: this.lastWhy };
     }
 
@@ -147,43 +193,42 @@ class BrowserHarness {
    * least worth trusting with them.
    */
   async _launch(taskId, signal = null) {
-    if (!this.processes) return { ok: false, why: 'no process manager, so a browser cannot be owned or cleaned up' };
-    const found = browser.findBrowser();
-    if (!found.ok) {
-      return { ok: false, why: `no browser binary was found (looked in ${found.tried.length} places, including ${found.tried[0]})` };
-    }
-    let profile;
-    try { profile = fs.mkdtempSync(path.join(os.tmpdir(), 'lain-browser-')); } catch (e) {
-      return { ok: false, why: `could not make a scratch browser profile: ${(e && e.message) || e}` };
-    }
-    const args = [
-      '--remote-debugging-port=0',
-      `--user-data-dir=${profile}`,
-      '--no-first-run', '--no-default-browser-check', '--disable-extensions',
-      '--disable-background-networking', '--mute-audio',
-    ];
-    if (this.headless) args.push('--headless=new', '--disable-gpu');
-    const proc = this.processes.start({
-      taskId, name: 'browser', command: found.path, args, cleanupPaths: [profile],
+    // ---- ONE LAUNCHER FOR THE WHOLE TREE ---------------------------------
+    //
+    // This used to be fifty lines of "find a browser, build args, spawn, poll
+    // DevToolsActivePort, open an endpoint" — and workshop/index.js and
+    // modelsource/webbrowser.js each had their own copy, which had already
+    // drifted apart on the details (who deletes the stale port file, who
+    // disables extensions, who goes through the ProcessManager). See
+    // env/chromium.js, which owns all of it now, and env/purpose.js, which
+    // holds the differences that are REAL rather than accidental.
+    //
+    // VERIFY is the purpose here, and its traits carry the properties this
+    // instrument depends on: headless, a fresh disposable profile per launch,
+    // extensions off, and ownership by the TASK so it dies with it.
+    const rt = require('../env/chromium');
+    const runtime = new rt.ChromiumRuntime({ processes: this.processes, events: this.bus });
+    const got = await runtime.launch(rt.PURPOSE.VERIFY, {
+      taskId, headless: this.headless, signal, environment: this.environment || 'host',
     });
-    this._launches.set(String(taskId || 'default'), { processId: proc.processId, profile });
-    const deadline = Date.now() + browser.LAUNCH_TIMEOUT_MS;
-    let port = null;
-    while (Date.now() < deadline && proc.alive && !(signal && signal.aborted)) {
-      try { port = Number(fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split(/\r?\n/)[0]); } catch { /* booting */ }
-      if (port > 0) break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    if (!got.ok) {
+      this._emit(EVENT.BROWSER_ERROR, { taskId: String(taskId || ''), why: got.why });
+      return { ok: false, why: got.why, detail: got.detail || '', code: got.code || '' };
     }
-    if (!port || (signal && signal.aborted)) {
-      const why = signal && signal.aborted ? 'browser startup cancelled' : `the browser did not announce a debug port: ${proc.healthWhy}`;
-      this._emit(EVENT.BROWSER_ERROR, { taskId: String(taskId || ''), why });
-      return { ok: false, why, processId: proc.processId };
-    }
-    proc.port = port;
-    proc.healthSpec = { port };
-    const live = await cdp.endpoint(port);
-    if (!live.ok) return { ok: false, why: live.why, processId: proc.processId };
-    return { ok: true, processId: proc.processId, endpoint: live };
+    const inst = got.instance;
+    // THE PROFILE IS THE INSTANCE'S, and cleanup already knows how to remove a
+    // launched profile — it is handed the same two fields it always had.
+    this._launches.set(String(taskId || 'default'), { processId: inst.proc ? inst.proc.processId : null, profile: inst.profileDir });
+    // WHICH BROWSER PRODUCED THIS, recorded where the evidence can reach it.
+    // A verdict that cannot name its browser cannot be compared with last
+    // week's — see env/chromiuminstall.js on why the build is pinned.
+    this.lastBrowser = {
+      version: inst.version, owned: inst.owned, managed: inst.managed,
+      source: inst.source, path: inst.browserPath, environment: inst.environment,
+    };
+    const live = await cdp.endpoint(inst.port);
+    if (!live.ok) return { ok: false, why: live.why, processId: inst.proc ? inst.proc.processId : null };
+    return { ok: true, processId: inst.proc ? inst.proc.processId : null, endpoint: live, instance: inst };
   }
 
   // ------------------------------------------------------------- observing --

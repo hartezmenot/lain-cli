@@ -202,7 +202,7 @@ class App {
     // restarts when the task does.
     if (this.ui.enabled && (!verdict.sameTask || !this.ui.startedAt)) this.ui.startedAt = Date.now();
 
-    this.abort = new AbortController();
+    require('./ui/alert').cancelPendingWait(this); this.abort = new AbortController();  // order matters: ui/alert.js
     // GIT STATE, measured while the request is assembled. Fire-and-forget: the
     // section it feeds rides the volatile tail (gitsnapshot.js) and may never
     // delay the request that carries it — a turn that outruns the measurement
@@ -231,14 +231,20 @@ class App {
     // Whatever was outstanding last time is no longer the news; this turn will
     // decide again when it ends.
     this.pendingCompletion = null;
-    if (this.ui.enabled) { this.ui.beginTurn(); this.ui.setFailed(false); this.ui.setLiveUser(text, from); }
+    if (this.ui.enabled) { this.ui.beginTurn(verdict); this.ui.setLiveUser(text, from); }  // verdict: see ui/alert.js
     let record = null;
     // Carried across the whole event stream: prose buffered until the call it
     // preceded, and the finished record when it arrives. See turnevents.js.
     const ctx = { liveText: '', record: null };
     try {
       if (this.interaction) text = await require('./interaction').prepareInput(this, text);
-      for await (const ev of runTurn(this.session, text, require('./jobrunner').turnOptions(this, {
+      // ONE LOOP, TWO SOURCES OF EVENTS: with LAIN's runtime selected (the
+      // default) this is false and nothing changes, and a CODING turn never
+      // diverts whatever is selected. See chatdispatch.js for both boundaries.
+      const chat = require('./chatdispatch');
+      const stream = chat.routes(this, verdict).yes
+        ? chat.run(this, text, verdict, { from, signal: this.abort.signal })
+        : runTurn(this.session, text, require('./jobrunner').turnOptions(this, {
         session: this.session,
         signal: this.abort.signal,
         from,
@@ -263,7 +269,8 @@ class App {
           }
           return take;
         },
-      }))) {
+      }));
+      for await (const ev of stream) {
         // WHAT EACH EVENT DOES TO THE SCREEN lives in turnevents.js. This loop
         // owns running the turn; drawing every kind of thing a turn can produce
         // is a separate job with a separate owner.
@@ -504,6 +511,8 @@ class App {
     // An outstanding question consumes this line as the ANSWER. It is not
     // classified, does not touch task identity and cannot start a task.
     if (this.answerPending(s)) return;
+    // A COMPOSED LINE IS A GOAL OR A PLAN, never a prompt — see composemode.js.
+    if (require('./composemode').take(this, s)) return;
     // A bare `/` is someone reaching for the command menu, not a prompt. It is
     // never spent on a model request; the palette comes back instead.
     if (!isPaste && s.trim() === '/') { this.ui.updateMenus('/'); return; }
@@ -630,7 +639,7 @@ class App {
       this.cfg.model = choice.model.id;
       this.cfg.connection = choice.connection.connectionId;
       try { config.save(this.cfg); } catch { /* an unwritable config still runs */ }
-      this.transient('info', `model ${choice.model.displayName} via ${this.cfg.connection} — /models to change`);
+      this.transient('info', `model ${choice.model.displayName} via ${this.cfg.connection} — /model to change`);
       return;
     }
     if (choice && choice.error) this.render.notice('warn', choice.error);
@@ -640,7 +649,7 @@ class App {
     // different fix.
     if (cat.models.length) {
       this.render.notice('warn',
-        `No model selected. ${cat.models.length} available — /models to browse, or /model <name>. `
+        `No model selected. ${cat.models.length} available — /model to browse, or /model <name>. `
         + 'Set "default" on a connection in config.json to skip this.');
     }
   }

@@ -70,7 +70,7 @@ this layer — it is how machinery came to be reported as intelligence.
   durable boundary (requested_model, handover arming); the execution needs the
   session's provider state that lives in Node. Adapter, not competing
   authority.
-- **Browser (`/external browser`) is CLI-process-owned CDP; `/bg` agent jobs
+- **Browser is CLI-process-owned CDP; `/bg` agent jobs
   are Node-process-owned.** Neither is a supervisor worker yet — both die with
   the CLI process (scratch and session files survive). Classified P3: moving
   them is future work, not an oversight, and must not be assumed safe.

@@ -66,8 +66,15 @@ const READ_ONLY = new Set([KIND.AUDIT, KIND.EXPLAIN, KIND.CHAT]);
 const NEW_PROJECT_RE = /\b(?:create|build|make|write|scaffold|generate|start|set ?up|bootstrap)\b[^.?!]{0,40}\b(?:new |brand[- ]new |a |an |me a |me an )?(?:project|app|application|bot|tool|service|server|website|site|cli|library|package|game|dashboard|script)\b/i;
 const FROM_SCRATCH_RE = /\bfrom scratch\b|\bnew project\b|\bgreenfield\b/i;
 
-/** "audit", "review the codebase", "what's missing" — assess, do not change. */
-const AUDIT_RE = /\b(?:audit|assess|review|inspect|analy[sz]e|evaluate|critique|health[- ]check)\b/i;
+/** "audit", "review the codebase", "what's missing" — assess, do not change.
+ *
+ *  `compare` and `contrast` join the list because they are the same JOB as the
+ *  verbs beside them — weigh two things and say what you think — and because
+ *  without them "compare these two approaches" fell through every rule to the
+ *  IMPLEMENT default, which is the MUTATION mode. Asking for an opinion was
+ *  therefore classified as asking for a change, and got the build-it guidance.
+ *  Neither word appears in IMPLEMENT_RE, so nothing was taken from it. */
+const AUDIT_RE = /\b(?:audit|assess|review|inspect|analy[sz]e|evaluate|critique|compare|contrast|health[- ]check)\b/i;
 const AUDIT_QUESTION_RE = /\bwhat(?:'s| is| are)?\b[^.?!]{0,30}\b(?:missing|wrong with|broken|left to do|the state of|not implemented)\b/i;
 
 /** "explain", "what does X do", "how does Y work" — describe, do not change. */

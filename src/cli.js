@@ -11,6 +11,7 @@ Usage
   lain --sessions           List saved sessions and exit
   lain --doctor             Report what works on this machine, and exit
   lain --bot                Run the configured messaging gateway in the foreground
+  lain --bot-check <name>   Observe telegram, discord or whatsapp configuration
 
 Options
   -p, --print <prompt>   one-shot prompt
@@ -21,6 +22,9 @@ Options
                          Touches no provider and creates no session — this is
                          the command an installer uses to verify itself.
       --cwd <dir>        working directory for the session
+      --bot-check <name> read-only bot diagnostics; no service is started
+      --live             with --bot-check: authenticate using live platform APIs
+      --record           with --bot-check --live: save non-secret evidence
   -v, --version          print version
   -h, --help             this
 `;
@@ -37,6 +41,9 @@ function parseArgs(argv) {
       case '--sessions': opts.sessions = true; break;
       case '--doctor': opts.doctor = true; break;
       case '--bot': opts.bot = true; break;
+      case '--bot-check': opts.botCheck = argv[++i] || ''; break;
+      case '--live': opts.botLive = true; break;
+      case '--record': opts.botRecord = true; break;
       case '--cwd': opts.cwd = argv[++i]; break;
       default:
         if (a.startsWith('-')) { opts.unknown = a; return opts; }
@@ -60,6 +67,14 @@ async function main(argv) {
   }
   if (opts.help) { process.stdout.write(USAGE); return 0; }
   if (opts.version) { process.stdout.write(`lain ${pkg.version} (node ${process.version})\n`); return 0; }
+  if (opts.botCheck !== undefined) {
+    if (opts.bot || opts.doctor || opts.sessions || opts.resume || opts.print !== undefined || opts._.length) {
+      process.stderr.write('lain: --bot-check cannot be combined with a session or service command\n'); return 2;
+    }
+    return require('./bot/check').main(opts.botCheck, { live: opts.botLive, record: opts.botRecord });
+  }
+  if (opts.botLive || opts.botRecord) { process.stderr.write('lain: --live and --record require --bot-check <platform>\n'); return 2; }
+  if ((opts._.join(' ') === '/bot doctor' && opts.print === undefined) || opts.print?.trim() === '/bot doctor') return require('./bot/doctor').main();
   if (opts.bot) return require('./bot/service').foreground({ cwd: opts.cwd });
 
   // ---- THE POST-INSTALL VERIFICATION COMMAND ----------------------------

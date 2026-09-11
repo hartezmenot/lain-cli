@@ -35,6 +35,21 @@ function project() {
   return dir;
 }
 
+/**
+ * OUTAGE FIXTURES ARE SIZED FROM THE BUDGET, NOT FROM A NUMBER.
+ *
+ * The retry budget has been 2, then 5, then 10. Every time it moved, a
+ * fixture of N hardcoded refusals stopped exhausting it: the script ran out
+ * mid-retry, the mock answered SUCCESSFULLY, and a test about a provider
+ * that never comes back started passing through to a happy path — which
+ * these tests' own comments call the one thing they must not allow.
+ *
+ * Derived from backoff.js, they follow the policy instead of failing on it.
+ */
+const { MAX_RETRIES } = require('../../src/backoff');
+/** Enough refusals to outlast the budget, with room for the first request. */
+const OUTAGE = (make) => Array.from({ length: MAX_RETRIES + 4 }, make);
+
 module.exports = async function () {
   await test('RATE LIMIT: the task carries on by itself after the wait', async () => {
     const r = await runCli([], {
@@ -103,7 +118,7 @@ module.exports = async function () {
       cwd: project(),
       stdin: 'read it\n',
       // Far more refusals than the retry budget.
-      script: Array.from({ length: 12 }, () => ({ error: { status: 429, message: 'still limited', retryAfter: 1 } })),
+      script: OUTAGE(() => ({ error: { status: 429, message: 'still limited', retryAfter: 1 } })),
       timeoutMs: 90000,
     });
     const out = plain(r.out);

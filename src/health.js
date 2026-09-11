@@ -119,8 +119,8 @@ async function assess(app) {
     row('Catalog', modelCount > 0 ? STATE.STABLE : STATE.ATTENTION,
       modelCount > 0 ? `${modelCount} model(s) available` : 'no models — /api refresh to discover them'),
     row('Selection', chosen ? STATE.STABLE : STATE.PARTIAL,
-      chosen ? String(chosen) : 'no model selected — /models to pick one'),
-    row('Search & picker', has('/models') ? STATE.IMPLEMENTED : STATE.MISSING, 'natural search, one-step select'),
+      chosen ? String(chosen) : 'no model selected — /model to pick one'),
+    row('Search & picker', has('/model') ? STATE.IMPLEMENTED : STATE.MISSING, 'natural search, one-step select'),
     row('Refresh', has('/api') ? STATE.IMPLEMENTED : STATE.MISSING, '/api refresh re-discovers models'),
   ]);
 
@@ -161,17 +161,34 @@ async function assess(app) {
   // THE SECOND MODEL, and whether it can actually be reached. A configured name
   // that no connection serves is NOT configured for any useful purpose, so the
   // route is resolved rather than the setting being read back.
-  const externalMod = require('./external');
-  const ext = externalMod.settings(app.cfg);
-  let extRoute = { ok: false, why: ext.why };
-  try { extRoute = externalMod.route(app); } catch (e) { extRoute = { ok: false, why: e.message }; }
-  g('External model', [
-    row('Reviewer', extRoute.ok ? STATE.IMPLEMENTED : ext.why === 'NOT CONFIGURED' ? STATE.MISSING : STATE.ATTENTION,
-      extRoute.ok ? `${ext.model} · ${ext.maxRounds} rounds max` : `NOT CONFIGURED — ${extRoute.why || ext.why}`),
-    row('Relay', extRoute.ok ? STATE.IMPLEMENTED : STATE.PARTIAL,
-      extRoute.ok
-        ? 'troubleshooting runs LAIN → external → LAIN, bounded, with a named exit'
-        : 'troubleshooting runs locally only and says so'),
+  // ---- WHICH MODEL ANSWERS A CHAT TURN ---------------------------------
+  //
+  // This replaced an `External model` group that reported a configured reviewer
+  // and the bounded LAIN → external → LAIN relay. Both went with `/external`;
+  // see routecommands.js for the argument. What is reported now is the thing
+  // that actually exists: the chat SOURCE the session has selected.
+  //
+  // NOTHING IS OPENED TO ANSWER THIS. A health view that launched a browser to
+  // check whether somebody is still logged in to ChatGPT would be a report with
+  // a side effect, so the row says what the session has chosen and says plainly
+  // that liveness is `/source connect`'s question.
+  let chat = { label: 'LAIN', model: null, web: false };
+  try {
+    const reg = require('./modelsource/registry');
+    const src = reg.selectedId(app);
+    chat = {
+      label: reg.LABEL[src] || src,
+      model: ((app.session && app.session.sourceSelections) || {})[src] || null,
+      web: reg.usingWeb(app),
+    };
+  } catch { /* keep the honest default */ }
+  g('Chat model source', [
+    row('Source', chat.web && !chat.model ? STATE.ATTENTION : STATE.IMPLEMENTED,
+      chat.web
+        ? `${chat.label}${chat.model ? ` · ${chat.model}` : ' — no model chosen; /source models'}`
+        : 'LAIN\'s own runtime — the configured route answers chat turns'),
+    row('Coding authority', STATE.IMPLEMENTED,
+      'always LAIN\'s runtime — a consulted website never reads this filesystem, runs a command or settles a task'),
   ]);
 
   // THE DESKTOP SEAM, read from the LIVE bridge — never from the presence of a

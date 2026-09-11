@@ -34,12 +34,42 @@ module.exports = async function () {
     }
   });
 
-  await test('CMD: /help lists every registered command — nothing is hidden folklore', async () => {
+  await test('CMD: /help lists every OFFERED command — nothing is hidden folklore', async () => {
+    // ---- ONE DELIBERATE EXCEPTION, AND IT IS NOT FOLKLORE ---------------
+    //
+    // The rule this asserts is unchanged: a command a person is expected to
+    // find must be findable. What changed is that the registry now also holds
+    // COMPATIBILITY ALIASES — a retired name that still runs when typed, so it
+    // breaks nobody's fingers or scripts, and is advertised nowhere, because
+    // two names for one thing is a choice a person has to make every time.
+    //
+    // `/models` is the first: `/model` is now the single user-facing command.
+    // Folklore is a command you can only learn from somebody else; an alias for
+    // a command that IS in /help is the opposite of that.
+    //
+    // The exception is narrow by construction — `offered()` is the registry
+    // minus `hidden`, so anything not explicitly marked is still asserted here.
     const r = await runCli([], { cwd: tmpdir('cmd-'), stdin: '/help\n', script: [] });
     const out = plain(r.out);
-    for (const n of commands.REGISTRY.keys()) {
-      assertIncludes(out, n, `${n} is registered but absent from /help`);
+    for (const c of commands.offered()) {
+      assertIncludes(out, c.name, `${c.name} is offered but absent from /help`);
     }
+    // AND THE ALIASES ARE GENUINELY ABSENT, not merely unasserted.
+    for (const [n, c] of commands.REGISTRY) {
+      if (!c.hidden) continue;
+      assert.ok(!out.includes(n), `${n} is a compatibility alias and must not be advertised`);
+    }
+  });
+
+  await test('CMD: a hidden compatibility alias still RUNS when typed', async () => {
+    // The whole point of keeping it. If this fails the alias is not a kindness,
+    // it is a removed command wearing a confusing name.
+    const r = await runCli([], {
+      cwd: tmpdir('cmd-'), stdin: '/models\n/exit\n', script: [], timeoutMs: 60000,
+    });
+    assert.strictEqual(r.code, 0, 'a typed alias must not take the session down');
+    const out = plain(r.out);
+    assert.ok(!/TypeError|is not a function|Cannot read/.test(out), `the alias threw:\n${out.slice(-600)}`);
   });
 
   await test('CMD: every command actually RUNS from a prompt, with no argument', async () => {
@@ -138,15 +168,18 @@ module.exports = async function () {
     }
     const r = await runCli([], { cwd: tmpdir('cmd-'), stdin: '/help\n', script: [] });
     const out = plain(r.out);
-    assert.match(out, /\/models \[name\|refresh\]/, 'the refresh form must be discoverable from /help');
-    // ---- AND THE FORM THAT TAKES A CREDENTIAL --------------------------
+    // `/model` is the advertised name now; `/models` is a hidden alias for it.
+    assert.match(out, /\/model \[name\|refresh\]/, 'the refresh form must be discoverable from /help');
+    // ---- AND THE FORMS THAT TAKE AN ARGUMENT ----------------------------
     //
     // `/api` had `refresh` and `status` and no way to GIVE LAIN a key at all —
     // it had to be written into config.json by hand. The credential form is the
     // one a person actually needs first, so it is the one that must be visible
     // in `/help`; pinning only the old two would let it be added and remain
-    // undiscoverable.
-    assert.match(out, /\/api \[<credential>\|refresh \[id\]\|status\]/, 'so must /api');
+    // undiscoverable. The connection form (`/api lain:custom`) is the repair
+    // for a key that stopped working — it must be discoverable for the same
+    // reason.
+    assert.match(out, /\/api \[<credential>\|<connection>\|refresh \[id\]\|status\]/, 'so must /api');
     assert.match(out, /bare \/api asks for a key/, 'and the way in with no argument at all');
   });
 };

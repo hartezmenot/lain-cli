@@ -308,20 +308,19 @@ async function runCommand(app, { rest }, { C } = {}) {
     return;
   }
 
-  // WITH AN EXTERNAL ACTOR CONFIGURED THIS IS A RELAY, not a single turn: LAIN
-  // investigates, a reviewer looks at what it found, LAIN acts and verifies,
-  // and the reviewer looks at the result — bounded, with a named exit. See
-  // investigation.js. Without one, the local workflow below runs unchanged and
-  // says so; it never quietly substitutes LAIN's own model for the reviewer.
+  // (A RELAY BRANCH STOOD HERE. With an external actor configured this became
+  // LAIN → reviewer → LAIN → reviewer, bounded, through investigation.js. It
+  // went with `/external` in this pass, and it had already been unreachable
+  // since `/troubleshoot` was removed from the command registry — recorded as
+  // orphaned in docs/STATUS.md, and confirmed before removing it: the only
+  // caller of `investigation.relay` was this line, and nothing registered
+  // reached it.
   //
-  // GATED ON THE ACTOR BEING GENUINELY USABLE, not on a flag someone set. It
-  // used to ask `external.settings(cfg).ok`, which is the question "is a MODEL
-  // configured" — so a human relay, which needs no model at all, could never
-  // reach the relay however deliberately it was chosen.
-  const reviewer = require('./actors').create(app);
-  if (reviewer && reviewer.status().ok) {
-    return require('./investigation').relay(app, rest, { C: col });
-  }
+  // A SECOND OPINION IS STILL AVAILABLE and is better placed: selecting
+  // ChatGPT.com or Gemini.google.com as the session's chat source sends the next
+  // question there, in the same session history, with provenance on the answer.
+  // See src/modelsource and `/source`. What is gone is a second consultation
+  // system reachable only from one workflow.)
 
   // THE EVIDENCE PASS RUNS FIRST, and is on screen before the model is asked
   // anything. It is local, deterministic and free.
@@ -340,11 +339,11 @@ async function runCommand(app, { rest }, { C } = {}) {
     conclude(app, record);
     app.render.write('\n');
     for (const l of reportLines(report, app.render.width)) app.render.write(l + '\n');
-    // NOT CONFIGURED IS SAID OUT LOUD. Silence here would leave "did a second
-    // model look at this?" unanswerable, which is how a single opinion gets
-    // mistaken for a reviewed one.
-    app.render.write('\n  ' + col.dim('EXTERNAL ACTOR  ') + col.yellow('✕ NOT CONFIGURED')
-      + col.dim('  — local investigation only. /external to choose a reviewer.\n'));
+    // ONE OPINION IS SAID OUT LOUD TO BE ONE. Silence here would leave "did a
+    // second model look at this?" unanswerable, which is how a single opinion
+    // gets mistaken for a reviewed one.
+    app.render.write('\n  ' + col.dim('SECOND OPINION  ') + col.yellow('✕ NONE')
+      + col.dim('  — local investigation only. /source chatgpt (or gemini) to consult one.\n'));
     app.render.write(col.dim('  The full tool log is in the ACTIVITY view. /copy troubleshoot takes this report.\n'));
   }
   return report;

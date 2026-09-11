@@ -100,23 +100,27 @@ function resumeSummary(session, app = null) {
   // survive a restart by design, so saying "it is gone" is the true answer.
   if (!app) return out;
 
-  const ts = app._troubleshoot || null;
-  if (ts && Array.isArray(ts.rounds) && ts.rounds.length) {
-    const last = ts.rounds[ts.rounds.length - 1];
-    say(true, `troubleshooting: round ${last.round} of ${ts.rounds.length} reviewed by ${(ts.external && ts.external.model) || 'the external model'}`);
-    const rec = last.analysis && last.analysis.sections ? last.analysis.sections.recommendation.join(' ') : '';
-    if (rec) say(true, `external recommendation: ${rec.slice(0, 90)}`);
-    if (ts.stop) say(/fixed/.test(ts.stop), `it stopped because: ${ts.stop}`);
-  } else if (ts) {
-    say(false, 'a troubleshoot was started but no external review completed');
-  }
+  // (A TROUBLESHOOTING-RELAY SECTION stood here — which round the external
+  // reviewer had reached, its last recommendation, and why the relay stopped.
+  // Its only writer was investigation.relay, which went with `/external` in this
+  // pass and had been unreachable before that. Nothing set `app._troubleshoot`
+  // any more, so the section could only ever report the absence of a thing that
+  // could not happen.)
 
   try {
-    const ext = require('./external').settings(app.cfg);
-    say(Boolean(ext.ok), ext.ok
-      ? `external reviewer: ${ext.model} (${ext.maxRounds} rounds)`
-      : 'no external reviewer configured');
-  } catch { /* config unreadable — say nothing rather than guess */ }
+    // WHICH MODEL ANSWERS A CHAT TURN — a session fact, and one a person
+    // resuming needs: a session that was consulting ChatGPT.com and comes back
+    // silently answering from LAIN's runtime would attribute the change to
+    // nobody. Read from the registry rather than from a config key, because the
+    // selection is per session. Coding is unaffected and is not claimed here.
+    const reg = require('./modelsource/registry');
+    const src = reg.selectedId(app);
+    const model = ((app.session && app.session.sourceSelections) || {})[src] || null;
+    const web = reg.usingWeb(app);
+    say(!web || Boolean(model), web
+      ? `chat source: ${reg.LABEL[src]}${model ? ` · ${model}` : ' — no model chosen yet'}`
+      : 'chat source: LAIN\'s own runtime');
+  } catch { /* the registry is unreadable — say nothing rather than guess */ }
 
   try {
     const d = app.desktop().bridge.status();

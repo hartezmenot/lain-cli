@@ -616,9 +616,21 @@ function scrollHint(lines, bodyRows, { stickToBottom, scroll, anchorSpoken }) {
     return `↓ ${spoken - anchorSpoken} new · End`;
   }
   if (total <= bodyRows) return '';
-  if (scroll <= 0) return '↓ more';
-  if (scroll >= total - bodyRows) return '↑ more';
-  return '↕ more';
+  // ---- THE KEY IS NAMED, BECAUSE THE WHEEL MAY NOT BE THERE -------------
+  //
+  // `↑ more` on its own assumed a mouse wheel. Mouse capture now defaults OFF
+  // so the terminal keeps its own drag-selection (see config.js `mouse`), and
+  // with reporting off NO wheel event reaches LAIN — so the hint announced
+  // scrollable content and named nothing that would scroll it. The reported
+  // symptom was exactly that: "it says more, and the wheel does nothing".
+  //
+  // PgUp/PgDn work in both modes and always have. Naming them is the same
+  // argument the `· End` branch above already makes — the way back should not
+  // be folklore — and it is true whether or not the wheel happens to work,
+  // which is why it is not conditional on the mouse setting.
+  if (scroll <= 0) return '↓ more · PgDn';
+  if (scroll >= total - bodyRows) return '↑ more · PgUp';
+  return '↕ more · PgUp/PgDn';
 }
 
 module.exports = {

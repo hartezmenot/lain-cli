@@ -210,8 +210,27 @@ async function main() {
     for (const f of files) {
       process.stdout.write(`${f}\n`);
       helpers.setFile(`${tier}/${f}`);
-      const mod = require(path.join(dir, f));
-      if (typeof mod === 'function') await mod();
+      // ---- ONE UNLOADABLE FILE MUST NOT END THE TIER ------------------------
+      //
+      // `require` was called bare here, so a file that fails to PARSE threw
+      // straight out of `main` — past the summary, past the FAILURES list, past
+      // every file after it in the sort. A truncated `bot-check.test.js` did
+      // not read as "1 failed": it read as a stack trace, and the ~40 unit
+      // files alphabetically after `bot-check` silently did not run at all.
+      // The tier looked broken in a way that hid what else was broken, which is
+      // the one thing a test runner must never do.
+      //
+      // A load failure is now a FAILING TEST — counted, named after the file,
+      // carrying the SyntaxError — and the run continues. Nothing is repaired
+      // or skipped: the count goes up, not down.
+      try {
+        const mod = require(path.join(dir, f));
+        if (typeof mod === 'function') await mod();
+      } catch (e) {
+        // A throw from the module BODY (a bad require, a top-level assertion)
+        // lands here too, and belongs here for the same reason.
+        await helpers.test(`LOAD: ${f} could not be loaded or run to completion`, () => { throw e; });
+      }
     }
   }
 

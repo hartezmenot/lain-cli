@@ -154,16 +154,26 @@ module.exports = async function () {
     }
   });
 
-  await test('CONTEXT: the relay keeps the USER\'S words as the task, not its own', () => {
-    // The relay drives the turn loop itself, so no turn ever carried the
-    // problem statement — and the first thing LAIN submitted was its OWN
-    // instruction, which became the task in the banner. The one place that is
+  await test('CONTEXT: a consulted model\'s turn keeps the USER\'S words as the task', () => {
+    // THE DEFECT THIS GUARDS, restated for what replaced the relay. The relay
+    // drove the turn loop itself, so the first thing LAIN submitted was its OWN
+    // instruction, which became the task in the banner — the one place that is
     // supposed to say what the user asked for said what LAIN asked for.
-    const src = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'src', 'investigation.js'), 'utf8');
-    assert.match(src, /if \(!app\.session\.task\) app\.identify\(problem/,
-      'the relay must establish the task from the problem before any round');
-    assert.match(src, /sameTask: true/,
-      "and its own instruction must continue that task rather than replacing it");
+    //
+    // The relay is gone (with `/external`; see routecommands.js). The property
+    // survives because the dispatcher that replaced it does not submit anything
+    // of its own at all: it records the USER'S text as the turn's input and the
+    // reply as an assistant message, so there is nothing for LAIN's own words
+    // to displace.
+    const fs = require('fs');
+    const path = require('path');
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'chatdispatch.js'), 'utf8');
+    assert.match(src, /newRecord\(session\.id, text/,
+      "the turn record's input must be what the user typed");
+    assert.match(src, /role: 'user', content: String\(text\)/,
+      'and that is what enters the conversation');
+    assert.ok(!/app\.submit\(/.test(src.replace(/\/\*[\s\S]*?\*\//g, '')),
+      'a chat source must never start a turn of its own');
   });
 
   await test('CONTEXT: only LAIN\'s own machinery may assert sameTask', () => {

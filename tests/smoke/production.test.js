@@ -41,7 +41,12 @@ function ws() {
 // not these tests failing. What they are about is a provider that never comes
 // back, so it never comes back.
 const DEAD = { error: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:20128' } };
-const OUTAGE = Array.from({ length: 8 }, () => DEAD);
+// SIZED FROM THE BUDGET, NOT FROM A NUMBER. It has been 2, then 5, then 10,
+// and each move left eight refusals no longer exhausting it — the script ran
+// out, the mock answered normally, and a test about a provider that never
+// comes back quietly took a happy path.
+const { MAX_RETRIES } = require('../../src/backoff');
+const OUTAGE = Array.from({ length: MAX_RETRIES + 4 }, () => DEAD);
 
 module.exports = async function () {
   // 1-7: process starts, prompt appears, input works, tool call + result, turn

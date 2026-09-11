@@ -167,7 +167,13 @@ async function start(app) {
   // THE MOUSE. Only ever asked for on a real terminal, and only in TUI mode:
   // a linear `lain -p` run has nothing to click, and enabling tracking there
   // would take text SELECTION away from the terminal for no gain.
-  if (tui) input.enableMouse();
+  //
+  // AND ONLY WHEN THE PERSON HAS ASKED FOR IT. This used to be unconditional,
+  // which had two consequences: the terminal's own selection was taken from
+  // everybody by default, and `/mouse off` was undone by the next launch
+  // because this line re-asserted it. The preference is now durable and its
+  // default is OFF — see config.js `mouse` for why that trade went this way.
+  if (tui && require('./config').load().mouse === true) input.enableMouse();
   input.on('mouse', (ev) => { app.disarmExit(); if (tui) app.ui.handleMouse(ev); });
 
   // ---- THE CLIPBOARD -----------------------------------------------------

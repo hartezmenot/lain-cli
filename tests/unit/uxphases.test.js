@@ -169,11 +169,19 @@ module.exports = async function () {
     assert.strictEqual(p.percent, 60);
   });
 
-  await test('PHASE B: the strip reports tokens, and never invents an output figure', () => {
-    // §10. The input side of an open request is known from its first frame and
-    // is shown; the OUTPUT side is stated once, at the end, by every provider
-    // LAIN speaks to — so while a request is open there is nothing to draw and
-    // a `+…` says so rather than a `0` pretending to be a measurement.
+  await test('PHASE B: the live row carries NO accounting cluster at all', () => {
+    // ---- WHAT THIS ASSERTED BEFORE, AND WHY THE DECISION CHANGED --------
+    //
+    // It pinned `↑42K ⚡31K ↓1.2K +18K` onto the live row and was right about
+    // every one of those figures individually. Seen on a real screen at session
+    // scale it read `↑86M ⚡16M ↓3.7M` — LIFETIME totals, which barely move
+    // inside one turn, sitting beside a spinner that moves four times a second.
+    // A number that does not change next to one that does reads as a frozen
+    // screen, and two of the four were diagnostics nobody acts on mid-turn.
+    //
+    // The primary surface now carries ONE authoritative token signal, and it is
+    // the header's OUTPUT figure — see ui/views.js `outputLabel`. Everything
+    // else is `/token`. This asserts the DECISION.
     const open = T.strip(statusStrip({
       phase: { phase: 'WAITING_MODEL' },
       requestOpen: true,
@@ -181,19 +189,20 @@ module.exports = async function () {
       liveUsage: { inputTokens: 18300, cacheReadTokens: 0, cacheCreationTokens: 0 },
       recent: [],
     }, 100, 1)[0]);
-    assert.match(open, /↑42K/, 'input, the session total');
-    assert.match(open, /⚡31K/, 'cache reads — the only way to tell whether caching works at all');
-    assert.match(open, /↓1\.2K/, 'output, completion-only and always a total');
-    assert.match(open, /\+18K/, 'and the open request, separate from the total rather than folded in');
+    for (const glyph of ['↑', '⚡', '↓', '+18K', '+…']) {
+      assert.ok(!open.includes(glyph), `the live row must not carry ${glyph}`);
+    }
+    // AND THE ROW STILL PROVES LAIN IS ALIVE, which is its actual job.
+    assert.match(open, /Thinking|Waiting|◐/, 'the live row still says what is happening');
+  });
 
-    const unknown = T.strip(statusStrip({
-      phase: { phase: 'WAITING_MODEL' },
-      requestOpen: true,
-      usage: { inputTokens: 42118, outputTokens: 1234, cacheReadTokens: 31400 },
-      recent: [],
-    }, 100, 1)[0]);
-    assert.match(unknown, /\+…/, 'a request is open and its cost is genuinely not known yet');
-    assert.ok(!/\+0\b/.test(unknown), 'which is never reported as zero');
+  await test('PHASE B: the detailed accounting is still available, behind /token', () => {
+    // REMOVED FROM THE ROW IS NOT REMOVED FROM THE PRODUCT. If this stops being
+    // true the change above became a capability loss rather than a relocation.
+    const { REGISTRY } = require('../../src/commands');
+    assert.ok(REGISTRY.has('/token'), '/token is where the breakdown lives');
+    const tv = require('../../src/ui/tokenview');
+    assert.ok(tv && typeof tv === 'object', 'and the view that renders it still exists');
   });
 
   await test('PHASE B: the telemetry gives way before the live row does', () => {
@@ -206,7 +215,8 @@ module.exports = async function () {
       }, w, 1)[0]);
       assert.match(line, /Running/, `the live row proves LAIN is alive at ${w}`);
       assert.ok(T.width(line) <= w, `the strip overflowed at ${w}: ${T.width(line)}`);
-      if (w < 56) assert.ok(!/↑/.test(line), `accounting is shed rather than mangled at ${w}`);
+      // (An `accounting is shed at narrow widths` assertion stood here. There
+      // is no accounting on this row at any width now — see the test above.)
     }
   });
 

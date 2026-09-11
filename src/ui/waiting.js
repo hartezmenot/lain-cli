@@ -61,7 +61,14 @@ function cancelRetry(ui) {
   ui.retryCancelled = true;
   ui.interrupted = false;
   if (ui.app.abort && !ui.app.abort.signal.aborted) ui.app.abort.abort();
-  ui.app.render.notice('warn', 'RETRY CANCELLED — the wait was stopped. Send again when the provider is back.');
+  // NO TRANSCRIPT NOTICE. `retryCancelled` is already a resting state that
+  // liveState renders as `RETRY CANCELLED · the wait was stopped; the task is
+  // intact` — the identical sentence, on the row built for it. Writing it into
+  // the conversation as well reported one event twice, and the durable copy
+  // outlived the state by hours: an alert glued into scrollback where a person
+  // scrolling past tomorrow cannot tell it from something the model said. See
+  // ui/operation.js, which made this argument for housekeeping notes, and
+  // ui/alert.js, which owns the live half.
   ui.refresh();
   return true;
 }

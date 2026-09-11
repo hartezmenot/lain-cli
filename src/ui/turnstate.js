@@ -39,11 +39,30 @@ function clearExtras(ui) {
   if (Array.isArray(ui.app.session.actors)) ui.app.session.actors.length = 0;
 }
 
-/** A new turn: whatever the last one was doing is no longer the news. */
-function beginTurn(ui) {
+/**
+ * A new turn: whatever the last one was doing is no longer the news.
+ *
+ * `verdict` is identify.js's, and it is what decides whether the clock starts
+ * again or carries on — see ui/alert.js `attemptFor`. It is OPTIONAL, and its
+ * absence means FRESH, because every caller that does not know about tasks
+ * (a test double, a headless projection) is starting something unrelated by
+ * definition.
+ */
+function beginTurn(ui, verdict = null) {
+  const alert = require('./alert');
+  // WHAT TO DO WITH THE CLOCK IS DECIDED BEFORE THE ALERT IS CLEARED, because
+  // clearing it is what destroys the evidence the decision is made from. The
+  // ordering is load-bearing and reversing it would silently make every
+  // continuation FRESH.
+  const attempt = alert.attemptFor(ui, verdict);
+  // ---- THE STALE ALERT STOPS BEING THE RESTING STATE, HERE -------------
+  //
+  // A rate-limit wait, an interruption or a previous failure described the
+  // attempt BEFORE this submission. `waitingUntil` in particular outranks every
+  // other branch of liveState, so leaving it set would cover this turn's phases
+  // with the last turn's countdown. See ui/alert.js for the full account.
+  alert.clearResting(ui);
   ui.story.beginTurn();
-  ui.interrupted = false;
-  ui.retryCancelled = false;
   // NO REQUEST IS OPEN YET, so there is no live figure to draw. Cleared HERE
   // rather than at the end of the last turn so that a finished request's input
   // count stays on the screen through the pause between turns instead of
@@ -63,7 +82,13 @@ function beginTurn(ui) {
   // change, tool call, retry and verification step inside the turn leaves it
   // alone, which is the difference between one clock for the task and six
   // little ones for its steps. See ui/workclock.js.
-  require('./workclock').start(ui.clock);
+  //
+  // EXCEPT WHEN THE SAME ATTEMPT IS CARRYING ON. `continue` after a rate-limit
+  // pause or a refused credential is not a new execution attempt, and zeroing
+  // there reports four minutes of real work as none. RESTART still zeroes: the
+  // previous attempt is over and stays failed in the record. See ui/alert.js.
+  if (attempt === alert.ATTEMPT.CONTINUE) require('./workclock').resume(ui.clock);
+  else require('./workclock').start(ui.clock);
   // AND THE LIVE ROW GOES BACK TO THE WORK. A transient operation note —
   // "Recovering interrupted turn", "Copied 3 lines" — shares that row with the
   // turn's phase and must never outlive the moment it described. See
@@ -180,9 +205,33 @@ function setInterrupted(ui, on) {
  * Also a resting state. Without it the header said `READY` the instant a
  * connection dropped: the failure was in the activity feed, but the single word
  * summarising the session said everything was fine, and the word wins.
+ *
+ * ------------------------------------------------------------------------
+ * THE KIND IS KEPT, AND IT USED TO BE THROWN AWAY HERE.
+ *
+ * This was `ui.failed = Boolean(on)`. Its one caller that matters passes
+ * `record.providerFailure` — an OBJECT carrying `kind`, `status` and
+ * `message` — and the coercion reduced all of it to `true`. Downstream,
+ * ui/failure.js `failureRow` found no `kind`, fell through to `UNKNOWN`, and
+ * every failure in the product rendered as the same generic
+ * `ERROR · the provider did not answer`: a refused credential, a full context
+ * window and a dead gateway were indistinguishable on the one row a person
+ * reads at a glance, despite the vocabulary to tell them apart existing and
+ * being correct two files away.
+ *
+ * It also made BLOCKED unrecognisable from TERMINAL, so a `continue` after a
+ * rate limit could not be told from a `retry` after a crash — see ui/alert.js,
+ * which needs the kind to decide whether the execution attempt survived.
+ *
+ * `failureRow` already handles a bare boolean, a string and an object, so
+ * passing the object through is strictly more information and breaks no
+ * caller: everything downstream tests `failed` for truthiness.
  */
 function setFailed(ui, on) {
-  ui.failed = Boolean(on);
+  // An OBJECT keeps its kind; a STRING keeps its sentence — `failureRow`
+  // renders both and only a boolean carries nothing. Anything else coerces, so
+  // the truthiness every downstream reader tests is unchanged.
+  ui.failed = on && (typeof on === 'object' || typeof on === 'string') ? on : Boolean(on);
   if (ui.failed) { ui.interrupting = false; ui.interrupted = false; }
   ui._syncTicker();
   ui.refresh();

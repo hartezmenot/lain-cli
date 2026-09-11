@@ -106,23 +106,72 @@ module.exports = async function () {
 
   // ------------------------------------------------- what was removed -------
 
-  await test('RETIRED: the browser actor is not a kind, in any configuration', () => {
-    // A config that still names `actor: 'BROWSER'` — left over from before the
-    // removal — must not be special-cased back into existence. It falls to the
-    // default, which is the API actor, exactly as an unknown name always did.
-    const actors = require('../../src/actors');
-    assert.ok(!Object.prototype.hasOwnProperty.call(actors.KIND, 'BROWSER'));
-    assert.strictEqual(actors.kindOf({ externalTroubleshoot: { actor: 'BROWSER' } }), actors.KIND.API);
-    assert.strictEqual(actors.kindOf({ externalTroubleshoot: { actor: 'browser' } }), actors.KIND.API);
-    // And no actor class exists for it to resolve to.
-    const s = actors.status({ cfg: { externalTroubleshoot: { actor: 'BROWSER', model: 'x' } } });
-    assert.ok(s.actors.every((a) => a.kind !== 'BROWSER'), 'no BROWSER row in the actor menu');
-  });
-
   await test('RETIRED: the panel module is gone, and the fan-out with it', () => {
     // The multi-provider fan-out existed to drive more than one chat page.
     // Its module must not come back piecemeal.
     assert.throws(() => require('../../src/externalpanel'), /Cannot find module/);
+  });
+
+  /**
+   * ---- `/external` AND ITS FOUR MODULES ----------------------------------
+   *
+   * These assert the DECISION, in the shape this repository already uses for a
+   * retired command: what is gone, and — the half that matters more — what
+   * SURVIVED, so a future pass can tell "removed on purpose" from "lost".
+   *
+   * The useful behaviour did not disappear. It came back as a chat model
+   * SOURCE: selecting ChatGPT.com or Gemini.google.com sends the next question
+   * there, in the same session history, with provenance on the answer. See
+   * src/modelsource and `/source`.
+   */
+  await test('RETIRED: the four /external modules are gone and cannot be required', () => {
+    for (const m of ['../../src/external', '../../src/actors', '../../src/externalrequest', '../../src/investigation']) {
+      assert.throws(() => require(m), /Cannot find module/, m);
+    }
+  });
+
+  await test('RETIRED: `/external` is not a registered command, and nothing revives it', () => {
+    const commands = require('../../src/commands');
+    assert.ok(!commands.names().includes('/external'), '/external must stay gone');
+    // AND ITS REPLACEMENT EXISTS. A removal with no successor would be a
+    // capability quietly dropped rather than a command replaced by a selection.
+    assert.ok(commands.names().includes('/source'), '/source is what replaced it');
+  });
+
+  await test('SURVIVED: the neutral pieces of /external were reused, not deleted', () => {
+    // 1. THIS LEDGER — the file these tests are about. It is now written by the
+    //    web model sources, so "did something leave this machine, and did it
+    //    come back" is still answerable.
+    assert.strictEqual(typeof externalstate.forSession, 'function');
+    const web = fs.readFileSync(require.resolve('../../src/modelsource/webmodel'), 'utf8');
+    assert.match(web, /externalstate/, 'the web sources write the same call ledger');
+
+    // 2. THE OVERCLAIM CHECK — a consulted model that claims to have ACTED is
+    //    flagged. It was never about transport.
+    const contract = require('../../src/modelsource/contract');
+    assert.ok(contract.overclaims('FACT: the loader is fine. I ran the tests and they pass.'));
+    assert.strictEqual(contract.overclaims('FACT: the loader reads JSON. RECOMMENDATION: check the writer.'), null);
+
+    // 3. THE BOUNDED, REDACTED SESSION-FACTS PACKET.
+    const ctx = require('../../src/modelsource/context');
+    assert.strictEqual(typeof ctx.facts, 'function');
+    assert.ok(ctx.MAX_TOTAL > 0 && ctx.MAX_PROMPT > 0, 'still bounded');
+  });
+
+  await test('SURVIVED: a consulted model still gets no execution authority', () => {
+    // The property `/external` was tested for, asserted against what replaced
+    // it: a web reply is text. It cannot call a tool, widen a permission or
+    // settle a task, and nothing in the model-source package reaches the
+    // supervisor, the tool registry or the permission gate.
+    const dir = require('path').join(__dirname, '..', '..', 'src', 'modelsource');
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.js')) continue;
+      const src = fs.readFileSync(require('path').join(dir, f), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      for (const forbidden of ['supervisor', 'tools/index', "require('../gate')", "require('../trust')", "require('../permissions')"]) {
+        assert.ok(!src.includes(forbidden), `modelsource/${f} reaches ${forbidden}`);
+      }
+    }
   });
 
   // ---------------------------------------------------------------- images --

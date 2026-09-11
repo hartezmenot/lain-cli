@@ -454,11 +454,10 @@ async function* runTurn(session, userInput, opts = {}) {
 
       if (failure.retriable && retries < maxRetries && !text.trim()) {
         retries += 1;
-        // `retryAfterMs` FIRST AND UNJITTERED — a server that says when to come
-        // back is giving an instruction, not an estimate. Only the schedule LAIN
-        // invents for itself is spread; see backoffFor().
-        const waitMs = failure.retryAfterMs
-          || (failure.kind === errors.KIND.RATE_LIMITED ? 20_000 : backoffFor(retries));
+        // ONE POLICY, in backoff.js: MAX(schedule, trustworthy provider hint),
+        // so a provider can make LAIN wait longer but never shorter. The
+        // hardcoded 20s rate-limit branch that used to live here is gone.
+        const waitMs = backoffFor(retries, failure.retryAfterMs);
         // A 20-second rate-limit wait with a silent screen is indistinguishable
         // from a hang, so the wait says what it is and how long it will be.
         // WHEN, not just how long. A duration answers "how long do I wait";
@@ -492,7 +491,7 @@ async function* runTurn(session, userInput, opts = {}) {
           message: `${errors.retryWord(failure)} · ${errors.shortReason(failure)} · retry in `
             + `${Math.round(waitMs / 1000)}s · ${retries}/${maxRetries}`,
         };
-        await sleep(waitMs, signal);
+        await sleep(waitMs, signal, opts.timers || null);  // timers: test seam, see backoff.js
         // Escape (or Ctrl+C) during the wait aborts the signal. Say that the
         // wait ended because it was cancelled, not because the provider came
         // back — the two look identical from here otherwise.

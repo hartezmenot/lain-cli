@@ -105,6 +105,28 @@ const EVENT = Object.freeze({
 
   RECOVERY_STARTED: 'recovery.started',
   HOOK_RAN: 'hook.ran',
+
+  // ---- A CHAT MODEL SOURCE THAT IS NOT LAIN'S OWN RUNTIME ----------------
+  //
+  // NOT A SECOND BUS. These are names in THIS vocabulary, delivered by THIS
+  // EventBus, subject to the same refusal of an unknown name — which is the
+  // whole reason they are declared here rather than in the model-source
+  // package. A website-backed model is slower than an API by a wide margin and
+  // most of that time is spent waiting on a page, so a companion that cannot
+  // distinguish CONNECTING from WAITING has nothing to draw for a minute.
+  //
+  // Every one of them is emitted from the point in src/modelsource where it
+  // becomes true, never inferred from a timer. See modelsource/activity.js.
+  WEB_MODEL_CONNECTING: 'webmodel.connecting',
+  WEB_MODEL_AUTH_REQUIRED: 'webmodel.auth_required',
+  WEB_MODEL_DISCOVERING: 'webmodel.discovering',
+  WEB_MODEL_READY: 'webmodel.ready',
+  WEB_MODEL_SENDING: 'webmodel.sending',
+  WEB_MODEL_WAITING: 'webmodel.waiting',
+  WEB_MODEL_RECEIVING: 'webmodel.receiving',
+  WEB_MODEL_RATE_LIMITED: 'webmodel.rate_limited',
+  WEB_MODEL_FAILED: 'webmodel.failed',
+  WEB_MODEL_CANCELLED: 'webmodel.cancelled',
 });
 
 const NAMES = Object.freeze(Object.values(EVENT));

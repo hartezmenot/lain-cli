@@ -85,10 +85,26 @@ const DURING_TURN = Object.freeze({
  * flashMs: 0 and waits to be dismissed.
  */
 const FLASH_MS = 1500;
-function define(name, { args = '', desc, run, duringTurn = DURING_TURN.SAFE, surface = false, flashMs = FLASH_MS }) {
+/**
+ * @param {boolean} [o.hidden]  A COMPATIBILITY ALIAS: it still runs when typed,
+ *   and it is not offered anywhere. Two names for one thing is a thing to learn
+ *   twice and a choice to make every time — `/models` and `/model` opened the
+ *   same picker and neither name told you which. The old name keeps working for
+ *   anyone with it in their fingers or in a script; only ONE is advertised.
+ *
+ *   Hidden is NOT a way to ship something undiscoverable. A command a person is
+ *   expected to find must never set it — see helpcommand.js, which is the view
+ *   that honours it, and ui/menus.js, which is the other one.
+ */
+function define(name, { args = '', desc, run, duringTurn = DURING_TURN.SAFE, surface = false, flashMs = FLASH_MS, hidden = false }) {
   const key = name.toLowerCase();
   if (REGISTRY.has(key)) throw new Error(`duplicate command: ${key}`);
-  REGISTRY.set(key, { name: key, args, desc, run, duringTurn, surface, flashMs });
+  REGISTRY.set(key, { name: key, args, desc, run, duringTurn, surface, flashMs, hidden: Boolean(hidden) });
+}
+
+/** Everything a person is offered — the registry minus its compatibility aliases. */
+function offered() {
+  return [...REGISTRY.values()].filter((c) => !c.hidden);
 }
 
 /** True when this command must wait for the active turn to finish. */
@@ -373,8 +389,8 @@ define('/copy', {
   // MACHINERY: LAIN talking about itself, not about the work. Goes to the
   // command panel, never into the conversation the model reads.
   surface: true,
-  args: '[last|output|diff|audit|health|rc|troubleshoot|task|activity|context]',
-  desc: 'Copy what you are looking at to the clipboard (local; costs nothing)',
+  args: '[context|context all|last|output|diff|task|status|activity|messages|audit|health|rc|troubleshoot]',
+  desc: 'Copy the task summary; /copy context exports diagnostic context (local; costs nothing)',
   run(app, ctx) { return require('./copy').runCommand(app, ctx, { C }); },
 });
 
@@ -461,7 +477,7 @@ define('/plan', {
   // and absent from the next turn's context. See the note on `surface` above,
   // and tests/smoke/surface.test.js, which exists because of it.
   duringTurn: DURING_TURN.BLOCKED,
-  args: '[show|step <text>|done <note>|drop <n>|clear]',
+  args: '[<nothing — edit it>|show|step <text>|done <note>|drop <n>|clear]',
   desc: 'The session-owned plan (optional — plans are never required)',
   run(app, ctx) { return require('./plan').runCommand(app, ctx, { C }); },
 });
@@ -617,6 +633,21 @@ require('./briefcommand').register({ define, C });
 // See harnesscommands.js on why `/task` was extended rather than replaced.
 require('./harnesscommands').register({ define, DURING_TURN, C });
 require('./botcommand').register({ define });
+// AND `/source` — WHICH MODEL ANSWERS A CHAT TURN: LAIN's own runtime,
+// ChatGPT.com or Gemini.google.com. Its own file because it is one subject and
+// because the model sources have a package of their own; it is also what
+// replaced `/external`, which was a draft-and-dispatch command where a
+// SELECTION is the right shape. See sourcecommand.js.
+require('./sourcecommand').register({ define, C });
+// AND `/goal` — the standing direction this work serves. Beside /plan rather
+// than with the machinery: a goal is a statement about the WORK, in the record
+// of the work, so it stays in Context. See goalcommand.js and src/goal.js for
+// why GOAL, PLAN, PLAN_STEP and STEER are four concepts and not one.
+require('./goalcommand').register({ define, C });
+// AND `/app` — the LAIN Harness application, the graphical surface over THIS
+// session. Not a second LAIN and not a second session engine: one App, one
+// conversation, two ways to look at it. See src/harnessapp/server.js.
+require('./appcommand').register({ define, C });
 // AND /help, which is a VIEW OF THIS REGISTRY rather than a family of
 // commands: it renders what is defined here, plus the keys — which is the
 // half that grew, because a key nobody is told about is a key that does not
@@ -625,6 +656,8 @@ require('./helpcommand').register({ define, REGISTRY, C });
 
 module.exports = {
   REGISTRY, define, looksLikeCommand, parse, run,
-  DURING_TURN, blockedDuringTurn,
+  DURING_TURN, blockedDuringTurn, offered,
+  // EVERY name, aliases included — this answers "can this be typed", which is a
+  // different question from "is this offered". `offered()` is the second one.
   names: () => [...REGISTRY.keys()],
 };

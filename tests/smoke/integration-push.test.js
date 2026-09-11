@@ -142,15 +142,17 @@ module.exports = async function () {
   //     prompt.js still carries the TROUBLESHOOT paragraph — so the WORKFLOW
   //     (trace before editing) survives and is reached by describing the
   //     problem, which is what the subtraction was for.
-  //   • troubleshoot.js still renders reports, but its two live entry points
-  //     (`runCommand`, and `investigation.relay` through it) are now reachable
-  //     from NO command. The structured report and the bounded external review
-  //     therefore no longer appear in an ordinary turn.
+  //   • troubleshoot.js still renders reports, but `runCommand` is reachable
+  //     from NO command, so the structured report no longer appears in an
+  //     ordinary turn.
+  //   • the bounded external review it used to start is not merely unreachable
+  //     now — it is GONE. `investigation.relay` and `/external` were retired in
+  //     the model-source pass; a second opinion is a chat SOURCE on the session
+  //     instead. See docs/MODEL-SOURCES.md and relay-dash-mcp.test.js.
   //
   // So the report assertions are not “fixed” by rewording them — the surface
   // they described is genuinely gone. They are replaced by the two facts that
-  // ARE checkable through the real binary, and the orphaned relay is reported
-  // in the final summary rather than papered over here.
+  // ARE checkable through the real binary.
 
   await test('PUSH: a described problem routes to TROUBLESHOOT without any command', async () => {
     const r = await runCli([], {

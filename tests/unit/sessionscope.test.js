@@ -110,6 +110,12 @@ module.exports = async function () {
       // nothing has been run to check" is the record of the work, and a box
       // that closes on Esc is not where a record lives.
       '/plan', '/task',
+      // AND `/goal`, which is the same argument one level up. A goal is what
+      // the user is trying to achieve — the direction every task in the session
+      // serves — and it is the most durable statement about the work there is.
+      // In a box that closes on Esc it would be absent from the record the
+      // moment it was set. See src/goal.js on why it is not the task objective.
+      '/goal',
       // AND `/verify`, for exactly the same reason and a sharper one. A
       // verification verdict — what was run, what passed, what could not be
       // checked — is not LAIN talking about itself; it is the EVIDENCE the task

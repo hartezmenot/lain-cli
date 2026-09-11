@@ -74,12 +74,32 @@ function newId(now = Date.now()) {
 
 class TaskRecord {
   #state = state.STATE.PLANNED;
-  constructor({ id = null, title = '', objective = '', workspace = process.cwd(), sessionId = null } = {}) {
+  constructor({ id = null, title = '', objective = '', workspace = process.cwd(), sessionId = null, environment = 'host' } = {}) {
     this.id = id || newId();
     this.title = String(title || objective || 'untitled').replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE) || 'untitled';
     this.objective = String(objective || '');
     this.workspace = String(workspace);
     this.sessionId = sessionId ? String(sessionId) : null;
+    /**
+     * WHERE THIS TASK RUNS — `host` or `vm:<id>`. See env/environments.js.
+     *
+     * ON THE TASK, because §6's failure is what happens when it is not: the
+     * filesystem answers "host", the browser answers "the VM" and the process
+     * manager answers "host", every one of them succeeds, and three subsystems
+     * are describing three different copies of the project with nothing
+     * anywhere reporting a contradiction. Bound once, read by everything.
+     *
+     * It defaults to `host` and stays there for almost every task, which is
+     * correct — the point is that it is an ANSWER rather than an assumption.
+     */
+    // AN UNREADABLE VALUE BECOMES `host`, NEVER `undefined` AND NEVER A VM.
+    // `parse` returns no `spec` when it cannot read the input, and taking that
+    // straight would have left the field undefined — a task with no answer to
+    // "where does this run", which is the exact hole this field closes. The
+    // host is the safe fallback in the only direction that matters: work stays
+    // on the machine it was already on instead of escaping to a guest nobody
+    // named.
+    this.environment = (require('../env/environments').parse(environment).spec) || 'host';
     /** Why the task is in the state it is in. Always a sentence a person reads. */
     this.reason = 'created';
     this.createdAt = Date.now();
@@ -190,7 +210,7 @@ class TaskRecord {
   toJSON() {
     return {
       id: this.id, title: this.title, objective: this.objective, workspace: this.workspace,
-      sessionId: this.sessionId, state: this.state, reason: this.reason,
+      sessionId: this.sessionId, environment: this.environment, state: this.state, reason: this.reason,
       createdAt: this.createdAt, updatedAt: this.updatedAt,
       history: this.history, processes: this.processes, verifications: this.verifications,
       observations: this.observations, artifacts: this.artifacts, agents: this.agents,
@@ -203,6 +223,9 @@ class TaskRecord {
     const t = new TaskRecord({
       id: data.id, title: data.title, objective: data.objective,
       workspace: data.workspace, sessionId: data.sessionId,
+      // A RECORD WRITTEN BEFORE THIS FIELD EXISTED RAN ON THE HOST. Defaulting
+      // is the truthful reading of its absence, not a guess.
+      environment: data.environment || 'host',
     });
     t.#state = state.isState(data.state) ? data.state : state.STATE.PLANNED;
     t.reason = String(data.reason || '');

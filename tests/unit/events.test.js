@@ -52,6 +52,18 @@ module.exports = async function () {
       'observation.made', 'artifact.created',
       'approval.required', 'approval.resolved',
       'recovery.started', 'hook.ran',
+      // ---- AND THE WEB MODEL SOURCES, ON THE SAME BUS ------------------
+      //
+      // Here for the identical reason the harness names are: driving a
+      // logged-in page is minutes of waiting, and a companion that cannot tell
+      // CONNECTING from WAITING from AUTH_REQUIRED has nothing to draw for the
+      // duration — and cannot tell the person the one thing they may need to
+      // act on, which is that a browser window is waiting for them to log in.
+      // A second bus for a second subsystem would make a companion merge two
+      // channels in arrival order. See src/modelsource/activity.js.
+      'webmodel.connecting', 'webmodel.auth_required', 'webmodel.discovering',
+      'webmodel.ready', 'webmodel.sending', 'webmodel.waiting', 'webmodel.receiving',
+      'webmodel.rate_limited', 'webmodel.failed', 'webmodel.cancelled',
     ].sort());
   });
 

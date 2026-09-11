@@ -25,7 +25,21 @@ function fakeApp(dir) {
       task: { objective: 'fix the logger', steers: [{ text: 'keep the format' }] },
       plan: { steps: [{ status: 'done', text: 'read it' }, { status: 'active', text: 'fix it' }] },
       lifecycle: { summary: () => ({ state: 'WORKING', turns: 2, toolCalls: 5, filesChanged: 1, reason: '' }) },
-      turns: [{ text: 'I changed the retention window to 7 days.', actions: [], narration: [] }],
+      turns: [{
+        turnId: 't1',
+        userInput: 'fix the logger',
+        text: 'I changed the retention window to 7 days.',
+        actions: [{ verb: 'EDIT', target: 'logger.js', summary: 'retention 30 -> 7' }],
+        narration: [],
+        // THE REAL RECORD SHAPE. turn.js pushes `{ step, text }`, and a fixture
+        // of plain strings is what let `[object Object]` reach a real export.
+        steerTexts: [{ step: 3, text: 'keep the format' }],
+        // PRIVATE, and the point of the assertion below: a turn record keeps
+        // this so a silent turn is not a blank pane. It must never be exported.
+        reasoning: 'the user probably means the rotation window not the buffer',
+        errors: [],
+        stopReason: 'end',
+      }],
       messages: [{ role: 'user', content: 'fix the logger' }, { role: 'assistant', content: 'done' }],
     },
     render: { transcript: [] },
@@ -45,8 +59,44 @@ module.exports = async function () {
     const out = await copy.collect(app, 'output');
     assert.match(out.text, /\$ npm test/);
     assert.match(out.text, /2 passing/);
+    // ---- `/copy context` IS BUILT FROM TURN RECORDS NOW -----------------
+    //
+    // It used to dump `session.messages`, the PROVIDER WIRE FORMAT — system
+    // prompts, tool plumbing and whole file bodies re-sent for cache
+    // alignment. The old assertion (`/--- USER/`) was matching that shape.
     const ctx = await copy.collect(app, 'context');
-    assert.match(ctx.text, /--- USER/);
+    assert.match(ctx.text, /^USER$/m, 'it starts from what the person actually asked');
+    assert.match(ctx.text, /fix the logger/);
+    assert.match(ctx.text, /^LAIN$/m, 'and carries what LAIN said in public');
+    assert.match(ctx.text, /retention window to 7 days/);
+    assert.match(ctx.text, /TOOL/, 'and what the tools actually did');
+    assert.match(ctx.text, /USER \(mid-turn\)/, 'and corrections made while it ran');
+
+    // THE ONE THING THAT MUST NEVER LEAVE. Hidden reasoning is the model's
+    // private working, addressed to nobody, and a diagnostic export is exactly
+    // the path by which it would reach somewhere it was never meant to go.
+    assert.ok(!/rotation window not the buffer/.test(ctx.text),
+      'hidden reasoning reached the clipboard');
+
+    // And the raw wire format is still reachable when THAT is the question.
+    const raw = await copy.collect(app, 'messages');
+    assert.match(raw.text, /--- USER/);
+  });
+
+  await test('COPY: bare /copy is the task summary, not the last answer', async () => {
+    const app = fakeApp(tmpdir('copy-sum-'));
+    const sum = await copy.collect(app, 'summary');
+    assert.match(sum.text, /^USER REQUEST$/m);
+    assert.match(sum.text, /fix the logger/);
+    assert.match(sum.text, /^RESULT$/m);
+    assert.match(sum.text, /retention window to 7 days/);
+    assert.match(sum.text, /^REMAINING$/m, 'an unfinished plan step is outstanding work');
+    assert.match(sum.text, /fix it/);
+    // NONE OF THE TRANSIENT UI. These are the exclusions the brief names.
+    assert.ok(!/reasoning|rotation window not the buffer/i.test(sum.text));
+    assert.ok(!/READY|spinner|00:0\d:\d\d/.test(sum.text));
+    // AND IT IS WHAT BARE `/copy` REACHES FOR.
+    assert.deepStrictEqual(copy.DEFAULT_ORDER, ['question', 'summary', 'last']);
   });
 
   await test('COPY: an unknown name says what the names ARE', async () => {

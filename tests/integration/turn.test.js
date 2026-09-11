@@ -33,6 +33,26 @@ async function drain(gen) {
   return { events, record };
 }
 
+/**
+ * THE RETRY SCHEDULE IS REAL; THE WAITING IS NOT.
+ *
+ * backoff.js totals about nineteen minutes across ten attempts, which is right
+ * for a provider and impossible for a test — driving an outage to exhaustion
+ * for real made this file take nineteen minutes and look exactly like a hang.
+ *
+ * This replaces ONLY the sleeping. Every attempt still happens, in order, with
+ * the production schedule, and `waited` records what the delays would have been
+ * so a test can assert them.
+ */
+function fastTimers() {
+  const waited = [];
+  return {
+    waited,
+    setTimeout: (fn, ms) => { waited.push(ms); return setTimeout(fn, 0); },
+    clearTimeout,
+  };
+}
+
 module.exports = async function () {
   await test('a turn ending in narration still reports its FULL tool count', async () => {
     // THE V1 BUG: the final step had zero tool calls, so a turn that ran three
@@ -111,23 +131,38 @@ module.exports = async function () {
 
   await test('a provider outage is REPORTED, never thrown, and the record survives', async () => {
     const home = tmpdir('lain-turn-');
-    // AN OUTAGE THAT NEVER LIFTS. Three refusals used to exhaust the budget
-    // when it was 2; it is 5 now (, a gateway having a bad thirty seconds),
-    // so three of them are RIDDEN OUT and the turn succeeds — which is the
-    // new behaviour working, not this test failing. What it is about is what
-    // happens when the provider never comes back, so it never comes back.
+    // AN OUTAGE THAT NEVER LIFTS. The retry budget has grown twice — 2, then
+    // 5, now 10 — and each time a fixture that used to exhaust it stopped
+    // doing so, the mock answered normally, and this test failed reporting
+    // 'end' for a provider that was meant never to come back. Fourteen
+    // refusals against a budget of ten, so the arithmetic has room.
     const dead = { error: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:20128' } };
-    process.env.LAIN_MOCK_SCRIPT = writeScript(home, Array.from({ length: 8 }, () => dead));
+    process.env.LAIN_MOCK_SCRIPT = writeScript(home, Array.from({ length: 14 }, () => dead));
     const { Session, runTurn, mock } = freshModules(home);
     mock._reset();
     const s = new Session({ cwd: home });
-    const { events, record } = await drain(runTurn(s, 'anything', { cfg: {} }));
+    // ---- THE WAITING IS INJECTED; THE POLICY IS NOT ---------------------
+    //
+    // The retry schedule is ten attempts totalling about nineteen minutes
+    // (backoff.js). Driving an outage to exhaustion for real would make this
+    // test take nineteen minutes and look exactly like a hang — it did, once.
+    //
+    // `timers` replaces only the sleeping. The attempt COUNT, the schedule and
+    // every decision around it are the production ones, which is what this
+    // test is actually about.
+    const timers = fastTimers();
+    const waited = timers.waited;
+    const { events, record } = await drain(runTurn(s, 'anything', { cfg: {}, timers }));
 
     assert.ok(record, 'a done event with a record was still emitted');
     assert.strictEqual(record.stopReason, 'provider');
     assert.ok(events.some((e) => e.type === 'provider_failure'), 'failure reported as an event');
     assert.strictEqual(record.providerFailure.kind, 'UNAVAILABLE');
     assert.ok(record.usage.requests >= 2, 'bounded retry actually retried');
+    // AND IT WAITED THE REAL SCHEDULE, in order, rather than a test-only one.
+    assert.deepStrictEqual(waited.slice(0, 4), [10_000, 15_000, 30_000, 45_000]);
+    // BOUNDED: it gives up rather than retrying for ever.
+    assert.ok(waited.length <= 10, `${waited.length} retries — the budget is 10`);
   });
 
   await test('the user message is recorded even when the provider never answers', async () => {
@@ -140,7 +175,7 @@ module.exports = async function () {
     const { Session, runTurn, mock } = freshModules(home);
     mock._reset();
     const s = new Session({ cwd: home });
-    await drain(runTurn(s, 'my important request', { cfg: {} }));
+    await drain(runTurn(s, 'my important request', { cfg: {}, timers: fastTimers() }));
     assert.strictEqual(s.messages[0].content, 'my important request');
   });
 
@@ -165,12 +200,16 @@ module.exports = async function () {
     // DEATH: the provider never answers, and the scratch — opened before the
     // first request, with the goal — is exactly what survives.
     const dead = tmpdir('lain-scratch-dead-');
+    // FOURTEEN, because the budget is TEN. Eight refusals no longer exhaust it
+    // — the script ran out, the mock answered normally, and the turn ended with
+    // stopReason 'end' when this test is about what happens when it does not.
+    // The same arithmetic bit the outage test above when the budget moved.
     process.env.LAIN_MOCK_SCRIPT = writeScript(dead,
-      Array.from({ length: 8 }, () => ({ error: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:20128' } })));
+      Array.from({ length: 14 }, () => ({ error: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:20128' } })));
     const fresh2 = freshModules(dead);
     fresh2.mock._reset();
     const s2 = new fresh2.Session({ cwd: dead });
-    const { record: r2 } = await drain(fresh2.runTurn(s2, 'the unfinished goal', { cfg: {} }));
+    const { record: r2 } = await drain(fresh2.runTurn(s2, 'the unfinished goal', { cfg: {}, timers: fastTimers() }));
     assert.strictEqual(r2.stopReason, 'provider');
     const orphans = scratch.orphans(dead);
     assert.deepStrictEqual(orphans.map((o) => o.session), [s2.id], 'the dead turn\'s scratch is an orphan');

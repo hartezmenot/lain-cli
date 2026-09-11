@@ -11,7 +11,7 @@ const MAX_AGE = 24 * 60 * 60 * 1000;
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24);
 function accountFingerprint(platform, accountId, identity) { return hash([platform, String(accountId || 'default'), String(identity)]); }
 function configurationFingerprint(platform, cfg) {
-  return hash([platform, ...['enabled', 'accountId', 'botId', 'phoneNumberId', 'apiVersion', 'port', 'tokenEnv',
+  return hash([platform, ...['enabled', 'accountId', 'botId', 'phoneNumberId', 'businessAccountId', 'apiVersion', 'port', 'tokenEnv',
     'appSecretEnv', 'verifyTokenEnv', 'allowUsers', 'allowChats', 'allowGuilds', 'allowChannels', 'ambient'].map(k => [k, cfg[k] ?? null])]);
 }
 function adapterVersion(platform) {

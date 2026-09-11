@@ -12,6 +12,293 @@ Tiers: `unit` → UNIT-VERIFIED · `integration` → INTEGRATION-VERIFIED ·
 `smoke` (spawns the real binary) → LIVE-VERIFIED · `live` (contacts a real
 provider, self-skipping) → LIVE PROVIDER VERIFIED.
 
+## CLI geometry — one invisible rectangle (2026-09-10)
+
+A screenshot showed a stable left edge and right edges that did not line up. The
+frame authority (`ui/frame.js contentBounds`) was already symmetric and already
+the single owner; the drift was in ONE consumer.
+
+**Root cause, measured through a real `Screen.draw()`:** the composer painted
+223 columns inside a 224-column frame. `ground()` computed its fill as
+`width - PAD - visible`, but `visible` already includes `PAD` — the pad was
+subtracted twice. One column short, on the only region with a coloured ground,
+which is exactly enough to make a screen read as crooked.
+
+| Capability | Tier | Label |
+|---|---|---|
+| Every drawn region starts on the frame's left rail | unit | **UNIT-VERIFIED** |
+| Nothing is painted past the right rail | unit | **UNIT-VERIFIED** |
+| Header, rule, USER block, live row and composer all paint the frame width exactly | unit | **UNIT-VERIFIED** |
+| Outer gutters equal at 80/100/120/160/180/200/232 and an odd width | unit | **UNIT-VERIFIED** |
+| Prose stays narrower than the frame — the one deliberate exception | unit | **UNIT-VERIFIED** |
+| No primary renderer derives an outer width from `screen.cols` | unit | **UNIT-VERIFIED** |
+| The real binary lands every surface on the same rails at 232 / 120 / 80 cols | smoke | **LIVE-VERIFIED** |
+
+Both guards were proved non-vacuous by reintroducing the defect and watching
+them fail. The live composer assertion was vacuous on its first draft — it
+compared a screen ROW NUMBER against a COUNT of rows and then passed if *any*
+bottom row reached the rail, which the header always does. Caught by breaking
+the fix deliberately; rewritten to measure the bottom-most painted region.
+
+### What this pass got wrong and reverted
+
+It also removed the composer's trailing `ESC[K`, reasoning that erasing to the
+terminal's physical edge is a renderer deciding its own outer geometry. Twelve
+`inputux` smoke tests failed within a minute: **the erase paints nothing, it
+CLEARS** — without it a frame drawn after a wider one leaves the previous row's
+glyphs stranded beside the prompt. Restored. The distinction that matters is
+PAINTED versus CLEARED, and the test now asserts the ink rather than banning the
+erase.
+
+**The frame was NOT widened.** §2 asked for it, and at 232 columns the frame is
+already 224 wide — a gutter of 4, or 1.7% a side. Widening further would be the
+edge-to-edge the same section forbids. The perceived "unused space on the right"
+is `proseWidth` narrowing paragraphs inside the frame, which §7 explicitly
+preserves. Reported rather than changed.
+
+---
+## The Harness application and the Frontend Workshop (2026-09-10)
+
+`/app` serves the graphical product over the SAME `App` the terminal is driving —
+one process, one session, one conversation, two ways to look at it.
+
+**Stack: Node's own `http` plus one self-contained vanilla page.** No framework,
+no bundler, no build step, no dependency. This repository has zero runtime
+dependencies and ships source only; `dash.js` + `dashpage.js` already proved the
+pattern. Extending a working foundation was the instruction.
+
+| Capability | Tier | Label |
+|---|---|---|
+| `/app` opens, reports status and stops, through the real binary | manual, this pass | **REAL LOCAL VERIFIED** |
+| The shell is public; every fact behind it needs the startup password, in a HEADER never a URL | unit | **UNIT-VERIFIED** |
+| Loopback only — it starts browsers and submits turns | unit | **UNIT-VERIFIED** |
+| Two lanes, each with its own session list, from `sessionindex` | unit | **UNIT-VERIFIED** |
+| Lane comes from ASTRA's `session.cowork` marker, never inferred from the work | unit | **UNIT-VERIFIED** |
+| Chat and coding share one session and one conversation | unit | **UNIT-VERIFIED** |
+| Asking goes through `app.handle` — the one door, with the gateway and commands intact | unit | **UNIT-VERIFIED** |
+| The app cannot make a different session current — `/resume` remains the only path | unit | **UNIT-VERIFIED** |
+| A missing task projects `null`, never an empty task | unit | **UNIT-VERIFIED** |
+| Tool output never crosses to the application | unit | **UNIT-VERIFIED** |
+| Provenance rides the message it belongs to | unit | **UNIT-VERIFIED** |
+| The polled read opens nothing; discovery and Workshop are explicit POSTs | unit | **UNIT-VERIFIED** |
+| The read model derives nothing — it consumes harnesssurface, sessionindex, registry, panes, workshop, goal | unit | **UNIT-VERIFIED** |
+| Source picker: LAIN / ChatGPT.com / Gemini.google.com, with discovered account models | unit + manual | **REAL LOCAL VERIFIED** |
+| Emitted client script parses (a stray backtick once shipped a broken page that still rendered) | unit | **UNIT-VERIFIED** |
+
+### The Frontend Workshop, driven through the application
+
+Not a Workshop unit test: every step below goes over the application's own HTTP
+API, exactly as the page does — real dev server, real Chromium, real screenshots,
+real artifacts.
+
+| Step | Result | Tier |
+|---|---|---|
+| Dev server started from the project's own declared script and port | `http://127.0.0.1:PORT/` | **REAL LOCAL VERIFIED** |
+| Project-bound preview browser opened | separate profile from verification and web-model browsers | **REAL LOCAL VERIFIED** |
+| BEFORE screenshot captured AND filed as a Harness artifact | `a1-…-before-desktop.png` on disk | **REAL LOCAL VERIFIED** |
+| DOM inspection | `button "Pay now" 95×39 at x=24` | **REAL LOCAL VERIFIED** |
+| Accessibility tree | `role: button, name: "Pay now"` | **REAL LOCAL VERIFIED** |
+| Real source edit + reload | `.row` → flex/centre | **REAL LOCAL VERIFIED** |
+| Re-inspection proves the change | **x moved 24 → 417**, parent `justify-content: center` | **REAL LOCAL VERIFIED** |
+| AFTER screenshot, paired with the before | before/after comparison | **REAL LOCAL VERIFIED** |
+| Responsive verification | desktop 1440 · tablet 768 · mobile 390, three named checks each | **REAL LOCAL VERIFIED** |
+| Console / network observations | `console 0 of 0 · network 0 failed of 2` | **REAL LOCAL VERIFIED** |
+
+### Three defects this pass found by RUNNING it, not by reading it
+
+1. **`checks` entries are `{name, ok, detail}`** — the UI read `c.what` and printed
+   `undefined` beside every viewport.
+2. **`consoleReport`/`networkReport` return SUMMARIES**, `{errors,total,entries}`,
+   not arrays. Filtering them as arrays produced an empty panel over a page that
+   really did have errors.
+3. **A backtick inside a comment inside a template literal** terminated the client
+   script. The page still "composed" as a string; it did not parse. There is now a
+   test that runs `new Function` over every emitted script block.
+
+### An honest limitation of Workshop verification
+
+The automated checks are **console errors, failed requests and horizontal
+overflow**. A left-aligned button is none of those — so verification passed
+BEFORE the fix as well as after. What proved the defect was **element inspection**
+(x=24 → x=417) and the **before/after screenshots**. The Workshop does not judge
+visual correctness, and does not claim to.
+
+### Cowork / Bot — exactly what Astra has built
+
+Astra's contract today (`src/cowork/sessionstate.js`) is a SOURCE BINDING and
+nothing else: which transport a session came from. There is no task, artifact,
+approval or job surface behind it. So the application lists Cowork sessions,
+names their source, and reports
+`{sessions: true, tasks: false, artifacts: false, approvals: false, jobs: false}`
+with a sentence saying so. Nothing is faked.
+
+### Parked work that could not be recovered
+
+The previous pass parked three incomplete `src/harnessapp/` files (`routes.js`,
+`server.js`, `state.js`; `page.js` was never written) in a session scratchpad.
+That scratchpad was cleared between sessions and the files were never tracked by
+git — `git fsck`, the stash list and a disk-wide search all came back empty. They
+were rebuilt from the contracts they consume.
+
+---
+## CLI correctness pass — the dead clock, the stale telemetry, and /goal (2026-09-09)
+
+A defect the user photographed: the live row read `↑86M ⚡16M ↓3.7M  00:00:00` —
+token figures climbing beside an elapsed clock frozen at zero for the whole turn.
+
+**Root cause, and it was two faults compounding.** `projection.clock` advanced the
+clock from `termtitle.stateOf(liveState)`, and `stateOf` reports SUCCESS from
+`live.tick`, which is read off the PREVIOUS turn record. In the real gap between
+Enter and the turn loop announcing its first phase, the strip still describes the
+turn before — so the first frame of every turn following a clean one classified as
+SUCCESS and called `settle()` on a clock started microseconds earlier. `resume()`
+then revived only a PAUSED clock, so the mistake was permanent.
+
+projection.js already stated the rule in its own header — *"WHAT IS NOT HERE:
+starting and stopping. Only the turn lifecycle knows that a person pressed Enter"*
+— and `apply` violated it. Fixed at the contract: `apply` runs and pauses and never
+settles; `endTurn` is the one owner of terminal state.
+
+| Capability | Tier | Label |
+|---|---|---|
+| ONE execution clock: starts at 0 on Enter, ticks, pauses on a rate limit, resumes from the banked figure, stops only at `endTurn` | unit | **UNIT-VERIFIED** |
+| A drawing pass cannot end a task — `apply` never settles | unit | **UNIT-VERIFIED** |
+| A second turn resets to zero rather than inheriting the first | unit | **UNIT-VERIFIED** |
+| Exactly ONE module computes elapsed work time — a guard fails on a second `Date.now() - startedAt` anywhere in `ui/` | unit | **UNIT-VERIFIED** |
+| The dead `stats.elapsedMs` projection is gone (no renderer ever read it) | unit | **UNIT-VERIFIED** |
+| The live row carries NO accounting cluster; the header keeps ONE output figure, detail stays in `/token` | unit | **UNIT-VERIFIED** |
+| `/model` is the single advertised model command; `/models` runs as a hidden compatibility alias | unit + smoke | **LIVE-VERIFIED** |
+| `/goal` — set, edit-in-composer, clear, prompt injection as DIRECTION, save/resume, older files read as no goal | unit | **UNIT-VERIFIED** |
+| Only `/goal` can write the goal — a source guard over the whole tree | unit | **UNIT-VERIFIED** |
+| A composed line can never reach a model — consumed before the classifier, the gateway and submit | unit | **UNIT-VERIFIED** |
+| `/plan` bare is an EDITOR: composer when empty, Replace/Add/Cancel when live; Replace edits only the REMAINING work | unit | **UNIT-VERIFIED** |
+| `plan_step` records origin (`llm` / `user` / `steer`); a steer never rewrites finished work | unit | **UNIT-VERIFIED** |
+| Active plan_step clears only through the EVIDENCE-GATED paths, and nothing else retires a plan | unit + integration | **INTEGRATION-VERIFIED** |
+
+### What this pass got wrong and reverted
+
+§21 asks for active plan_step state to clear when a plan finishes, and the obvious
+place is `complete()` when the last step ticks. That retires a plan **on the model's
+say-so**, and `tests/integration/continuation.test.js` caught it: *"implemented with
+every step ticked does NOT finish the task"*. Completion here is settled from
+evidence and can refuse — a refused completion would then have had no live plan to
+carry on from. Reverted; §21 is met by the two triggers that were already
+evidence-gated (`completion.js` on acceptance, `identify.js` on a new request), and
+a guard now fails if a third appears.
+
+### NOT STARTED in this pass
+
+Frontend Workshop, Computer MCP and the Harness application frontend. Nothing was
+stubbed for them: there is no half-built Workshop tab, no `computer.*` tool that
+reports success without acting, and no application shell. See the pass report.
+
+---
+## Chat model sources — one engineering session, three places an answer can come from (2026-09-09)
+
+Chat and coding now share ONE engineering session, and a chat turn can be
+answered by LAIN's own runtime, by ChatGPT.com or by Gemini.google.com. The
+architecture and the frontend contract are in [`MODEL-SOURCES.md`](MODEL-SOURCES.md).
+
+**The invariant everything else is arranged around:** selecting ChatGPT.com
+changes who answers a QUESTION and never who writes a FILE. A CODING turn runs
+`turn.js` with the tool registry, the gate, the checkpoints and the verification
+contract whatever source is selected.
+
+| Capability | Tier | Label |
+|---|---|---|
+| Chat and coding turns share one session, one history and one project | unit | **UNIT-VERIFIED** |
+| The chat/coding lane IS `mode.READ_ONLY` — a projection of the one classifier, not a second one | unit | **UNIT-VERIFIED** |
+| With LAIN selected (the default) NOTHING is diverted — existing behaviour is bit-for-bit unchanged | unit | **UNIT-VERIFIED** |
+| A CODING turn stays with LAIN's runtime under every web source and every coding mode | unit | **UNIT-VERIFIED** |
+| One generic WebModel orchestrator; ChatGPT and Gemini are DECLARATIONS with no DOM code of their own | unit | **UNIT-VERIFIED** |
+| The whole conformance suite runs twice, under both source ids, over the real orchestrator | unit | **FIXTURE VERIFIED** |
+| A model list is DISCOVERED from the account; a selector that cannot be read is a stated failure, never an empty list | unit | **FIXTURE VERIFIED** |
+| Model availability is four-valued — `UNKNOWN` is never reported as `AVAILABLE` | unit | **FIXTURE VERIFIED** |
+| The inventory is cached (10 min), explicitly refreshable, and discarded when authentication changes | unit | **FIXTURE VERIFIED** |
+| A model outside the discovered list, or listed-but-unavailable, is refused | unit | **FIXTURE VERIFIED** |
+| With no model selected NOTHING is sent — no silent "whatever is active" | unit | **FIXTURE VERIFIED** |
+| A send is PROVED: signed in, right thread, right model read back; then the turn count GREW and the reply settled | unit | **FIXTURE VERIFIED** |
+| A prompt that provably never left is retried once; one that MAY have been sent is never sent twice | unit | **FIXTURE VERIFIED** |
+| `COMPLETED` requires text — a well-formed empty result becomes `FAILED` | unit | **FIXTURE VERIFIED** |
+| A quota is `RATE_LIMITED` with its source; a retry time is null unless the page stated one | unit | **FIXTURE VERIFIED** |
+| A web rate limit does NOT arm app.js's automatic resume | unit | **UNIT-VERIFIED** |
+| Cancellation adopts the turn's own signal, stops the page, and leaves the source usable | unit | **FIXTURE VERIFIED** |
+| A website thread is OWNED by one session; a mismatch fails closed into a new thread | unit | **FIXTURE VERIFIED** |
+| Two sessions on ONE browser share no thread, no model selection and no context | unit | **FIXTURE VERIFIED** |
+| Provenance is stamped at execution time, rides the message, and survives resume | unit | **UNIT-VERIFIED** |
+| Source, per-source model choices and thread bindings survive save/resume; an older session file reads as LAIN | unit | **UNIT-VERIFIED** |
+| The context sent out is bounded, redacted AT THE BUILD, and carries no tool output; a resumed thread carries only the question | unit | **UNIT-VERIFIED** |
+| The authenticated browser profile cannot overlap the verification browser's, and a source id cannot escape its root | unit | **UNIT-VERIFIED** |
+| Website activity rides the ONE EventBus — ten declared names, no prompt or reply in a payload | unit | **UNIT-VERIFIED** |
+| `/source` lists three sources, defaults to LAIN, and says coding stays LAIN's — through the real binary | smoke | **LIVE-VERIFIED** |
+| `/external` is gone from the real binary and its four modules cannot be required | unit + smoke | **LIVE-VERIFIED** |
+| chatgpt.com's page structure matches `chatgpt.js` | — | **NOT VERIFIED** |
+| gemini.google.com's page structure matches `gemini.js` | — | **NOT VERIFIED** |
+
+### What is FIXTURE VERIFIED and what that does not mean
+
+The conformance suite drives the **real** orchestrator (`modelsource/webmodel.js`)
+over a deterministic fixture surface. Every product decision lives in that file,
+so the tests exercise the thing that matters rather than a mock of it — and they
+run under both source ids, which is what makes "one orchestrator, two sites" a
+fact instead of an intention.
+
+It proves nothing about chatgpt.com or gemini.google.com. Only those sites can
+say whether their model menus still have the shape the adapters declare, and
+asking needs a paid account, a logged-in browser and a person to complete a
+login — none of which may ever be a precondition for `npm test`. **No default
+tier opens a browser or contacts either site.**
+
+`/source check chatgpt` (or `gemini`) is the only thing that can earn a LIVE
+claim; it is run by hand and states at the end what it did and did not
+establish. `/source check fixture` runs the same five steps against a fake site,
+which is how a red live run is told apart from a broken check.
+
+### `/external` retired — the orphaned relay, resolved
+
+The previous pass recorded the external-review relay as **orphaned**:
+`investigation.relay` had exactly one caller (`troubleshoot.js runCommand`) and
+no registered command reached it, and the repair was left as a product decision
+— give it a door, or retire it with its module.
+
+**The decision is retirement.** `/external`, `src/external.js`,
+`src/actors.js`, `src/externalrequest.js` and `src/investigation.js` are gone,
+along with the actor picker in `ui/pickers.js`. Maintaining two consultation
+systems was the one outcome worse than either.
+
+Reused rather than rewritten: the bounded redacted session-facts packet
+(→ `modelsource/context.js`), the call ledger including *RESPONDED requires a
+response* (→ `externalstate.js`, kept whole and now written by the web sources),
+the overclaim check (→ `modelsource/contract.js`), and the "advisory input, not
+a result" framing (→ `chatdispatch.js`).
+
+The reporting surfaces that named the reviewer now name the chat source instead:
+`/health`, `/dash`, the dashboard page and the resume summary.
+
+### One product correction found on the way
+
+`mode.js` classified **"compare these two approaches"** as `IMPLEMENT` — the
+MUTATION mode — because no rule matched `compare` and IMPLEMENT is the default.
+Asking for an opinion was therefore given build-it guidance. `compare|contrast`
+joined the read-only assessment verbs beside `review`, `critique` and `evaluate`;
+neither word appears in `IMPLEMENT_RE`, so nothing was taken from it.
+
+### Limitations this pass did not repair
+
+1. **Neither site adapter is live verified.** The selectors are the sites'
+   observable semantic hooks as of this pass and they are structurally checked
+   (no generated classes, no nth-child, no coordinates, one shared driver), but
+   only a real signed-in account can confirm them. This is stated in the table
+   above, in `chatgpt.js`, in `gemini.js` and in `MODEL-SOURCES.md`.
+2. **Attachments are declared and not implemented.** `capabilities()` reports
+   `imageInput: false, fileInput: false` for web sources because that is what is
+   proven; the contract carries the shape so adding an upload path later changes
+   an adapter and not the core.
+3. **Streaming is not surfaced for web sources.** The page streams; LAIN
+   observes the settled reply and says `streaming: false` rather than promising
+   incremental delivery the contract does not carry.
+
+---
 ## The CLI finishing pass — activity vocabulary, and a red suite made green (2026-09-08)
 
 The primary surface already had the hierarchy the brief asks for (project ·
@@ -3397,6 +3684,530 @@ liveness function was correct and none of it reached a terminal.
 | One model request per model step; no hidden round-trips | LIVE-VERIFIED (single `provider.chat` call site) |
 | Fixed prefix ≈ 771 est. tokens; 554 measured by a real provider | LIVE PROVIDER VERIFIED |
 
+## Execution environment — Harness-owned Chromium and VMware
+
+### What was actually wrong
+
+**LAIN could silently drive the person's own browser.**
+`browserharness._session()` probed `cdp.endpoint(this.port)` — port **9222**, the
+DevTools convention — *before* deciding to launch. Anyone who had ever started
+Chrome with `--remote-debugging-port=9222`, for their own debugging or another
+tool, handed verification their real browser: cookies, logged-in sessions, open
+tabs. It then created tabs and navigated in it. Nothing announced this. The old
+comment documented the behaviour as intentional ("a debug port that is already
+open belongs to somebody — often the person"), which is the right premise and
+the backwards conclusion.
+
+**Three modules each launched browsers independently.** `browserharness.js`,
+`workshop/index.js` and `modelsource/webbrowser.js` each held ~50 lines of
+find/spawn/poll-`DevToolsActivePort`/connect, already drifted apart on details
+nobody had decided: two deleted the stale port file, one did not; one disabled
+extensions, two did not; one went through the ProcessManager, two spawned
+directly.
+
+### What it is now
+
+`src/env/` — one authority, ~1,900 lines:
+
+| module | owns |
+|---|---|
+| `chromium.js` | the ONLY launcher in the tree; resolve / launch / stop / status / health |
+| `chromiuminstall.js` | the pinned Chrome for Testing build, downloaded only when asked |
+| `unzip.js` | a zero-dependency zip reader that refuses traversal, absolute paths, symlinks |
+| `purpose.js` | VERIFY / WORKSHOP / WEBMODEL as data, with the isolation assertion |
+| `environments.js` | `host` or `vm:<id>`, registration, ownership, host-by-default policy |
+| `vmware.js` | the `vmrun` provider |
+| `guest.js` | the guest bridge — primitives only, never a second Harness |
+| `failures.js` | the eight failure codes, and which one means the code is wrong |
+
+**There is no attach path.** `launch` launches; every browser runs on
+`--remote-debugging-port=0` and a Harness profile.
+
+**The browser is pinned and owned.** Chrome for Testing **141.0.7390.54**, 308
+files, installed under `~/.lain-v2/chromium/`. `resolve()` prefers it; the
+system browser is a labelled fallback (`owned: false`) that still never touches
+a personal profile. Nothing in the launch path can trigger an install — a test
+asserts it — so a verification cannot silently change its own browser.
+
+### REAL VERIFIED — Chromium (§27)
+
+Live, through `tests/smoke/environment-browser.test.js`:
+
+```
+Harness browser launched          version recorded, own port (never 9222)
+profile                           Harness-owned; asserted NOT under the
+                                  person's Chrome/Edge User Data
+CDP                               answered
+personal Chrome/Edge processes    19 before · 19 during · 19 after — unchanged
+Harness processes after stop      0
+disposable profile after stop     removed
+two purposes at once              provably different profile directories
+```
+
+`/env` through the real binary reports `binary Harness-owned`,
+`version 141.0.7390.54`, and the doctor's `browser` line now names that build
+rather than the user's Chrome.
+
+**A real defect the live run caught:** `stop()` did not `await`
+`processes.stop()` before removing the profile, so on Windows the delete raced
+the process exit, lost, and the `catch {}` swallowed the EBUSY — every
+verification run leaked a whole Chromium profile into the temp directory.
+Fixed by closing gracefully over CDP, waiting for exit, then removing.
+
+**A claim I corrected rather than kept.** I first wrote that killing only the
+parent orphaned nineteen Chromium helper processes. That was wrong: those
+nineteen were the person's own Chrome, misattributed by counting processes by
+executable path (the test runner isolates `LAIN_CONFIG_DIR`, so the managed
+build is invisible to tests and `resolve()` correctly borrows the system
+binary — at which point ours and theirs share a path). Measured directly
+afterwards, parent-only kill takes the tree down cleanly, 9 → 0, headless and
+headful. Process identification is now by `--user-data-dir`, which is
+unambiguous.
+
+### NOT VERIFIED — VMware (§28)
+
+**VMware is not installed on this machine.** Established by looking: no
+`vmrun`/`vmware`/`vmcli` on PATH, no `HKLM\SOFTWARE\VMware, Inc.`, no VMware
+entry in either uninstall registry view, no VMware services.
+
+So the twelve-step §28 acceptance **was not performed** and this is **not**
+labelled REAL VM VERIFIED. `vmware.js` is written to the documented `vmrun`
+interface, but that is a claim about the code and not about the world.
+
+What IS verified, with a registered environment and no hypervisor present:
+
+```
+registration from config      host · vm:win11-test (owned) · vm:someone-elses-box
+an owned VM, no VMware        VM_UNAVAILABLE · "VMware is not installed on this machine"
+a registered, UNOWNED VM      refused: "not registered as Harness-owned"
+isolated-smoke                routes to vm:win11-test
+unit-test                     stays on host — isolation must not destroy speed
+task binding                  task.environment = vm:win11-test, survives round trip
+```
+
+### Safety properties, and why each exists
+
+- **LAIN never enumerates the hypervisor.** Only registered environments are
+  reachable. A person's VMware library holds machines that are theirs; powering
+  one off or reverting it is data loss committed by a tool that assumed
+  authority.
+- **`owned: true` is required for start/stop/snapshot/restore**, and absence
+  means no.
+- **`restore` only ever reverts to the registered `cleanSnapshot`** — not any
+  snapshot a caller names — and checks it exists first.
+- **Guest passwords are never stored and never printed.** Taken from the
+  environment at call time and redacted positionally from every reportable
+  command string.
+- **The guest gets primitives, not a Harness.** No model, no task engine, no
+  permission system inside the VM. A test greps for them.
+- **A VM smoke can never receive the web-model cookies** — there is no code
+  path that copies a host profile into a guest.
+- **Copy, not a shared folder**, for release smoke: a permanent share lets a
+  test inside the guest rewrite the host's working tree, which is the isolation
+  exactly backwards.
+
+### Alert and continuation state
+
+`ui/alert.js` — an amber or red alert belongs to an execution ATTEMPT and stops
+resting when a new submission is accepted.
+
+`waitingUntil` outranks every other branch of `liveState` (correctly, while a
+wait is real) and nothing cleared it on submission, so a rate-limit countdown
+the person had just overridden covered the new turn's phases. And `beginTurn`
+called `workclock.start` unconditionally, so `continue` after a four-minute
+pause reported the same attempt as `00:00:00`.
+
+Now: BLOCKED (`AUTH`, `RATE_LIMITED`, `CONTEXT_LIMIT`) resumes the same attempt
+and keeps its clock; TERMINAL starts a new attempt at `00:00:00` and the failed
+one stays failed. An unclassified failure is terminal — over-reporting elapsed
+work is the lie that matters.
+
+**A second defect found on the way:** `setFailed` did `ui.failed = Boolean(on)`,
+destroying the `providerFailure` object its own caller passes — so every failure
+in the product rendered as the generic `ERROR · the provider did not answer`,
+and a refused credential could not be told from a dead gateway on the one row a
+person reads at a glance. The vocabulary existed and was correct two files away.
+
+`RETRY CANCELLED` was also being written into the durable transcript *and* shown
+on the live row — the same sentence twice, one of them outliving the state by
+hours. The transcript copy is gone.
+
+The Harness application consumes the same `liveState` + `alert.resting` +
+`workclock.reading`, so there is no separate CLI-vs-Harness alert semantics.
+
+### Remaining before Computer MCP
+
+1. **§28 needs a VMware host.** Nothing in the twelve-step guest acceptance has
+   run.
+2. **`launchChromium` inside a guest is contract-only.** It reaches
+   `VM_UNAVAILABLE` before anything speculative.
+3. **VM registration is a config edit.** There is no `/env vm add` — an earlier
+   draft advertised one, which was a remedy the product could not keep.
+4. **The guest Chromium must be pre-installed in the image** and named on the
+   environment entry; nothing installs a browser into a guest.
+5. **The orphan guard has not been shown to fail**, because the property holds
+   for platform reasons (Chromium job objects). It is kept to notice the day
+   that changes.
+
+## Desktop foundation, Source Workspace, CLI copy/selection, retry policy
+
+### CLI text selection — root cause
+
+`src/input.js` enabled `?1002h` (button-event tracking) at **every** TUI start,
+unconditionally. That takes the terminal's own drag-selection — and LAIN's
+replacement selection covered only the **feed**. The live region at the bottom
+of the screen, where `/app` printed its URL, where an error lands, where a path
+or a command appears, was selectable by *neither*: LAIN had captured the gesture
+and had nothing to do with it there.
+
+`/mouse off` existed and did **not** persist, so it lasted until the next launch
+and no further.
+
+Mouse capture now defaults **off** and the preference is stored in config.
+`/mouse on` restores the clickable caret and feed selection, and sticks.
+
+**A verification of mine that was vacuous:** I first "proved" this by spawning
+the binary and grepping stdout for `?1002h`. Mouse capture only ever happens on
+a real TTY, and a spawned process with a piped stdin has none — so that check
+reported "no capture" whatever the setting was. Replaced with unit tests over
+the real decision and the real reader.
+
+### `/copy` and `/copy context`
+
+Bare `/copy` was `['question','last','output','diff','task','status','activity']`
+taking the first non-empty — in practice the model's last answer alone, with
+`activity` as a fallback that could put frame-by-frame spinner narration on the
+clipboard.
+
+Both are built from **turn records**, never the screen. Verified through the
+real binary against a real session:
+
+```
+/copy          -> USER REQUEST / STEERS / RESULT / REMAINING / HOW TO RUN
+/copy context  -> USER · USER (mid-turn) · TOOL · TOOL · LAIN, chronological
+```
+
+Checked on the actual clipboard: no hidden reasoning, no system prompt, no ANSI.
+`/copy context` previously dumped `session.messages` — the provider *wire
+format*, including system prompts and whole file bodies re-sent for cache
+alignment. That is now `/copy messages`, for when it genuinely is the question.
+
+### Retry / backoff
+
+One policy, in `src/backoff.js`: **10 · 15 · 30 · 45 · 60 · 90 · 120 · 180 ·
+300 · 300** seconds, ten attempts, then the existing failure semantics.
+
+It was `[500, 1500, 3500, 7000, 8000]`ms over five attempts — answering a 429
+half a second after it arrived, four more times inside half a minute, with five
+pause/resume alert cycles in twenty seconds.
+
+`turn.js` held a **second table**: a hardcoded `20_000` for rate limits, plus
+`failure.retryAfterMs ||` which let a provider advertising `reset-after: 2` pull
+LAIN back to a two-second retry against the limiter that had just refused it.
+Both gone. The rule is now `MAX(schedule, trustworthy provider hint)` — a
+provider can make LAIN wait **longer, never shorter**.
+
+Jitter removed (`JITTER = 0`) and the reversal is recorded: it was right for a
+500ms first retry, and with delays of tens of seconds clients are already spread
+by when their own request failed. The strip promises "retry 3/10 in 30s" and an
+absolute resume time; a jittered wait made both a guess.
+
+Classification (§23) needed no change and is now asserted: `AUTH`, `QUOTA`,
+`BAD_REQUEST`, `CONTEXT_LIMIT` and `MODEL_UNAVAILABLE` are non-retriable, so a
+bad API key never spends nineteen minutes retrying.
+
+Tested with an injected clock — the exact sequence, without waiting for it.
+
+**A consequence the tests found for me.** Three integration cases drive a
+provider outage to exhaustion. At the old schedule that was ~20 seconds; at the
+new one it is ~19 minutes, and the tier stopped looking like a slow run and
+started looking like a hang — because that is what it was. `runTurn` now takes
+`opts.timers`, which replaces **only the sleeping**: every attempt still
+happens, in order, on the production schedule, and the test asserts the delays
+it would have waited (`[10_000, 15_000, 30_000, 45_000]`). Their fixtures also
+needed resizing — eight refusals no longer exhaust a budget of ten, so the mock
+ran out, answered normally, and the turn ended `end` where the test wanted
+`provider`. That arithmetic has now broken twice as the budget grew (2 → 5 →
+10); the comment says so.
+
+### A defect I shipped last pass, found and fixed
+
+`ui/alert.js clearResting` fired `app.abort.abort()` to cancel a pending
+rate-limit wait. But `app.submit` replaces `this.abort` **before** calling
+`beginTurn`, so the abort landed on the controller for the turn that was
+*starting*. Measured:
+
+```
+pending wait actually cancelled : false
+FRESH turn signal aborted       : true   <-- dead on arrival
+```
+
+So typing `continue` during a rate-limit wait left the wait running **and**
+killed the turn it started. Cancellation moved to `submit`, before the
+controller is replaced; `clearResting` now touches no controller at all, and a
+test asserts it never will again.
+
+### `/app` — no pasted password, and a real window
+
+A single-use launch token (120s, loopback, constant-time compared, **spent
+before it is compared**) is exchanged for a session while the document is
+served, then erased from the address bar with `history.replaceState`. Verified:
+first open hands a session that authenticates, reuse is refused, no credential
+returns 401.
+
+`/app` now opens an **application window** — Harness-owned Chromium `--app=`:
+no tab strip, no address bar, own taskbar entry, own profile. Falls back to the
+default browser and says so. `/app status` reports listener *and* window;
+`/app stop` closes both. No orphan processes; the user's own Chrome untouched.
+
+A fourth browser purpose, `HARNESSAPP`, was added. The other three are
+*instruments* LAIN drives; a window is not driven, a person uses it.
+
+**Not native**, and the reason is a real constraint: Electron/Tauri/webview are
+all npm dependencies and a build step, and `package.json` has no `dependencies`
+key at all.
+
+### Source Workspace
+
+`src/harnessapp/source.js` + `pagesource.js` + `/api/files/*`. Tree
+(dependencies excluded), quick open, tabs with unsaved markers, line numbers,
+find, save, a single-pass highlighter. Routed through `tools/fs.js`; the same
+truncation guard a model write gets; the workspace boundary enforced on every
+call.
+
+**Two real defects found by running it, not reading it:**
+
+*A file's mtime is not its identity.* Saves were conditional on `mtimeMs`, so a
+stale save would be refused. Measured on Windows:
+
+```
+write .a{opacity:0.2}  -> mtimeMs 1789025279604.5515
+write .a{opacity:0.9}  -> mtimeMs 1789025279604.5515
+```
+
+Two writes in the same millisecond share a timestamp — so the guard failed
+**open** exactly where it mattered: LAIN edits, the person saves a moment later,
+the model's work is silently overwritten. The save token is now a content hash.
+Proven non-vacuous by reverting to mtime and watching the smoke fail.
+
+*A highlighter must not read its own output.* The first version chained five
+`replace` passes over escaped text, so the keyword pass matched `class` inside
+the `<span class="tk-n">` an earlier pass had emitted:
+
+```
+<span <span class="tk-k">class</span>="tk-n">1</span>
+```
+
+Rewritten as a single pass over the original text. A `<script>` in a source file
+is now provably inert.
+
+### UI ↔ source
+
+`POST /api/files/from-element` returns ranked candidates with **evidence** and a
+confidence of `EXACT` / `LIKELY` / `MULTIPLE` / `UNKNOWN`. Bundler-generated
+class names (`css-1x2y3z`, `sc-fzXfMB`, `_button_1a2b3`) are refused rather than
+searched, and `UNKNOWN` is a real answer — a confident wrong file costs more
+than an honest shrug. Consumes `locate.js`; no second search.
+
+`POST /api/files/to-ui` derives ranked candidate selectors from a file and line.
+The Workshop does **not** yet highlight the matching element in the preview.
+
+### REAL LOCAL VERIFIED — dogfood, against this tree
+
+```
+1.  Harness serving lain-v2           http://127.0.0.1:4499/
+2.  opened without a password         true
+3.  its own source directory          10 files
+4.  opened its own editor source      js 683 lines
+5.  element .srcRow -> source         LIKELY  src/harnessapp/pagesource.js
+6.  source -> UI selectors            LIKELY  .srcRow
+7.  edited + saved through the app    true "opacity: 0.5"
+8.  LAIN edit noticed by the editor   true
+9.  stale save refused                true | disk kept "opacity: 0.9"
+10. scratch removed, tree clean       true
+```
+
+Steps 5 and 6 close the round trip: a rendered element resolves to the file that
+defines it, and that file's line resolves back to the same selector.
+
+### Honest limitations
+
+- The Harness window is a Chromium in `--app=` mode, not a native application.
+- There is no process-boundary IPC: the window is served by the CLI process, so
+  a desktop Harness cannot attach to an already-running LAIN.
+- Source → UI derives selectors but does not highlight in the preview.
+- UI → source is a search over authored files, not a build graph.
+- The live-patch rendering is fixture-verified; it has not been driven in a
+  browser.
+- `turn.js` and `app.js` both sit within two lines of the 700-line guard.
+
+
+## API recovery, `/copy context` projection, and structured prompt rendering
+
+### What GLM actually changed, measured from disk
+
+Seven files, not the wider set its narration implied:
+
+| file | verdict |
+|---|---|
+| `src/providers.js` | **KEPT** — one `bai` row, `https://api.b.ai/v1` |
+| `src/apicommand.js` | **KEPT + CORRECTED** — `connectionByName` / `rekeyFlow` were complete and good; `looksLikeCredential` was not |
+| `src/routecommands.js` | **KEPT** — the `/api` re-key branch, ordered before the credential test |
+| `src/provider.js` | **KEPT** — two `/models` → `/model` hint strings, consistent with the earlier collapse |
+| `tests/unit/apiendpoints.test.js` | **KEPT** — a genuinely good test; it records the sender's real fetch URL |
+| `tests/unit/apiflow.test.js`, `tests/smoke/commands-audit.test.js` | **KEPT** |
+
+Nothing unrelated was touched. **Z.AI was correctly left alone** — it was already
+`https://api.z.ai/api/paas/v4` and needed no change, only coverage. No duplicate
+provider rows exist.
+
+### B.AI and Z.AI — the wire URL, not the menu row
+
+`provider.js` posts to `${pc.baseUrl}/chat/completions`, so the registry base
+must carry `/v1`. Proved by stubbing `fetch` and reading the URL the real sender
+produces:
+
+```
+b.ai   https://api.b.ai/v1/chat/completions
+z.ai   https://api.z.ai/api/paas/v4/chat/completions
+```
+
+Non-vacuous: dropping `/v1` from the b.ai row makes that test fail.
+**FIXTURE VERIFIED** — no live account call has been made to either.
+
+### A real defect GLM left behind
+
+`connectionByName` accepts three spellings of one route — `custom`,
+`lain:custom`, and the provider name. `looksLikeCredential` excluded only the
+bare one, because that is the only spelling `providers.choices` lists.
+
+So `/api lain:custom` typed before that route existed was eleven characters with
+no spaces, therefore "a credential" — and the literal string `lain:custom` was
+stored as that route's API key. The route would then fail to authenticate for a
+reason nothing on screen explained: exactly the failure the function's own
+comment describes, reached through the prefix instead of the name.
+
+Anything in LAIN's `lain:` namespace is now refused as a credential.
+
+### `/api custom` could not add a custom provider
+
+With no matching connection it fell through to `/provider status` — somebody
+adding a route was shown the routes they already had, and the add path (bare
+`/api`) was not reachable from what they typed. Naming a provider LAIN knows now
+preselects it and asks only for the key. Re-keying still wins, so a route that
+EXISTS is repaired rather than duplicated.
+
+**A real 401 stays a real 401.** Nothing here masks an authentication failure;
+`rekeyFlow` re-runs the same discovery and reports the provider's own words.
+
+### `/copy context` — `[object Object]`
+
+`turn.js` pushes `{ step, text }` RECORDS into `steerTexts`, which is named for
+what it used to hold. The projection treated each entry as a string, so
+`String({…})` replaced the one sentence the export exists to carry.
+
+**My own fixture hid it**: the test put plain strings in `steerTexts`, a shape
+the writer never writes. It now uses the real record shape.
+
+`publicText` extracts the sentence, or returns nothing — an internal record is
+**omitted entirely**, heading and all, rather than stringified. Hostile inputs
+(functions, Symbols, Maps, Dates, attachment-shaped arrays) return `''` and
+never throw. `/copy` is unchanged, byte for byte.
+
+### Structured prompts rendered as a wall of text
+
+Two independent causes, both required:
+
+- **The user branch never used the renderer.** `ui/feed.js` sent a model answer
+  through `ui/markdown.js` and a user message through `wrap`, the prose wrapper.
+- **`=` was not markup to anything** — not FENCE, not RULE (`-`/`*`/`_`), not
+  HEADING. A separator, the title under it and the following paragraph were three
+  ordinary prose lines and got joined:
+  `0. ABSOLUTE PROJECT BOUNDARY ===== DO NOT modify LAIN. DO NOT...`
+
+User messages now go through the **same** renderer, and separator-delimited
+sections are recognised — deterministically: separator / one non-empty line /
+separator, or a line underlined by `=`. Nothing is promoted for being short,
+uppercase or numbered. `-` underlining is deliberately not read as setext,
+because `---` is already RULE and re-reading it would change existing content.
+
+A third bug surfaced on the way: `md.render` takes **one line per element**, and
+a user message is one entry holding the whole document — so passing the run
+straight in reproduced the original defect one layer further in.
+
+**REAL LOCAL VERIFIED** through the actual binary at 80/120/160 columns: section
+alone on its row with a rule under it, no raw `=` bars, three bullets, numbering
+intact, paragraphs separated, code gutter intact, nothing outside the frame.
+
+`ui/feed.js` was at 698 lines against a 700 ceiling, so the god-object guard
+tripped on the change — correctly. `ui/feeduser.js` is the seam it was pointing
+at: everything about how a person's own message is drawn.
+
+### Mouse wheel — and what is not possible
+
+The wheel arrives as an SGR mouse report (buttons 64/65), so with reporting off
+it cannot arrive at all. **There is no VT mode that delivers wheel events and
+leaves the terminal its own drag-selection** — any tracking mode routes mouse
+input to the application. Alternate-scroll (`?1007h`) sends bare arrow keys,
+which LAIN binds to history recall; enabling it would be worse than nothing.
+
+So the trade is stated rather than faked: capture stays off by default, the
+scroll hints now NAME the key (`↑ more · PgUp`) instead of assuming a wheel, and
+`/mouse` says what each mode costs. PgUp/PgDn and Alt+↑/↓ are guaranteed by test.
+
+**NOT VERIFIED**: interactive drag-selection in a real terminal. A piped stdin is
+not a TTY and cannot prove it.
+
+### Two claims I withdrew rather than shipped
+
+**A PowerShell exit-code fix.** §K reported a handover saying `PASSED` for a
+command that failed because the shell lacked the program. Measured: it does not
+reproduce. Through the shell LAIN resolves (pwsh 7), every failure shape already
+exits non-zero — cmdlet error, cmdlet error in a pipeline, missing program in a
+pipeline, native non-zero, native non-zero in a pipeline. And `… | tail -30`
+SUCCEEDS here: `tail` exists in Git's usr/bin. A `$?`/`$LASTEXITCODE` epilogue
+was written, measured to change nothing in any case, and **removed** — shipping
+it would have been a speculative fix carrying a comment claiming a defect nobody
+could demonstrate. The finding is recorded in `execution.js`.
+
+**A "19 orphaned processes" style claim** was not made this pass; the mouse
+verification that *was* vacuous (grepping a piped-stdin child for `?1002h`,
+which proves nothing because there is no TTY) was replaced rather than reported.
+
+### Retry-budget arithmetic, fixed at the source
+
+The budget has been 2, then 5, then 10, and every move left fixtures and
+assertions pinned to the old number — `1/5`, `3/5`, `attempts <= 5`, eight
+scripted refusals against a ten-attempt budget. Those now DERIVE from
+`MAX_RETRIES`, so they follow the policy instead of failing on the number.
+
+Smokes drive the real binary and cannot inject `opts.timers`, so
+`tests/helpers.js` sets `LAIN_BACKOFF_MS` — the same kind of seam as
+`LAIN_MOCK_SCRIPT` and `LAIN_FORCE_TUI`. It shortens only the WAITING; every
+attempt still happens, in order, under the real policy.
+
+### Provider abort glue
+
+`aborted` — the person pressed Escape — no longer writes a durable actor note.
+The live row already rests on `INTERRUPTED · you stopped the turn; nothing was
+lost`, and the durable copy outlived it by the rest of the session. Every other
+ending is kept: those are facts about the task, not things the person already
+knows because they did them.
+
+### A regression I could not attribute, reported rather than hidden
+
+`tests/smoke/ask.test.js :: ASK: answering does NOT start a new task…` fails in
+the working tree and passes at HEAD (10 passed / 10.1s at HEAD; 9 passed, 1
+failed / ~51s here). The CLI opens the ask panel and then hangs until the
+deadline.
+
+Bisected in a detached HEAD worktree. It is **not** this pass's work and **not**
+GLM's: reverting the renderer, the mouse default, the alert/turnstate pair, the
+turn/session core, `harnesslink`, all of `src/ui`, and GLM's four API files each
+left it failing. It is somewhere in the broader accumulated uncommitted tree and
+is outside this pass's scope; it is recorded here rather than left unmentioned.
+
+
 ## Deliberately not implemented
 
 External planner · a persistent feature graph or AST database (the *queries*
@@ -3612,3 +4423,63 @@ recovery · permission modes. These are excluded by decision, not oversight.
 37. **Copy-on-release writes the system clipboard.** A deliberate drag across
     text overwrites whatever was on it. A plain click does not, and neither does
     a drag that selects nothing.
+38. **A `/` line the command palette cannot offer still runs.** While a
+    completion menu is open the reader stops submitting — input.js `_consume`
+    asks `enterGoesToUI()` and emits Enter as a key — so ui/menus.js is the only
+    thing that can send the line, and with nothing highlighted it closed the
+    menu and consumed the key. The line stayed on the input row and pressing
+    Enter again did nothing again. It became reachable when `/models` was made a
+    hidden alias: `offered()` fills the palette and excludes exactly those, so
+    the alias commands.js `define` promises "still runs when typed" worked
+    through a pipe and was silent in the TUI. Enter now submits the line as
+    written; Tab and Right stay consumed, because there is nothing to complete.
+39. **A test file that cannot be PARSED is a failing test, not the end of the
+    run.** `tests/run.js` called `require` bare, so a truncated
+    `tests/unit/bot-check.test.js` threw out of `main` — past the summary, past
+    the FAILURES list, and past every unit file sorting after `bot-check`. The
+    tier reported a stack trace instead of a count, and what else was broken
+    could not be seen. A load failure is now counted and named, and the run
+    continues. Nothing is repaired or skipped: the failure count goes UP.
+    `bot-check.test.js` is Astra's and was not touched.
+40. **`integration/remote.test.js :: RC: /session shows several sessions` is
+    INTERMITTENT.** It failed once in two consecutive full-tier runs (sessions
+    read `UNKNOWN` where `COMPLETED` was expected) and passes 25/25 when the
+    file is run alone. Recorded as order- or timing-dependent shared state
+    between integration files; not diagnosed, and not attributed to this pass.
+41. **"Interactive" means somebody can answer, not that a screen is drawn.**
+    `/plan` and `/goal` both open an editing mode when typed bare, and both
+    carry a written fallback for "a pipe, `-p`, a test — read it out rather than
+    opening a mode nobody can close". Both decided from `app.ui.enabled`, which
+    is a fact about OUTPUT: `LAIN_FORCE_TUI=1` bypasses only the screen's isTTY
+    check, so a piped run drew real frames into which nothing could be typed and
+    the fallback never fired. `/plan` opened the three-way choice, read EOF, took
+    it for a dismissal and printed `Plan unchanged.`; `/goal` opened the
+    composer, which does not block, so it stayed open and ATE the following
+    piped lines as its own text. Both now ask `input.isTTY` — the same
+    byte-level fact `_consume` uses — so the two cannot drift apart. This was
+    the single cause of six smoke failures across four files.
+42. **The session accounting cluster is `/token`, not the live strip.** The
+    strip deliberately dropped `↑ ⚡ ↓ +…` (ui/status.js states why: they are
+    LIFETIME totals, so they barely move within a turn, and a frozen number
+    beside a moving spinner reads as a frozen screen). One authoritative signal
+    remains on the primary surface — the header's OUTPUT figure, which climbs
+    while the model writes and marks itself `~` while estimated.
+    `tests/smoke/workspace.test.js` was still asserting the removed row, so it
+    failed for having been right once; it now asserts the replacement, which is
+    a stronger claim because the old one accepted a count anywhere in the frame.
+43. **The smoke tier is measured against HEAD under the SAME conditions.**
+    Full sequential runs, nothing else contending: HEAD **495 passed / 18
+    failed**; working tree **527 passed / 10 failed**. Nine of the ten
+    working-tree failures fail identically at HEAD and are therefore
+    pre-existing, not regressions: LIVE-UI `DONE`, RATE LIMIT (2), REFUSAL,
+    RESEARCH LIVE, SCREEN model/LAIN labelling, SCROLLBACK, STEER LIVE, TRUST
+    LIVE. Nine failures present at HEAD are fixed in the working tree
+    (dashinstances ×2, PUSH `/ready`, RC `/ready`, relay-dash-mcp ×5). Subset
+    runs are not evidence for either: several of these pass in isolation.
+44. **`ENV LIVE: a Harness browser launches…` is a load-dependent cleanup
+    race, and it is the one working-tree-only smoke failure.** "The disposable
+    verification profile survived the browser that used it". It passes 2/2 when
+    the file is run alone, and passes at HEAD under full-tier load, so it is
+    neither a stale test nor a HEAD defect. Not diagnosed: it is in the
+    accumulated harness work (`src/harness/*`, `processcleanup.js`), outside
+    this pass's scope, and is recorded rather than left unmentioned.
